@@ -1,0 +1,122 @@
+---
+import "../styles/global.css";
+
+const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="theme-color" content="#e9ffcc" />
+    <meta
+      name="description"
+      content="Stealth is a quiet, durable home for the work and files that matter."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>Stealth — Keep what matters</title>
+  </head>
+  <body>
+    <header class="siteHeader">
+      <a class="logo" href="/" aria-label="Stealth home">
+        <span>S</span> stealth
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="#principles">Principles</a>
+        <a href="#architecture">Architecture</a>
+      </nav>
+      <a class="headerCta" href={appUrl}>Open app ↗</a>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="heroCopy">
+          <p class="kicker"><span></span> Private by disposition</p>
+          <h1>Keep what matters.<br /><em>Lose the noise.</em></h1>
+          <p class="lede">
+            A focused home for your files, designed around clarity, durability,
+            and an edge-native foundation.
+          </p>
+          <div class="heroActions">
+            <a class="primaryCta" href={appUrl}>Enter your workspace</a>
+            <a class="secondaryCta" href="#architecture">See how it works ↓</a>
+          </div>
+        </div>
+        <div class="heroVisual" aria-hidden="true">
+          <div class="orbit orbitOne"></div>
+          <div class="orbit orbitTwo"></div>
+          <div class="signal"><span>S</span></div>
+          <div class="coordinate coordinateOne">40.7128° N</div>
+          <div class="coordinate coordinateTwo">EDGE / 001</div>
+        </div>
+      </section>
+
+      <section class="manifesto" id="principles">
+        <p class="sectionLabel">01 / Principles</p>
+        <p class="manifestoText">
+          Software should feel like a well-made room: useful objects close at
+          hand, nothing shouting for attention, and enough space to think.
+        </p>
+        <div class="principles">
+          <article>
+            <span>01</span>
+            <h2>Quiet by default</h2>
+            <p>No feeds, streaks, or ornamental urgency. Your work sets the pace.</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h2>Built to endure</h2>
+            <p>Simple primitives and open formats make a calmer foundation.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h2>Fast everywhere</h2>
+            <p>Compute and storage live close to you on Cloudflare's network.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="architecture" id="architecture">
+        <div>
+          <p class="sectionLabel">02 / Foundation</p>
+          <h2>Small surface.<br />Serious infrastructure.</h2>
+        </div>
+        <div class="stack">
+          <div class="stackRow">
+            <span class="stackIndex">A</span>
+            <div><strong>Workers</strong><small>API at the edge</small></div>
+            <span class="stackStatus">Active</span>
+          </div>
+          <div class="stackRow">
+            <span class="stackIndex">B</span>
+            <div><strong>D1</strong><small>Relational metadata</small></div>
+            <span class="stackStatus">Active</span>
+          </div>
+          <div class="stackRow">
+            <span class="stackIndex">C</span>
+            <div><strong>R2</strong><small>Durable object storage</small></div>
+            <span class="stackStatus">Active</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing">
+        <p class="kicker"><span></span> Ready when you are</p>
+        <h2>Make some room.</h2>
+        <a class="primaryCta light" href={appUrl}>Open Stealth ↗</a>
+      </section>
+    </main>
+
+    <footer class="siteFooter">
+      <a class="logo" href="/"><span>S</span> stealth</a>
+      <p>Made for less, not more.</p>
+      <p>© {new Date().getFullYear()}</p>
+    </footer>
+  </body>
+</html>

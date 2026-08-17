@@ -1,0 +1,57 @@
+{
+  "name": "stealth",
+  "private": true,
+  "packageManager": "bun@1.3.11",
+  "scripts": {
+    "build": "turbo run build",
+    "check": "bun run lint && turbo run check",
+    "deploy": "bash scripts/deployProduction.sh",
+    "deploy:api": "bash scripts/deployApi.sh",
+    "deploy:app": "bash scripts/deployApp.sh",
+    "deploy:domains": "bash scripts/configureProductionDomains.sh",
+    "deploy:verify": "bash scripts/verifyProduction.sh",
+    "deploy:website": "bash scripts/deployWebsite.sh",
+    "dev": "turbo run dev",
+    "format": "bun run lint:biome:fix && bun run lint:markdown:fix",
+    "hooks:install": "sh scripts/git/install-hooks.sh",
+    "lint": "bun run lint:biome && bun run lint:markdown && bun run lint:files && bun run lint:knip:all && bun run lint:knip:production && bun run lint:scripts && bun run lint:terraform",
+    "lint:biome": "biome check --error-on-warnings .",
+    "lint:biome:fix": "biome check --write --error-on-warnings .",
+    "lint:commit-msg": "commitlint --config commitlint.config.mts --edit",
+    "lint:files": "ls-lint",
+    "lint:knip:all": "knip",
+    "lint:knip:dependencies": "knip --dependencies",
+    "lint:knip:exports": "knip --exports",
+    "lint:knip:files": "knip --files",
+    "lint:knip:production": "knip --production",
+    "lint:markdown": "bun --bun x markdownlint-cli2 '**/*.md'",
+    "lint:markdown:fix": "bun --bun x markdownlint-cli2 --fix '**/*.md'",
+    "lint:scripts": "shellcheck scripts/*.sh scripts/checks/*.sh scripts/git/hooks/* terraform/scripts/*.sh",
+    "lint:staged": "lint-staged",
+    "lint:terraform": "bash scripts/checks/checkTerraform.sh",
+    "terraform:apply": "bash terraform/scripts/run.sh apply",
+    "terraform:plan": "bash terraform/scripts/run.sh plan",
+    "terraform:validate": "bash terraform/scripts/run.sh validate",
+    "test": "turbo run test"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "lint-staged": {
+    "*.{astro,css,html,js,json,jsonc,jsx,mjs,cjs,ts,tsx}": "biome check --fix --error-on-warnings",
+    "*.md": "bun --bun x markdownlint-cli2 --fix"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.8",
+    "@commitlint/cli": "20.5.0",
+    "@commitlint/config-conventional": "20.5.0",
+    "@ls-lint/ls-lint": "2.3.1",
+    "@tsconfig/strictest": "2.0.8",
+    "knip": "6.0.6",
+    "lint-staged": "16.4.0",
+    "markdownlint-cli2": "0.23.2",
+    "turbo": "2.10.10",
+    "typescript": "5.9.3",
+    "wrangler": "4.123.0"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  // Keep globs in package scripts so lint-staged only checks staged Markdown.
+  "gitignore": true,
+  "ignores": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/.astro/**",
+    "**/.wrangler/**",
+    "**/dist/**"
+  ],
+  "config": {
+    "default": true,
+    "MD013": {
+      "code_blocks": false,
+      "tables": false
+    }
+  }
+}

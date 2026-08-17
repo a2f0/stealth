@@ -1,0 +1,13 @@
+# Credentials are loaded from .secrets/root.env, never from this file.
+domain = "tearleads.com"
+
+d1_database_name = "stealth-db"
+r2_bucket_name    = "stealth-objects"
+
+# The production deploy script creates all three Workers before Terraform
+# attaches these domains.
+enable_custom_domains = true
+
+website_hostname = "tearleads.com"
+client_hostname  = "app.tearleads.com"
+api_hostname     = "api.tearleads.com"

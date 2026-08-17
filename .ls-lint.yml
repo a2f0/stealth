@@ -1,0 +1,15 @@
+ls:
+  .dir: regex:[A-Za-z0-9][A-Za-z0-9-]*
+  .*: regex:[A-Za-z0-9][A-Za-z0-9._-]* | regex:README
+
+ignore:
+  - .git
+  - "**/.*"
+  - node_modules
+  - apps/*/node_modules
+  - dist
+  - apps/*/dist
+  - .turbo
+  - apps/*/.turbo
+  - apps/*/.astro
+  - apps/*/.wrangler

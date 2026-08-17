@@ -1,0 +1,26 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "stealth-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-17",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "CORS_ORIGIN": "https://app.tearleads.com"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "stealth-db",
+      "database_id": "d2827a94-7088-4648-9b57-5f915da2b909",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "STORAGE",
+      "bucket_name": "stealth-objects"
+    }
+  ]
+}

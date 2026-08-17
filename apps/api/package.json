@@ -1,0 +1,21 @@
+{
+  "name": "@stealth/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply stealth-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply stealth-db --remote",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --var CORS_ORIGIN:http://localhost:5173",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "hono": "4.13.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260817.1",
+    "@types/bun": "1.3.11"
+  }
+}

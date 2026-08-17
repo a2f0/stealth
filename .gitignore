@@ -1,0 +1,24 @@
+.DS_Store
+.astro
+.secrets
+.env
+.env.*
+!.env.example
+.turbo
+.wrangler
+.terraform
+dist
+node_modules
+*.tsbuildinfo
+
+# Terraform local state and plans
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
