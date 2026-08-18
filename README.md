@@ -50,6 +50,8 @@ The main endpoints under `https://api.tearleads.com/api/auth` are:
 - `POST /request-password-reset`
 - `POST /reset-password`
 - `GET /admin/list-users` (admin only)
+- `GET /organization/list`
+- `POST /organization/update`
 
 After creating the first account, bootstrap its admin role with:
 
@@ -66,7 +68,11 @@ library until per-user object ownership is added. Registration sends a
 one-hour verification link, but unverified users can sign in immediately. The
 library displays a reminder with a resend action until the address is verified.
 Admins can list registered accounts at `/admin` and view the shared inbound
-mailbox at `/inbox`. The API independently enforces the admin role for both.
+mailbox at `/inbox`. Each account receives a default organization at signup;
+existing accounts are backfilled by the organization migration. Users can
+rename their organization at `/organization`, and admins can inspect all
+organizations on the `/admin` page. The API independently enforces the admin
+role for administrative data.
 
 Authentication needs a strong `BETTER_AUTH_SECRET` in the ignored
 `.secrets/root.env`. Production password reset additionally requires Cloudflare

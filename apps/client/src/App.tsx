@@ -1,16 +1,15 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { AdminUsers } from "./AdminUsers";
 import { AuthPage } from "./AuthPage";
 import { authClient } from "./authClient";
 import { Inbox } from "./Inbox";
 import { Library } from "./Library";
+import { OrganizationSettings } from "./OrganizationSettings";
 import { hasRole, WorkspaceShell } from "./WorkspaceShell";
 
 export function App() {
   const { data: session, error, isPending, refetch } = authClient.useSession();
   const [pathname, setPathname] = useState(window.location.pathname);
-  const isInboxPage = pathname === "/inbox";
-  const isUsersPage = pathname === "/admin";
   const requiresAdmin = ["/admin", "/inbox"].includes(pathname);
   const isResetPage = pathname === "/reset-password";
   const verification = verificationFeedback();
@@ -71,11 +70,7 @@ export function App() {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
 
-  const content = isInboxPage ? (
-    <Inbox />
-  ) : isUsersPage ? (
-    <AdminUsers />
-  ) : (
+  const library = (
     <Library
       initialNotice={verification.notice}
       onResendVerification={async () => {
@@ -95,14 +90,28 @@ export function App() {
 
   return (
     <WorkspaceShell
-      activePage={isInboxPage ? "inbox" : isUsersPage ? "admin" : "library"}
+      activePage={activePageFor(pathname)}
       onNavigate={navigate}
       onSignOut={onSignOut}
       user={session.user}
     >
-      {content}
+      {contentForPath(pathname, library)}
     </WorkspaceShell>
   );
+}
+
+function contentForPath(pathname: string, library: ReactNode) {
+  if (pathname === "/inbox") return <Inbox />;
+  if (pathname === "/admin") return <AdminUsers />;
+  if (pathname === "/organization") return <OrganizationSettings />;
+  return library;
+}
+
+function activePageFor(pathname: string) {
+  if (pathname === "/inbox") return "inbox" as const;
+  if (pathname === "/admin") return "admin" as const;
+  if (pathname === "/organization") return "organization" as const;
+  return "library" as const;
 }
 
 function AdminAccessDenied({ onNavigate }: { onNavigate: () => void }) {

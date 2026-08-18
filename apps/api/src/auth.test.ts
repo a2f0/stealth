@@ -25,6 +25,19 @@ describe("password authentication", () => {
         .query("SELECT role FROM user WHERE email = ?")
         .get(email),
     ).toEqual({ role: "user" });
+    const organization = fixture.database
+      .query(
+        `SELECT organization.id, organization.name, member.role
+         FROM organization
+         JOIN member ON member.organizationId = organization.id
+         JOIN user ON user.defaultOrganizationId = organization.id
+         WHERE user.email = ?`,
+      )
+      .get(email) as { id: string; name: string; role: string };
+    expect(organization).toMatchObject({
+      name: "Example Person's Organization",
+      role: "owner",
+    });
     const storedPassword = fixture.database
       .query(
         "SELECT password FROM account WHERE userId = (SELECT id FROM user WHERE email = ?)",
@@ -55,8 +68,25 @@ describe("password authentication", () => {
     );
     expect(session.status).toBe(200);
     expect(await session.json()).toMatchObject({
+      session: { activeOrganizationId: organization.id },
       user: { email, emailVerified: false, role: "user" },
     });
+
+    const renamed = await post(
+      fixture.auth,
+      "/organization/update",
+      {
+        data: { name: "Example Company" },
+        organizationId: organization.id,
+      },
+      cookie,
+    );
+    expect(renamed.status).toBe(200);
+    expect(
+      fixture.database
+        .query("SELECT name FROM organization WHERE id = ?")
+        .get(organization.id),
+    ).toEqual({ name: "Example Company" });
 
     const resend = await post(fixture.auth, "/send-verification-email", {
       callbackURL: `${origin}/?verified=true`,
@@ -164,6 +194,80 @@ describe("password authentication", () => {
       users: [{ email, role: "admin" }],
     });
   });
+
+  it("only lets owners rename their organization", async () => {
+    const fixture = await createFixture();
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+    });
+    const organization = fixture.database
+      .query("SELECT id FROM organization")
+      .get() as { id: string };
+    await post(fixture.auth, "/sign-up/email", {
+      email: "other@example.com",
+      name: "Other Person",
+      password: originalPassword,
+    });
+    const signIn = await post(fixture.auth, "/sign-in/email", {
+      email: "other@example.com",
+      password: originalPassword,
+    });
+
+    const response = await post(
+      fixture.auth,
+      "/organization/update",
+      {
+        data: { name: "Not Allowed" },
+        organizationId: organization.id,
+      },
+      signIn.headers.get("set-cookie"),
+    );
+
+    expect(response.status).toBe(400);
+    expect(
+      fixture.database
+        .query("SELECT name FROM organization WHERE id = ?")
+        .get(organization.id),
+    ).toEqual({ name: "Example Person's Organization" });
+  });
+
+  it("backfills an organization for an existing user", async () => {
+    const database = new Database(":memory:");
+    await applyMigration(database, "0003_create_auth.sql");
+    database
+      .query(
+        `INSERT INTO user
+         (id, name, email, emailVerified, createdAt, updatedAt, role, banned)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "existing-user",
+        "Existing User",
+        "existing@example.com",
+        false,
+        "2026-08-18T12:00:00.000Z",
+        "2026-08-18T12:00:00.000Z",
+        "user",
+        false,
+      );
+
+    await applyMigration(database, "0004_create_organizations.sql");
+
+    expect(
+      database
+        .query(
+          `SELECT organization.name, member.role
+           FROM user
+           JOIN organization
+             ON organization.id = user.defaultOrganizationId
+           JOIN member ON member.organizationId = organization.id
+           WHERE user.id = ?`,
+        )
+        .get("existing-user"),
+    ).toEqual({ name: "Existing User's Organization", role: "owner" });
+  });
 });
 
 async function createFixture() {
@@ -187,11 +291,8 @@ async function createFixture() {
   } satisfies Bindings;
   const auth = createAuth(bindings, (promise) => pending.push(promise));
 
-  database.exec(
-    await Bun.file(
-      new URL("../migrations/0003_create_auth.sql", import.meta.url),
-    ).text(),
-  );
+  await applyMigration(database, "0003_create_auth.sql");
+  await applyMigration(database, "0004_create_organizations.sql");
 
   return { auth, database, messages, pending };
 }
@@ -200,13 +301,26 @@ function post(
   auth: ReturnType<typeof createAuth>,
   path: string,
   body: Record<string, unknown>,
+  cookie?: string | null,
 ) {
   return auth.handler(
     new Request(`${baseURL}/api/auth${path}`, {
       body: JSON.stringify(body),
-      headers: { "content-type": "application/json", origin },
+      headers: {
+        "content-type": "application/json",
+        cookie: cookie ?? "",
+        origin,
+      },
       method: "POST",
     }),
+  );
+}
+
+async function applyMigration(database: Database, filename: string) {
+  database.exec(
+    await Bun.file(
+      new URL(`../migrations/${filename}`, import.meta.url),
+    ).text(),
   );
 }
 

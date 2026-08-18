@@ -27,6 +27,16 @@ describe("api", () => {
       error: "Authentication required.",
     });
   });
+
+  it("requires authentication for the admin organization list", async () => {
+    const response = await app.request(
+      "/api/admin/organizations",
+      undefined,
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
 });
 
 function authBindings(): Bindings {
