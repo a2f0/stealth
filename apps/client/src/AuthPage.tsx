@@ -4,7 +4,9 @@ import { authClient } from "./authClient";
 type AuthMode = "forgot" | "reset" | "sign-in" | "sign-up";
 
 interface AuthPageProps {
+  initialError?: string | undefined;
   initialMode?: AuthMode;
+  initialNotice?: string | undefined;
   onAuthenticated: () => Promise<void>;
 }
 
@@ -35,7 +37,9 @@ const content: Record<
 };
 
 export function AuthPage({
+  initialError,
   initialMode = "sign-in",
+  initialNotice,
   onAuthenticated,
 }: AuthPageProps) {
   const [mode, setMode] = useState<AuthMode>(initialMode);
@@ -44,8 +48,8 @@ export function AuthPage({
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
+  const [error, setError] = useState<string | undefined>(initialError);
+  const [notice, setNotice] = useState<string | undefined>(initialNotice);
   const resetToken = new URLSearchParams(window.location.search).get("token");
 
   function chooseMode(nextMode: AuthMode) {
@@ -193,6 +197,7 @@ async function performAuthAction(
 
   if (mode === "sign-up") {
     const result = await authClient.signUp.email({
+      callbackURL: `${window.location.origin}/?verified=true`,
       email: input.email,
       name: input.name,
       password: input.password,
@@ -200,7 +205,8 @@ async function performAuthAction(
     throwForAuthError(result.error);
     return {
       nextMode: "sign-in" as const,
-      notice: "Account created. Sign in to continue.",
+      notice:
+        "Account created. Check your inbox to verify your email, then sign in.",
     };
   }
 

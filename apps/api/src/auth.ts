@@ -48,6 +48,27 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
         );
       },
     },
+    emailVerification: {
+      expiresIn: 60 * 60,
+      sendOnSignUp: true,
+      sendVerificationEmail: async ({ user, url }) => {
+        waitUntil(
+          env.EMAIL.send({
+            from: { email: env.AUTH_EMAIL_FROM, name: "Stealth" },
+            subject: "Verify your Stealth email",
+            text: [
+              `Hi ${user.name},`,
+              "",
+              "Verify your email address for Stealth:",
+              url,
+              "",
+              "The link expires in one hour. You can still sign in before verifying.",
+            ].join("\n"),
+            to: user.email,
+          }),
+        );
+      },
+    },
     plugins: [admin({ adminRoles: ["admin"], defaultRole: "user" })],
     rateLimit: {
       enabled: true,

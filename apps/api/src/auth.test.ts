@@ -10,10 +10,11 @@ const originalPassword = "correct horse battery staple";
 const replacementPassword = "new correct horse battery staple";
 
 describe("password authentication", () => {
-  it("signs up users, creates sessions, assigns roles, and resets passwords", async () => {
+  it("supports email verification without blocking login", async () => {
     const fixture = await createFixture();
 
     const signUp = await post(fixture.auth, "/sign-up/email", {
+      callbackURL: `${origin}/?verified=true`,
       email,
       name: "Example Person",
       password: originalPassword,
@@ -30,6 +31,14 @@ describe("password authentication", () => {
       )
       .get(email) as { password: string };
     expect(storedPassword.password).not.toBe(originalPassword);
+    await Promise.all(fixture.pending);
+    expect(fixture.messages).toHaveLength(1);
+    const verificationMessage = fixture.messages.find(({ subject }) =>
+      subject.startsWith("Verify"),
+    );
+    const verificationURL =
+      verificationMessage?.text?.match(/https:\/\/\S+/)?.[0];
+    expect(verificationURL).toBeTruthy();
 
     const signIn = await post(fixture.auth, "/sign-in/email", {
       email,
@@ -46,7 +55,32 @@ describe("password authentication", () => {
     );
     expect(session.status).toBe(200);
     expect(await session.json()).toMatchObject({
-      user: { email, role: "user" },
+      user: { email, emailVerified: false, role: "user" },
+    });
+
+    const resend = await post(fixture.auth, "/send-verification-email", {
+      callbackURL: `${origin}/?verified=true`,
+      email,
+    });
+    expect(resend.status).toBe(200);
+    await Promise.all(fixture.pending);
+    expect(fixture.messages).toHaveLength(2);
+
+    const verification = await fixture.auth.handler(
+      new Request(verificationURL ?? ""),
+    );
+    expect(verification.status).toBe(302);
+    expect(verification.headers.get("location")).toBe(
+      `${origin}/?verified=true`,
+    );
+
+    const verifiedSession = await fixture.auth.handler(
+      new Request(`${baseURL}/api/auth/get-session`, {
+        headers: { cookie: cookie ?? "", origin },
+      }),
+    );
+    expect(await verifiedSession.json()).toMatchObject({
+      user: { emailVerified: true },
     });
 
     const resetRequest = await post(fixture.auth, "/request-password-reset", {
@@ -55,9 +89,12 @@ describe("password authentication", () => {
     });
     expect(resetRequest.status).toBe(200);
     await Promise.all(fixture.pending);
-    expect(fixture.messages).toHaveLength(1);
+    expect(fixture.messages).toHaveLength(3);
 
-    const resetURL = fixture.messages[0]?.text?.match(/https:\/\/\S+/)?.[0];
+    const resetMessage = fixture.messages.find(({ subject }) =>
+      subject.startsWith("Reset"),
+    );
+    const resetURL = resetMessage?.text?.match(/https:\/\/\S+/)?.[0];
     const token = resetURL?.match(/\/reset-password\/([^?]+)/)?.[1];
     expect(token).toBeTruthy();
 

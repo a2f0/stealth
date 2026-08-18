@@ -647,6 +647,63 @@ button:disabled {
   opacity: 1;
 }
 
+.pageBanner {
+  margin-bottom: 22px;
+}
+
+.verificationBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+  padding: 16px 18px;
+  border: 1px solid #cbd99d;
+  border-radius: 12px;
+  background: #f0f8dc;
+}
+
+.verificationBanner strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.verificationBanner p {
+  margin: 0;
+  color: #5f6651;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.verificationBanner button {
+  flex: none;
+  padding: 9px 12px;
+  border: 1px solid #65743a;
+  border-radius: 8px;
+  color: #35420f;
+  background: #dffc9d;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.verificationBanner button:hover {
+  background: #b7ff5b;
+}
+
+.verificationBanner button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.verificationError {
+  display: block;
+  margin-top: 7px;
+  color: #842b1d;
+  font-size: 11px;
+}
+
 @media (max-width: 720px) {
   .authShell {
     display: block;
@@ -710,5 +767,10 @@ button:disabled {
 
   .deleteButton {
     opacity: 1;
+  }
+
+  .verificationBanner {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
