@@ -8,11 +8,13 @@
     "db:migrate:local": "wrangler d1 migrations apply stealth-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply stealth-db --remote",
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev --var CORS_ORIGIN:http://localhost:5173",
+    "dev": "bash ../../scripts/devApi.sh",
     "test": "bun test"
   },
   "dependencies": {
-    "hono": "4.13.2"
+    "better-auth": "1.7.0",
+    "hono": "4.13.2",
+    "postal-mime": "3.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260817.1",

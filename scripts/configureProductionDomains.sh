@@ -14,3 +14,5 @@ fi
 
 echo "Applying the production Worker custom domains with Terraform..."
 bash "$REPO_ROOT/terraform/scripts/run.sh" "${apply_args[@]}"
+
+"$SCRIPT_DIR/verifyInboundEmail.sh"

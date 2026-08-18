@@ -29,6 +29,19 @@ load_cloudflare_env() {
   export CLOUDFLARE_ACCOUNT_ID="$TF_VAR_cloudflare_account_id"
 }
 
+load_cloudflare_email_env() {
+  local secrets_dir
+  secrets_dir="$(get_repo_root)/.secrets"
+  source_env_file "$secrets_dir/root.env"
+
+  if [[ -z "${CLOUDFLARE_EMAIL_API_TOKEN:-}" ]]; then
+    echo "ERROR: Missing CLOUDFLARE_EMAIL_API_TOKEN." >&2
+    return 1
+  fi
+
+  export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_EMAIL_API_TOKEN"
+}
+
 validate_cloudflare_env() {
   local missing=()
 
@@ -40,6 +53,13 @@ validate_cloudflare_env() {
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo "ERROR: Missing required Cloudflare variables:" >&2
     printf '  - %s\n' "${missing[@]}" >&2
+    return 1
+  fi
+}
+
+validate_auth_env() {
+  if [[ -z "${BETTER_AUTH_SECRET:-}" ]]; then
+    echo "ERROR: Missing BETTER_AUTH_SECRET." >&2
     return 1
   fi
 }

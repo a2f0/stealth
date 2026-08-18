@@ -5,6 +5,7 @@ desired Worker custom domains:
 
 - D1 database: `stealth-db`
 - R2 bucket: `stealth-objects`
+- Inbound email: `upload@inbox.tearleads.com` → `stealth-api`
 - Website: `tearleads.com`
 - Client: `app.tearleads.com`
 - API: `api.tearleads.com`
@@ -17,6 +18,7 @@ from `.secrets/root.env` without copying them into Terraform files or state:
 ```sh
 export TF_VAR_cloudflare_api_token="..."
 export TF_VAR_cloudflare_account_id="..."
+export CLOUDFLARE_EMAIL_API_TOKEN="..."
 ```
 
 For local development alongside the Tearleads repositories, link the shared
@@ -26,9 +28,11 @@ secret store:
 ln -s ../tearleads-shared/.secrets .secrets
 ```
 
-The `.secrets` path is ignored by Git. The token needs Zone Read, D1 Edit, and
-R2 Edit permissions. Workers Scripts Edit is also needed when custom domains
-are enabled.
+The `.secrets` path is ignored by Git. The Terraform token needs Zone Read, D1
+Edit, R2 Edit, and Email Routing Rules Write permissions. Workers Scripts Edit
+is also needed when custom domains are enabled. The separate Email API token
+needs Zone Read and Zone Settings Read so deploys can verify the subdomain's
+Email Routing DNS configuration.
 
 ## Plan and apply
 

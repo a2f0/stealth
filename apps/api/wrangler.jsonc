@@ -3,11 +3,15 @@
   "name": "stealth-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-17",
+  "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true
   },
   "vars": {
-    "CORS_ORIGIN": "https://app.tearleads.com"
+    "AUTH_EMAIL_FROM": "security@auth.tearleads.com",
+    "BETTER_AUTH_URL": "https://api.tearleads.com",
+    "CORS_ORIGIN": "https://app.tearleads.com",
+    "INBOUND_EMAIL_ADDRESS": "upload@inbox.tearleads.com"
   },
   "d1_databases": [
     {
@@ -21,6 +25,12 @@
     {
       "binding": "STORAGE",
       "bucket_name": "stealth-objects"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["security@auth.tearleads.com"]
     }
   ]
 }
