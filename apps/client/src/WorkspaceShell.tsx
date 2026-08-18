@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type MouseEvent, type ReactNode, useState } from "react";
 
 export interface WorkspaceUser {
   email: string;
@@ -10,6 +10,7 @@ export interface WorkspaceUser {
 interface WorkspaceShellProps {
   activePage: "admin" | "library";
   children: ReactNode;
+  onNavigate: (pathname: string) => void;
   onSignOut: () => Promise<void>;
   user: WorkspaceUser;
 }
@@ -17,6 +18,7 @@ interface WorkspaceShellProps {
 export function WorkspaceShell({
   activePage,
   children,
+  onNavigate,
   onSignOut,
   user,
 }: WorkspaceShellProps) {
@@ -37,7 +39,12 @@ export function WorkspaceShell({
   return (
     <div className="shell">
       <aside className="sidebar">
-        <a aria-label="Stealth home" className="brand" href="/">
+        <a
+          aria-label="Stealth home"
+          className="brand"
+          href="/"
+          onClick={(event) => handleNavigation(event, "/", onNavigate)}
+        >
           <span className="brandMark">S</span>
           <span>stealth</span>
         </a>
@@ -45,6 +52,7 @@ export function WorkspaceShell({
           <a
             className={activePage === "library" ? "navItem active" : "navItem"}
             href="/"
+            onClick={(event) => handleNavigation(event, "/", onNavigate)}
           >
             <span className="navIcon">⌁</span> Library
           </a>
@@ -52,6 +60,7 @@ export function WorkspaceShell({
             <a
               className={activePage === "admin" ? "navItem active" : "navItem"}
               href="/admin"
+              onClick={(event) => handleNavigation(event, "/admin", onNavigate)}
             >
               <span className="navIcon">◎</span> Users
             </a>
@@ -87,6 +96,24 @@ export function WorkspaceShell({
       <main>{children}</main>
     </div>
   );
+}
+
+function handleNavigation(
+  event: MouseEvent<HTMLAnchorElement>,
+  pathname: string,
+  onNavigate: (pathname: string) => void,
+) {
+  if (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return;
+  }
+  event.preventDefault();
+  onNavigate(pathname);
 }
 
 export function hasRole(

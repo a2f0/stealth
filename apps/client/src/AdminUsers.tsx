@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { authClient } from "./authClient";
-import { WorkspaceShell, type WorkspaceUser } from "./WorkspaceShell";
 
 const pageSize = 25;
-
-interface AdminUsersProps {
-  onSignOut: () => Promise<void>;
-  user: WorkspaceUser;
-}
 
 interface ListedUser {
   banned?: boolean | null | undefined;
@@ -24,7 +18,7 @@ interface UserListing {
   users: ListedUser[];
 }
 
-export function AdminUsers({ onSignOut, user }: AdminUsersProps) {
+export function AdminUsers() {
   const [listing, setListing] = useState<UserListing>();
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(true);
@@ -60,7 +54,7 @@ export function AdminUsers({ onSignOut, user }: AdminUsersProps) {
   }, [loadUsers]);
 
   return (
-    <WorkspaceShell activePage="admin" onSignOut={onSignOut} user={user}>
+    <>
       <header className="topbar">
         <div>
           <p className="eyebrow">Administration</p>
@@ -95,7 +89,7 @@ export function AdminUsers({ onSignOut, user }: AdminUsersProps) {
           <AdminEmptyState busy={busy} />
         ) : null}
       </section>
-    </WorkspaceShell>
+    </>
   );
 }
 
