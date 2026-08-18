@@ -704,6 +704,140 @@ button:disabled {
   font-size: 11px;
 }
 
+.sidebarError {
+  margin: -8px 0 14px;
+  color: #ff9c86;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.fatalState a {
+  border-bottom: 1px solid;
+  color: #262621;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.userTableWrap {
+  overflow-x: auto;
+  border: 1px solid #ddddd5;
+  border-radius: 13px;
+  background: #faf9f5;
+}
+
+.userTable {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.userTable th {
+  padding: 12px 16px;
+  border-bottom: 1px solid #ddddd5;
+  color: #85857c;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.userTable td {
+  padding: 15px 16px;
+  border-bottom: 1px solid #e7e6df;
+  color: #6d6d65;
+  font-size: 12px;
+}
+
+.userTable tr:last-child td {
+  border-bottom: 0;
+}
+
+.userTable td:first-child strong,
+.userTable td:first-child span {
+  display: block;
+}
+
+.userTable td:first-child strong {
+  margin-bottom: 4px;
+  color: #262621;
+  font-size: 12px;
+}
+
+.userTable td:first-child span {
+  color: #7e7e75;
+  font-size: 10px;
+}
+
+.userStatus,
+.roleBadge {
+  display: inline-block;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.userStatus.verified {
+  color: #365c16;
+  background: #e4f4ce;
+}
+
+.userStatus.pending {
+  color: #70550a;
+  background: #fff0bd;
+}
+
+.userStatus.banned {
+  color: #842b1d;
+  background: #ffe0d8;
+}
+
+.roleBadge {
+  color: #4d4e46;
+  background: #e7e6df;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  color: #85857c;
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+}
+
+.pagination > div {
+  display: flex;
+  gap: 8px;
+}
+
+.pagination button {
+  padding: 8px 11px;
+  border: 1px solid #cfcfc6;
+  border-radius: 8px;
+  color: #4d4e46;
+  background: #faf9f5;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pagination button:hover {
+  border-color: #181916;
+}
+
+.pagination button:disabled {
+  cursor: default;
+}
+
+.compactEmptyState {
+  min-height: 260px;
+}
+
 @media (max-width: 720px) {
   .authShell {
     display: block;
@@ -735,6 +869,7 @@ button:disabled {
   .sidebar {
     position: static;
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     height: auto;
     padding: 15px 18px;
@@ -744,9 +879,16 @@ button:disabled {
     margin: 0;
   }
 
-  .sidebar nav,
   .sidebarFoot {
     display: none;
+  }
+
+  .sidebar nav {
+    display: flex;
+    order: 3;
+    width: 100%;
+    padding-top: 12px;
+    border-top: 1px solid #30312b;
   }
 
   .accountBlock {
@@ -772,5 +914,11 @@ button:disabled {
   .verificationBanner {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .pagination {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
   }
 }

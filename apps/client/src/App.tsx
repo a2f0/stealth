@@ -1,10 +1,13 @@
 import { useEffect } from "react";
+import { AdminUsers } from "./AdminUsers";
 import { AuthPage } from "./AuthPage";
 import { authClient } from "./authClient";
 import { Library } from "./Library";
+import { hasRole } from "./WorkspaceShell";
 
 export function App() {
   const { data: session, error, isPending, refetch } = authClient.useSession();
+  const isAdminPage = window.location.pathname === "/admin";
   const isResetPage = window.location.pathname === "/reset-password";
   const verification = verificationFeedback();
 
@@ -40,6 +43,21 @@ export function App() {
     );
   }
 
+  const onSignOut = async () => {
+    const result = await authClient.signOut();
+    if (result.error) {
+      throw new Error(result.error.message ?? "Could not sign out.");
+    }
+    await refetch();
+  };
+
+  if (isAdminPage) {
+    if (!hasRole(session.user.role, "admin")) {
+      return <AdminAccessDenied />;
+    }
+    return <AdminUsers onSignOut={onSignOut} user={session.user} />;
+  }
+
   return (
     <Library
       initialNotice={verification.notice}
@@ -54,15 +72,18 @@ export function App() {
           );
         }
       }}
-      onSignOut={async () => {
-        const result = await authClient.signOut();
-        if (result.error) {
-          throw new Error(result.error.message ?? "Could not sign out.");
-        }
-        await refetch();
-      }}
+      onSignOut={onSignOut}
       user={session.user}
     />
+  );
+}
+
+function AdminAccessDenied() {
+  return (
+    <div className="fatalState">
+      <p>Administrator access is required.</p>
+      <a href="/">Return to your library</a>
+    </div>
   );
 }
 
