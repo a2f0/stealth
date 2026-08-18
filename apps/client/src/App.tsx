@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { AdminUsers } from "./AdminUsers";
+import { Audits } from "./Audits";
 import { AuthPage } from "./AuthPage";
 import { authClient } from "./authClient";
 import { Inbox } from "./Inbox";
@@ -95,12 +96,19 @@ export function App() {
       onSignOut={onSignOut}
       user={session.user}
     >
-      {contentForPath(pathname, library)}
+      {contentForPath(pathname, library, navigate)}
     </WorkspaceShell>
   );
 }
 
-function contentForPath(pathname: string, library: ReactNode) {
+function contentForPath(
+  pathname: string,
+  library: ReactNode,
+  navigate: (pathname: string) => void,
+) {
+  if (pathname === "/audits" || pathname.startsWith("/audits/")) {
+    return <Audits onNavigate={navigate} pathname={pathname} />;
+  }
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
   if (pathname === "/organization") return <OrganizationSettings />;
@@ -108,6 +116,9 @@ function contentForPath(pathname: string, library: ReactNode) {
 }
 
 function activePageFor(pathname: string) {
+  if (pathname === "/audits" || pathname.startsWith("/audits/")) {
+    return "audits" as const;
+  }
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
   if (pathname === "/organization") return "organization" as const;

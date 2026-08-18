@@ -19,7 +19,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -30,7 +32,9 @@ a {
 
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   outline: 2px solid #b7ff5b;
   outline-offset: 3px;
 }
@@ -1087,6 +1091,486 @@ button:disabled {
   margin-top: 52px;
 }
 
+.auditHome,
+.auditBuilder,
+.auditRunContent {
+  max-width: 1240px;
+}
+
+.auditTemplateGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 15px;
+}
+
+.auditTemplateCard {
+  display: flex;
+  min-height: 255px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 22px;
+  border: 1px solid #d9d9d1;
+  border-radius: 15px;
+  background: #faf9f5;
+}
+
+.auditTemplateCard h3 {
+  margin: 15px 0 8px;
+  font-size: 18px;
+  letter-spacing: -0.035em;
+}
+
+.auditTemplateCard p {
+  margin: 0;
+  color: #72726a;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.auditStatus,
+.auditPriority {
+  display: inline-block;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #53534c;
+  background: #e7e6df;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.auditStatus.completed {
+  color: #365c16;
+  background: #e4f4ce;
+}
+
+.auditStatus.in_progress {
+  color: #70550a;
+  background: #fff0bd;
+}
+
+.auditCardMeta,
+.auditRunList button > span:not(:first-child) {
+  color: #898980;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.auditCardActions,
+.auditHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.auditCardActions button:not(.primaryButton),
+.auditHeaderActions button:not(.primaryButton),
+.auditIssues .sectionHeading > button {
+  padding: 10px 13px;
+  border: 1px solid #cecec5;
+  border-radius: 8px;
+  color: #4d4e46;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.auditHistory {
+  margin-top: 50px;
+}
+
+.auditRunList {
+  overflow: hidden;
+  border: 1px solid #ddddd5;
+  border-radius: 13px;
+  background: #faf9f5;
+}
+
+.auditRunList > button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto 20px;
+  align-items: center;
+  gap: 24px;
+  padding: 15px 17px;
+  border: 0;
+  border-bottom: 1px solid #e4e3dc;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.auditRunList > button:last-child {
+  border-bottom: 0;
+}
+
+.auditRunList > button:hover {
+  background: #f0efe9;
+}
+
+.auditRunList strong,
+.auditRunList small {
+  display: block;
+}
+
+.auditRunList strong {
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.auditRunList small,
+.auditLoading {
+  color: #898980;
+  font-size: 10px;
+}
+
+.auditEditorTopbar h1 {
+  max-width: 760px;
+  font-size: clamp(28px, 4vw, 43px);
+}
+
+.auditBack {
+  margin-bottom: 22px;
+  padding: 0;
+  border: 0;
+  color: #74746c;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.auditDetailsCard,
+.auditSectionEditor,
+.auditRunSection,
+.auditIssues {
+  border: 1px solid #d9d9d1;
+  border-radius: 14px;
+  background: #faf9f5;
+}
+
+.auditDetailsCard {
+  display: grid;
+  gap: 18px;
+  padding: 23px;
+}
+
+.auditDetailsCard textarea,
+.auditQuestionEditor textarea,
+.auditQuestionEditor select,
+.auditRunQuestion textarea,
+.auditIssueForm input,
+.auditIssueForm select,
+.auditIssueForm textarea {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #d2d2c9;
+  border-radius: 8px;
+  color: #262621;
+  background: #fdfcf8;
+  resize: vertical;
+}
+
+.auditBuilderSections,
+.auditRunSections {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.auditSectionEditor {
+  overflow: hidden;
+}
+
+.auditSectionHeader {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 17px 20px;
+  border-bottom: 1px solid #deded6;
+  background: #efeee8;
+}
+
+.auditSectionHeader > span,
+.auditRunSection > header > span {
+  color: #7d7d74;
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+}
+
+.auditSectionHeader > input {
+  padding: 4px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  color: #262621;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.auditSectionHeader > input:focus {
+  border-bottom-color: #99998f;
+  outline: 0;
+}
+
+.auditSectionHeader > button,
+.auditQuestionEditor > button {
+  border: 0;
+  color: #85857c;
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.auditQuestionList {
+  padding: 8px 20px;
+}
+
+.auditQuestionEditor {
+  display: grid;
+  grid-template-columns: 22px minmax(220px, 1fr) minmax(150px, 0.38fr) auto 24px;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 0;
+  border-bottom: 1px solid #e5e4dd;
+}
+
+.auditQuestionEditor > span {
+  color: #8a8a81;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+.auditRequired {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #717169;
+  font-size: 9px;
+}
+
+.auditAddQuestion,
+.auditAddButton {
+  padding: 11px 13px;
+  border: 1px dashed #bdbdb4;
+  border-radius: 8px;
+  color: #505049;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.auditAddQuestion {
+  margin: 8px 20px 18px 52px;
+}
+
+.auditAddButton {
+  width: 100%;
+  margin-top: 18px;
+}
+
+.auditRunSection {
+  overflow: hidden;
+}
+
+.auditRunSection > header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 19px 22px;
+  border-bottom: 1px solid #deded6;
+  background: #efeee8;
+}
+
+.auditRunSection > header h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.auditRunQuestion {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, 0.6fr);
+  align-items: center;
+  gap: 28px;
+  padding: 19px 22px;
+  border-bottom: 1px solid #e5e4dd;
+}
+
+.auditRunQuestion:last-child {
+  border-bottom: 0;
+}
+
+.auditRunQuestion.failed {
+  background: #fff6f3;
+}
+
+.auditQuestionPrompt {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.auditQuestionPrompt > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 7px;
+  place-items: center;
+  color: #6c6c64;
+  background: #e9e8e1;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+.auditQuestionPrompt p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auditQuestionPrompt small {
+  display: block;
+  margin-top: 5px;
+  color: #8a8a81;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.auditResponseButtons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.auditResponseButtons button {
+  padding: 9px 8px;
+  border: 1px solid #cfcfc6;
+  border-radius: 8px;
+  color: #5f5f58;
+  background: #fdfcf8;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.auditResponseButtons .selected.pass {
+  border-color: #7da64d;
+  color: #365c16;
+  background: #e4f4ce;
+}
+
+.auditResponseButtons .selected.fail {
+  border-color: #d58e7c;
+  color: #842b1d;
+  background: #ffe0d8;
+}
+
+.auditResponseButtons .selected.na {
+  border-color: #88887f;
+  color: #3f3f39;
+  background: #e7e6df;
+}
+
+.auditIssues {
+  margin-top: 28px;
+  padding: 22px;
+}
+
+.auditIssues .sectionHeading {
+  align-items: flex-start;
+}
+
+.auditIssues .sectionHeading p {
+  margin: 5px 0 0;
+  color: #787870;
+  font-size: 11px;
+}
+
+.auditIssueForm {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) 140px 190px;
+  gap: 14px;
+  margin-bottom: 22px;
+  padding: 18px;
+  border-radius: 11px;
+  background: #efeee8;
+}
+
+.auditIssueForm .errorBanner,
+.auditIssueDescription {
+  grid-column: 1 / -1;
+}
+
+.auditIssueForm > button {
+  justify-self: start;
+}
+
+.auditIssueList {
+  display: grid;
+  gap: 8px;
+}
+
+.auditIssueList article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid #e0dfd8;
+  border-radius: 10px;
+}
+
+.auditIssueList h3 {
+  margin: 1px 0 5px;
+  font-size: 12px;
+}
+
+.auditIssueList p {
+  margin: 0 0 6px;
+  color: #66665e;
+  font-size: 11px;
+}
+
+.auditIssueList small,
+.auditNoIssues {
+  color: #898980;
+  font-size: 9px;
+}
+
+.auditIssueList button {
+  padding: 7px 9px;
+  border: 1px solid #cecec5;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.auditPriority.high,
+.auditPriority.critical {
+  color: #842b1d;
+  background: #ffe0d8;
+}
+
+.auditPriority.low {
+  color: #365c16;
+  background: #e4f4ce;
+}
+
+.auditStandaloneState {
+  max-width: 650px;
+}
+
 @media (max-width: 720px) {
   .authShell {
     display: block;
@@ -1190,5 +1674,30 @@ button:disabled {
 
   .inboxMessage {
     padding: 20px;
+  }
+
+  .auditEditorTopbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .auditRunList > button,
+  .auditRunQuestion,
+  .auditQuestionEditor,
+  .auditIssueForm {
+    grid-template-columns: 1fr;
+  }
+
+  .auditRunList > button {
+    gap: 8px;
+  }
+
+  .auditQuestionEditor > span {
+    display: none;
+  }
+
+  .auditRequired {
+    padding: 5px 0;
   }
 }
