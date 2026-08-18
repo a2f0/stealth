@@ -10,6 +10,7 @@
     "dev": "vite"
   },
   "dependencies": {
+    "better-auth": "1.7.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },

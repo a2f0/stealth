@@ -58,8 +58,10 @@ bun run auth:set-role person@example.com admin
 
 Pass `--local` as the third argument to update the local D1 database instead.
 Later role changes can use Better Auth's admin API. Public account registration
-is enabled for now. The existing object-storage endpoints also remain public
-until the client sign-in experience is added.
+is enabled for now. The client includes sign-up, sign-in, sign-out, reset
+request, and new-password screens. Object-storage endpoints require an
+authenticated session; all authenticated accounts currently share the same
+library until per-user object ownership is added.
 
 Authentication needs a strong `BETTER_AUTH_SECRET` in the ignored
 `.secrets/root.env`. Production password reset additionally requires Cloudflare

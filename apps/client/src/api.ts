@@ -1,3 +1,5 @@
+import { apiUrl } from "./config";
+
 export interface StoredObject {
   id: string;
   objectKey: string;
@@ -6,10 +8,6 @@ export interface StoredObject {
   size: number;
   createdAt: string;
 }
-
-const apiUrl = (
-  import.meta.env.VITE_API_URL ?? "http://localhost:8787"
-).replace(/\/$/, "");
 
 export async function listObjects() {
   const response = await fetch(`${apiUrl}/api/objects`, {
