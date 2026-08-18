@@ -2,13 +2,16 @@ import { useEffect, useState } from "react";
 import { AdminUsers } from "./AdminUsers";
 import { AuthPage } from "./AuthPage";
 import { authClient } from "./authClient";
+import { Inbox } from "./Inbox";
 import { Library } from "./Library";
 import { hasRole, WorkspaceShell } from "./WorkspaceShell";
 
 export function App() {
   const { data: session, error, isPending, refetch } = authClient.useSession();
   const [pathname, setPathname] = useState(window.location.pathname);
-  const isAdminPage = pathname === "/admin";
+  const isInboxPage = pathname === "/inbox";
+  const isUsersPage = pathname === "/admin";
+  const requiresAdmin = ["/admin", "/inbox"].includes(pathname);
   const isResetPage = pathname === "/reset-password";
   const verification = verificationFeedback();
 
@@ -64,11 +67,13 @@ export function App() {
     setPathname(nextPathname);
   };
 
-  if (isAdminPage && !hasRole(session.user.role, "admin")) {
+  if (requiresAdmin && !hasRole(session.user.role, "admin")) {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
 
-  const content = isAdminPage ? (
+  const content = isInboxPage ? (
+    <Inbox />
+  ) : isUsersPage ? (
     <AdminUsers />
   ) : (
     <Library
@@ -90,7 +95,7 @@ export function App() {
 
   return (
     <WorkspaceShell
-      activePage={isAdminPage ? "admin" : "library"}
+      activePage={isInboxPage ? "inbox" : isUsersPage ? "admin" : "library"}
       onNavigate={navigate}
       onSignOut={onSignOut}
       user={session.user}

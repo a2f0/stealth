@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createAuth } from "./auth";
 import { type AuthVariables, requireAuth, requireRole } from "./authMiddleware";
+import { inbox } from "./inbox";
 import { objects } from "./objects";
 import type { Bindings } from "./types";
 
@@ -37,6 +38,7 @@ app.get("/health", (context) =>
 app.get("/api", (context) =>
   context.json({
     endpoints: {
+      inbox: "/api/inbox",
       objects: "/api/objects",
       session: "/api/me",
       health: "/health",
@@ -51,6 +53,10 @@ app.get("/api/me", requireAuth, (context) =>
 app.get("/api/admin", requireAuth, requireRole("admin"), (context) =>
   context.json({ user: context.get("authSession").user }),
 );
+
+app.use("/api/inbox", requireAuth, requireRole("admin"));
+app.use("/api/inbox/*", requireAuth, requireRole("admin"));
+app.route("/api/inbox", inbox);
 
 app.use("/api/objects", requireAuth);
 app.use("/api/objects/*", requireAuth);
