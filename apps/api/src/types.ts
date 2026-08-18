@@ -1,6 +1,11 @@
 export interface Bindings {
+  AUTH_EMAIL_FROM: string;
+  BETTER_AUTH_SECRET: string;
+  BETTER_AUTH_URL: string;
   CORS_ORIGIN: string;
   DB: D1Database;
+  EMAIL: SendEmail;
+  INBOUND_EMAIL_ADDRESS: string;
   STORAGE: R2Bucket;
 }
 

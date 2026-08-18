@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { normalizeFilename } from "./filenames";
 import type { Bindings, StoredObjectRow } from "./types";
 import { toStoredObject } from "./types";
 
@@ -112,23 +113,6 @@ async function findObject(database: D1Database, id: string) {
     )
     .bind(id)
     .first<StoredObjectRow>();
-}
-
-function normalizeFilename(filename: string) {
-  const normalized = [...filename]
-    .map((character) => {
-      const code = character.charCodeAt(0);
-      return character === "/" ||
-        character === "\\" ||
-        character === '"' ||
-        code <= 31 ||
-        code === 127
-        ? "-"
-        : character;
-    })
-    .join("")
-    .trim();
-  return normalized || "upload";
 }
 
 export { objects };

@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/cloudflareEnv.sh"
 load_cloudflare_env
+validate_auth_env
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "Dry-running API Worker deployment..."
@@ -20,6 +21,12 @@ fi
 
 echo "Applying production D1 migrations..."
 bun run --cwd "$REPO_ROOT/apps/api" db:migrate:remote
+
+echo "Updating the Better Auth Worker secret..."
+printf '%s' "$BETTER_AUTH_SECRET" | bunx wrangler secret put \
+  BETTER_AUTH_SECRET \
+  --config "$REPO_ROOT/apps/api/wrangler.jsonc" \
+  >/dev/null
 
 echo "Deploying API Worker..."
 bun run --cwd "$REPO_ROOT/apps/api" deploy

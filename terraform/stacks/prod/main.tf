@@ -21,6 +21,23 @@ resource "cloudflare_r2_bucket" "objects" {
   storage_class = "Standard"
 }
 
+resource "cloudflare_email_routing_rule" "inbound" {
+  zone_id = data.cloudflare_zone.main.id
+  name    = "Store inbound email in stealth-api"
+  enabled = true
+
+  matchers = [{
+    type  = "literal"
+    field = "to"
+    value = var.inbound_email_address
+  }]
+
+  actions = [{
+    type  = "worker"
+    value = [var.api_worker_name]
+  }]
+}
+
 locals {
   worker_domains = {
     api = {

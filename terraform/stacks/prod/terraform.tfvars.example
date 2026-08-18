@@ -3,6 +3,7 @@ domain = "tearleads.com"
 
 d1_database_name = "stealth-db"
 r2_bucket_name    = "stealth-objects"
+inbound_email_address = "upload@inbox.tearleads.com"
 
 # The production deploy script creates all three Workers before Terraform
 # attaches these domains.

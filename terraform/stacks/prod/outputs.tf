@@ -18,6 +18,11 @@ output "r2_bucket_name" {
   value       = cloudflare_r2_bucket.objects.name
 }
 
+output "inbound_email_address" {
+  description = "Address routed to the API Worker for storage."
+  value       = var.inbound_email_address
+}
+
 output "worker_domains" {
   description = "Desired custom-domain mapping for the three Workers."
   value       = local.worker_domains

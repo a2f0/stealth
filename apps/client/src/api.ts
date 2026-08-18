@@ -12,7 +12,9 @@ const apiUrl = (
 ).replace(/\/$/, "");
 
 export async function listObjects() {
-  const response = await fetch(`${apiUrl}/api/objects`);
+  const response = await fetch(`${apiUrl}/api/objects`, {
+    credentials: "include",
+  });
   const body = await parseResponse<{ objects: StoredObject[] }>(response);
   return body.objects;
 }
@@ -23,6 +25,7 @@ export async function uploadObject(file: File) {
   const response = await fetch(`${apiUrl}/api/objects`, {
     method: "POST",
     body: form,
+    credentials: "include",
   });
   return parseResponse<{ object: StoredObject }>(response);
 }
@@ -30,6 +33,7 @@ export async function uploadObject(file: File) {
 export async function deleteObject(id: string) {
   const response = await fetch(`${apiUrl}/api/objects/${id}`, {
     method: "DELETE",
+    credentials: "include",
   });
   if (!response.ok) {
     await parseResponse(response);

@@ -33,6 +33,42 @@ Wrangler persists the local D1 database and R2 bucket under
 `apps/api/.wrangler/`. The client defaults to the local API. Override it by
 copying `apps/client/.env.example` to `apps/client/.env`.
 
+## Authentication
+
+The API uses Better Auth with D1-backed email/password accounts and cookie
+sessions. New accounts receive the `user` role. The `admin` role can access
+admin-plugin operations and the example `GET /api/admin` route. Passwords must
+be 12–128 characters, reset links expire after one hour, and a successful reset
+revokes the user's existing sessions.
+
+The main endpoints under `https://api.tearleads.com/api/auth` are:
+
+- `POST /sign-up/email`
+- `POST /sign-in/email`
+- `POST /sign-out`
+- `GET /get-session`
+- `POST /request-password-reset`
+- `POST /reset-password`
+
+After creating the first account, bootstrap its admin role with:
+
+```sh
+bun run auth:set-role person@example.com admin
+```
+
+Pass `--local` as the third argument to update the local D1 database instead.
+Later role changes can use Better Auth's admin API. Public account registration
+is enabled for now. The existing object-storage endpoints also remain public
+until the client sign-in experience is added.
+
+Authentication needs a strong `BETTER_AUTH_SECRET` in the ignored
+`.secrets/root.env`. Production password reset additionally requires Cloudflare
+Email Sending to be enabled for `auth.tearleads.com`, with
+`security@auth.tearleads.com` permitted as a sender. Sending DNS records and
+DMARC policy are isolated under `auth.tearleads.com`; Google Workspace remains
+responsible for mail at the apex. The deployment script uploads the auth secret
+to the Worker but never places it in Wrangler configuration or Terraform state.
+
 ## Provision Cloudflare resources
 
 Link or create the ignored `.secrets` directory, then review the Terraform
@@ -51,6 +87,12 @@ apply Terraform separately:
 bun run terraform:plan
 bun run terraform:apply
 ```
+
+Inbound mail to `upload@inbox.tearleads.com` is handled by the API Worker. It
+stores the full `.eml` and each attachment in the private R2 bucket, with
+delivery and attachment metadata in D1. The ignored `.secrets/root.env` also
+needs `CLOUDFLARE_EMAIL_API_TOKEN`; it is used only to verify the subdomain's
+Email Routing setup. The Terraform token needs Email Routing Rules Write.
 
 ## Deploy production
 
@@ -79,6 +121,7 @@ bun run deploy:api      # migrate D1 and deploy the API Worker
 bun run deploy:app      # build with the production API URL and deploy
 bun run deploy:website  # build with the production app URL and deploy
 bun run deploy:domains  # preflight and attach custom domains
+bun run deploy:email:verify # verify inbound MX records and Worker route
 bun run deploy:verify   # check all production URLs
 ```
 
