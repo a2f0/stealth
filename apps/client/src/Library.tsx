@@ -8,11 +8,18 @@ import {
 } from "./api";
 
 interface LibraryProps {
+  initialNotice?: string | undefined;
+  onResendVerification: () => Promise<void>;
   onSignOut: () => Promise<void>;
-  user: { email: string; name: string };
+  user: { email: string; emailVerified: boolean; name: string };
 }
 
-export function Library({ onSignOut, user }: LibraryProps) {
+export function Library({
+  initialNotice,
+  onResendVerification,
+  onSignOut,
+  user,
+}: LibraryProps) {
   const [objects, setObjects] = useState<StoredObject[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -133,6 +140,12 @@ export function Library({ onSignOut, user }: LibraryProps) {
         </header>
 
         <section className="content" id="library">
+          <VerificationStatus
+            email={user.email}
+            emailVerified={user.emailVerified}
+            initialNotice={initialNotice}
+            onResend={onResendVerification}
+          />
           {error && <div className="errorBanner">{error}</div>}
           <div className="sectionHeading">
             <h2>All files</h2>
@@ -172,6 +185,63 @@ export function Library({ onSignOut, user }: LibraryProps) {
         </section>
       </main>
     </div>
+  );
+}
+
+interface VerificationStatusProps {
+  email: string;
+  emailVerified: boolean;
+  initialNotice?: string | undefined;
+  onResend: () => Promise<void>;
+}
+
+function VerificationStatus({
+  email,
+  emailVerified,
+  initialNotice,
+  onResend,
+}: VerificationStatusProps) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState(initialNotice);
+
+  async function resend() {
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await onResend();
+      setNotice("Verification email sent. Check your inbox.");
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      {notice && (
+        <div aria-live="polite" className="successBanner pageBanner">
+          {notice}
+        </div>
+      )}
+      {!emailVerified && (
+        <div className="verificationBanner">
+          <div>
+            <strong>Verify your email</strong>
+            <p>
+              You can use Stealth now, but confirming {email} helps secure your
+              account.
+            </p>
+            {error && <span className="verificationError">{error}</span>}
+          </div>
+          <button disabled={busy} onClick={() => void resend()} type="button">
+            {busy ? "Sending…" : "Resend email"}
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 

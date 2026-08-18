@@ -61,7 +61,9 @@ Later role changes can use Better Auth's admin API. Public account registration
 is enabled for now. The client includes sign-up, sign-in, sign-out, reset
 request, and new-password screens. Object-storage endpoints require an
 authenticated session; all authenticated accounts currently share the same
-library until per-user object ownership is added.
+library until per-user object ownership is added. Registration sends a
+one-hour verification link, but unverified users can sign in immediately. The
+library displays a reminder with a resend action until the address is verified.
 
 Authentication needs a strong `BETTER_AUTH_SECRET` in the ignored
 `.secrets/root.env`. Production password reset additionally requires Cloudflare
