@@ -98,7 +98,12 @@ export function AuthPage({
           <h2>{copy.title}</h2>
           <p className="authIntro">{descriptionFor(mode)}</p>
 
-          <form className="authForm" onSubmit={(event) => void submit(event)}>
+          <form
+            autoComplete="on"
+            className="authForm"
+            method="post"
+            onSubmit={(event) => void submit(event)}
+          >
             <AuthFields
               confirmation={confirmation}
               email={email}
@@ -289,10 +294,13 @@ function AuthFields(props: AuthFieldsProps) {
       )}
       {mode !== "reset" && (
         <AuthInput
-          autoComplete="email"
+          autoCapitalize="none"
+          autoComplete={mode === "forgot" ? "email" : "username"}
+          inputMode="email"
           label="Email"
           name="email"
           onValue={props.onEmail}
+          spellCheck={false}
           type="email"
           value={props.email}
         />
@@ -329,13 +337,16 @@ function AuthFields(props: AuthFieldsProps) {
 }
 
 interface AuthInputProps {
+  autoCapitalize?: "none";
   autoComplete: string;
   help?: string;
+  inputMode?: "email";
   label: string;
   maxLength?: number;
   minLength?: number;
   name: string;
   onValue: (value: string) => void;
+  spellCheck?: boolean;
   type?: "email" | "password";
   value: string;
 }
@@ -348,10 +359,11 @@ function AuthInput({
   ...props
 }: AuthInputProps) {
   return (
-    <label className="field">
+    <label className="field" htmlFor={props.name}>
       <span>{label}</span>
       <input
         {...props}
+        id={props.name}
         onChange={(event) => onValue(event.target.value)}
         required
         type={type}
