@@ -711,13 +711,6 @@ button:disabled {
   line-height: 1.4;
 }
 
-.fatalState a {
-  border-bottom: 1px solid;
-  color: #262621;
-  font-size: 13px;
-  text-decoration: none;
-}
-
 .userTableWrap {
   overflow-x: auto;
   border: 1px solid #ddddd5;

@@ -6,19 +6,17 @@ import {
   type StoredObject,
   uploadObject,
 } from "./api";
-import { WorkspaceShell, type WorkspaceUser } from "./WorkspaceShell";
+import type { WorkspaceUser } from "./WorkspaceShell";
 
 interface LibraryProps {
   initialNotice?: string | undefined;
   onResendVerification: () => Promise<void>;
-  onSignOut: () => Promise<void>;
   user: WorkspaceUser;
 }
 
 export function Library({
   initialNotice,
   onResendVerification,
-  onSignOut,
   user,
 }: LibraryProps) {
   const [objects, setObjects] = useState<StoredObject[]>([]);
@@ -66,7 +64,7 @@ export function Library({
   }
 
   return (
-    <WorkspaceShell activePage="library" onSignOut={onSignOut} user={user}>
+    <>
       <header className="topbar">
         <div>
           <p className="eyebrow">Personal workspace</p>
@@ -137,7 +135,7 @@ export function Library({
           </div>
         )}
       </section>
-    </WorkspaceShell>
+    </>
   );
 }
 

@@ -1,15 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { AdminUsers } from "./AdminUsers";
 import { AuthPage } from "./AuthPage";
 import { authClient } from "./authClient";
 import { Library } from "./Library";
-import { hasRole } from "./WorkspaceShell";
+import { hasRole, WorkspaceShell } from "./WorkspaceShell";
 
 export function App() {
   const { data: session, error, isPending, refetch } = authClient.useSession();
-  const isAdminPage = window.location.pathname === "/admin";
-  const isResetPage = window.location.pathname === "/reset-password";
+  const [pathname, setPathname] = useState(window.location.pathname);
+  const isAdminPage = pathname === "/admin";
+  const isResetPage = pathname === "/reset-password";
   const verification = verificationFeedback();
+
+  useEffect(() => {
+    const updatePathname = () => setPathname(window.location.pathname);
+    window.addEventListener("popstate", updatePathname);
+    return () => window.removeEventListener("popstate", updatePathname);
+  }, []);
 
   useEffect(() => {
     if (verification.shouldClear) {
@@ -51,14 +58,19 @@ export function App() {
     await refetch();
   };
 
-  if (isAdminPage) {
-    if (!hasRole(session.user.role, "admin")) {
-      return <AdminAccessDenied />;
-    }
-    return <AdminUsers onSignOut={onSignOut} user={session.user} />;
+  const navigate = (nextPathname: string) => {
+    if (nextPathname === pathname) return;
+    window.history.pushState({}, "", nextPathname);
+    setPathname(nextPathname);
+  };
+
+  if (isAdminPage && !hasRole(session.user.role, "admin")) {
+    return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
 
-  return (
+  const content = isAdminPage ? (
+    <AdminUsers />
+  ) : (
     <Library
       initialNotice={verification.notice}
       onResendVerification={async () => {
@@ -72,17 +84,29 @@ export function App() {
           );
         }
       }}
-      onSignOut={onSignOut}
       user={session.user}
     />
   );
+
+  return (
+    <WorkspaceShell
+      activePage={isAdminPage ? "admin" : "library"}
+      onNavigate={navigate}
+      onSignOut={onSignOut}
+      user={session.user}
+    >
+      {content}
+    </WorkspaceShell>
+  );
 }
 
-function AdminAccessDenied() {
+function AdminAccessDenied({ onNavigate }: { onNavigate: () => void }) {
   return (
     <div className="fatalState">
       <p>Administrator access is required.</p>
-      <a href="/">Return to your library</a>
+      <button onClick={onNavigate} type="button">
+        Return to your library
+      </button>
     </div>
   );
 }
