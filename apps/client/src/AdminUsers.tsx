@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { type AdminOrganization, listAdminOrganizations } from "./api";
 import { authClient } from "./authClient";
 
 const pageSize = 25;
@@ -20,6 +21,7 @@ interface UserListing {
 
 export function AdminUsers() {
   const [listing, setListing] = useState<UserListing>();
+  const [organizations, setOrganizations] = useState<AdminOrganization[]>();
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string>();
@@ -28,19 +30,24 @@ export function AdminUsers() {
     setBusy(true);
     setError(undefined);
     setListing(undefined);
+    setOrganizations(undefined);
     try {
-      const result = await authClient.admin.listUsers({
-        query: {
-          limit: pageSize,
-          offset: page * pageSize,
-          sortBy: "createdAt",
-          sortDirection: "desc",
-        },
-      });
+      const [result, nextOrganizations] = await Promise.all([
+        authClient.admin.listUsers({
+          query: {
+            limit: pageSize,
+            offset: page * pageSize,
+            sortBy: "createdAt",
+            sortDirection: "desc",
+          },
+        }),
+        listAdminOrganizations(),
+      ]);
       if (result.error) {
         setError(result.error.message ?? "Could not load users.");
       } else {
         setListing(result.data);
+        setOrganizations(nextOrganizations);
       }
     } catch (cause) {
       setError(messageFrom(cause));
@@ -72,24 +79,111 @@ export function AdminUsers() {
 
       <section className="content">
         {error && <div className="errorBanner">{error}</div>}
-        <div className="sectionHeading">
-          <h2>All users</h2>
-          <span>{listing?.total ?? 0} accounts</span>
-        </div>
-        {listing && listing.users.length > 0 ? (
-          <>
-            <UserTable users={listing.users} />
-            <Pagination
-              onPageChange={setPage}
-              page={page}
-              total={listing.total}
-            />
-          </>
-        ) : !error ? (
-          <AdminEmptyState busy={busy} />
-        ) : null}
+        <UserSection
+          busy={busy}
+          hasError={Boolean(error)}
+          listing={listing}
+          onPageChange={setPage}
+          page={page}
+        />
+        <OrganizationSection organizations={organizations} />
       </section>
     </>
+  );
+}
+
+function UserSection({
+  busy,
+  hasError,
+  listing,
+  onPageChange,
+  page,
+}: {
+  busy: boolean;
+  hasError: boolean;
+  listing?: UserListing | undefined;
+  onPageChange: (page: number) => void;
+  page: number;
+}) {
+  return (
+    <section>
+      <div className="sectionHeading">
+        <h2>All users</h2>
+        <span>{listing?.total ?? 0} accounts</span>
+      </div>
+      {listing && listing.users.length > 0 ? (
+        <>
+          <UserTable users={listing.users} />
+          <Pagination
+            onPageChange={onPageChange}
+            page={page}
+            total={listing.total}
+          />
+        </>
+      ) : !hasError ? (
+        <AdminEmptyState busy={busy} />
+      ) : null}
+    </section>
+  );
+}
+
+function OrganizationSection({
+  organizations,
+}: {
+  organizations?: AdminOrganization[] | undefined;
+}) {
+  return (
+    <section className="adminSection">
+      <div className="sectionHeading">
+        <h2>Organizations</h2>
+        <span>{organizations?.length ?? 0} organizations</span>
+      </div>
+      {organizations && organizations.length > 0 ? (
+        <OrganizationTable organizations={organizations} />
+      ) : organizations ? (
+        <div className="emptyState compactEmptyState">
+          <div className="emptyGlyph">◇</div>
+          <h3>No organizations found.</h3>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function OrganizationTable({
+  organizations,
+}: {
+  organizations: AdminOrganization[];
+}) {
+  return (
+    <div className="userTableWrap">
+      <table className="userTable">
+        <thead>
+          <tr>
+            <th>Organization</th>
+            <th>Owner</th>
+            <th>Members</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {organizations.map((organization) => (
+            <tr key={organization.id}>
+              <td>
+                <strong>{organization.name}</strong>
+                <span>{organization.slug}</span>
+              </td>
+              <td className="tableIdentity">
+                <strong>{organization.ownerName ?? "—"}</strong>
+                <span>{organization.ownerEmail ?? "No default owner"}</span>
+              </td>
+              <td>{organization.memberCount}</td>
+              <td>{formatDate(organization.createdAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -180,7 +274,7 @@ function statusFor(user: ListedUser) {
   return { className: "pending", label: "Unverified" };
 }
 
-function formatDate(value: Date) {
+function formatDate(value: Date | number | string) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
   }).format(new Date(value));

@@ -32,6 +32,26 @@ export interface InboundEmailDetail extends InboundEmailSummary {
   text: string | null;
 }
 
+export interface AdminOrganization {
+  createdAt: number | string;
+  id: string;
+  memberCount: number;
+  name: string;
+  ownerEmail: string | null;
+  ownerName: string | null;
+  slug: string;
+}
+
+export async function listAdminOrganizations() {
+  const response = await fetch(`${apiUrl}/api/admin/organizations`, {
+    credentials: "include",
+  });
+  const body = await parseResponse<{ organizations: AdminOrganization[] }>(
+    response,
+  );
+  return body.organizations;
+}
+
 export async function listInboundEmails() {
   const response = await fetch(`${apiUrl}/api/inbox`, {
     credentials: "include",
