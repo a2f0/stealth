@@ -5,6 +5,7 @@ import type { Bindings } from "./types";
 
 export interface AuthVariables {
   authSession: AuthSession;
+  organizationId: string;
 }
 
 type AuthEnv = {
@@ -27,6 +28,21 @@ export const requireAuth = createMiddleware<AuthEnv>(async (context, next) => {
   context.set("authSession", session as AuthSession);
   return next();
 });
+
+export const requireOrganization = createMiddleware<AuthEnv>(
+  async (context, next) => {
+    const organizationId =
+      context.get("authSession").user.defaultOrganizationId;
+    if (!organizationId) {
+      return context.json(
+        { error: "A default organization is required." },
+        409,
+      );
+    }
+    context.set("organizationId", organizationId);
+    return next();
+  },
+);
 
 export function requireRole(role: "admin" | "user") {
   return createMiddleware<AuthEnv>(async (context, next) => {

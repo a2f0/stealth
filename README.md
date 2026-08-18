@@ -82,6 +82,21 @@ DMARC policy are isolated under `auth.tearleads.com`; Google Workspace remains
 responsible for mail at the apex. The deployment script uploads the auth secret
 to the Worker but never places it in Wrangler configuration or Terraform state.
 
+## Audits and checklists
+
+Authenticated users can build organization-scoped checklist templates at
+`/audits`, start audits from them, record pass/fail/N/A or text responses, and
+raise issues with priorities and optional organization-member assignees. Audit
+runs snapshot their template so later template edits do not rewrite history.
+
+The seeded NFPA 70E readiness checklist is a customizable starting point based
+on broad electrical-safety themes. It is not an official checklist,
+certification, or substitute for the current standard, an employer's required
+risk assessment, or qualified professional judgment. Consult the
+[NFPA 70E publication](https://link.nfpa.org/all-publications/70E/2024) and
+[OSHA electrical safety requirements](https://www.osha.gov/laws-regs/regulations/standardnumber/1910/1910.333)
+when adapting it to a workplace.
+
 ## Provision Cloudflare resources
 
 Link or create the ignored `.secrets` directory, then review the Terraform

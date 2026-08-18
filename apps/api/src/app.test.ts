@@ -37,6 +37,16 @@ describe("api", () => {
 
     expect(response.status).toBe(401);
   });
+
+  it("requires authentication for audits", async () => {
+    const response = await app.request(
+      "/api/audits/templates",
+      undefined,
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
 });
 
 function authBindings(): Bindings {

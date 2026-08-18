@@ -1,8 +1,14 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { adminOrganizations } from "./adminOrganizations";
+import { audits } from "./audits";
 import { createAuth } from "./auth";
-import { type AuthVariables, requireAuth, requireRole } from "./authMiddleware";
+import {
+  type AuthVariables,
+  requireAuth,
+  requireOrganization,
+  requireRole,
+} from "./authMiddleware";
 import { inbox } from "./inbox";
 import { objects } from "./objects";
 import type { Bindings } from "./types";
@@ -16,7 +22,7 @@ app.use(
   "/api/*",
   cors({
     allowHeaders: ["Authorization", "Content-Type"],
-    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
     origin: (_origin, context) => context.env.CORS_ORIGIN,
   }),
@@ -40,6 +46,7 @@ app.get("/api", (context) =>
   context.json({
     endpoints: {
       adminOrganizations: "/api/admin/organizations",
+      audits: "/api/audits",
       inbox: "/api/inbox",
       objects: "/api/objects",
       session: "/api/me",
@@ -58,6 +65,10 @@ app.get("/api/admin", requireAuth, requireRole("admin"), (context) =>
 
 app.use("/api/admin/organizations", requireAuth, requireRole("admin"));
 app.route("/api/admin/organizations", adminOrganizations);
+
+app.use("/api/audits", requireAuth, requireOrganization);
+app.use("/api/audits/*", requireAuth, requireOrganization);
+app.route("/api/audits", audits);
 
 app.use("/api/inbox", requireAuth, requireRole("admin"));
 app.use("/api/inbox/*", requireAuth, requireRole("admin"));
