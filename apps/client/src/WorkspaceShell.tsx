@@ -1,4 +1,10 @@
-import { type MouseEvent, type ReactNode, useState } from "react";
+import {
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 export interface WorkspaceUser {
   email: string;
@@ -22,20 +28,6 @@ export function WorkspaceShell({
   onSignOut,
   user,
 }: WorkspaceShellProps) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-
-  async function signOut() {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onSignOut();
-    } catch (cause) {
-      setError(messageFrom(cause));
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -66,34 +58,108 @@ export function WorkspaceShell({
             </a>
           )}
         </nav>
-        <div className="accountBlock">
-          <span className="accountAvatar">{initialsFor(user.name)}</span>
-          <span className="accountIdentity">
-            <strong>{user.name}</strong>
-            <span>{user.email}</span>
-          </span>
-          <button
-            aria-label="Sign out"
-            className="signOutButton"
-            disabled={busy}
-            onClick={() => void signOut()}
-            title="Sign out"
-            type="button"
-          >
-            ↪
-          </button>
-        </div>
-        {error && (
-          <p className="sidebarError" role="alert">
-            {error}
-          </p>
-        )}
         <div className="sidebarFoot">
           <span className="statusDot" /> Cloudflare connected
         </div>
+        <AccountControl onSignOut={onSignOut} user={user} />
       </aside>
 
       <main>{children}</main>
+    </div>
+  );
+}
+
+function AccountControl({
+  onSignOut,
+  user,
+}: {
+  onSignOut: () => Promise<void>;
+  user: WorkspaceUser;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [open, setOpen] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !menu.current?.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        trigger.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  async function signOut() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onSignOut();
+    } catch (cause) {
+      setError(messageFrom(cause));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="accountBlock">
+      <span className="accountAvatar">{initialsFor(user.name)}</span>
+      <span className="accountIdentity">
+        <strong>{user.name}</strong>
+        <span>{user.email}</span>
+      </span>
+      <div className="accountMenu" ref={menu}>
+        <button
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-label="Account menu"
+          className="accountMenuButton"
+          disabled={busy}
+          onClick={() => {
+            setError(undefined);
+            setOpen((current) => !current);
+          }}
+          ref={trigger}
+          type="button"
+        >
+          ⋮
+        </button>
+        {open && (
+          <div className="accountMenuPopover" role="menu">
+            {error && (
+              <p className="accountMenuError" role="alert">
+                {error}
+              </p>
+            )}
+            <button
+              className="accountMenuItem"
+              disabled={busy}
+              onClick={() => void signOut()}
+              role="menuitem"
+              type="button"
+            >
+              {busy ? "Signing out…" : "Sign out"}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

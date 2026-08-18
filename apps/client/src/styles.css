@@ -371,6 +371,7 @@ nav {
   align-items: center;
   gap: 8px;
   margin-top: auto;
+  margin-bottom: 8px;
   color: #77786f;
   font-family: "DM Mono", monospace;
   font-size: 10px;
@@ -382,11 +383,9 @@ nav {
   grid-template-columns: 34px minmax(0, 1fr) 25px;
   align-items: center;
   gap: 10px;
-  margin-top: auto;
-  margin-bottom: 20px;
-  padding: 12px 0;
+  margin: 0;
+  padding: 12px 0 0;
   border-top: 1px solid #30312b;
-  border-bottom: 1px solid #30312b;
 }
 
 .accountAvatar {
@@ -425,7 +424,11 @@ nav {
   font-size: 9px;
 }
 
-.signOutButton {
+.accountMenu {
+  position: relative;
+}
+
+.accountMenuButton {
   width: 25px;
   height: 25px;
   padding: 0;
@@ -437,9 +440,47 @@ nav {
   font-size: 16px;
 }
 
-.signOutButton:hover {
+.accountMenuButton:hover {
   color: #181916;
   background: #b7ff5b;
+}
+
+.accountMenuPopover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 10;
+  width: 150px;
+  padding: 6px;
+  border: 1px solid #3c3d36;
+  border-radius: 9px;
+  background: #262722;
+  box-shadow: 0 14px 35px #0006;
+}
+
+.accountMenuItem {
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #eeeee6;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.accountMenuItem:hover {
+  color: #181916;
+  background: #b7ff5b;
+}
+
+.accountMenuError {
+  margin: 4px 6px 7px;
+  color: #ff9c86;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .statusDot {
@@ -704,13 +745,6 @@ button:disabled {
   font-size: 11px;
 }
 
-.sidebarError {
-  margin: -8px 0 14px;
-  color: #ff9c86;
-  font-size: 10px;
-  line-height: 1.4;
-}
-
 .userTableWrap {
   overflow-x: auto;
   border: 1px solid #ddddd5;
@@ -890,6 +924,11 @@ button:disabled {
     margin: 0 0 0 auto;
     padding: 0;
     border: 0;
+  }
+
+  .accountMenuPopover {
+    top: calc(100% + 8px);
+    bottom: auto;
   }
 
   .topbar {
