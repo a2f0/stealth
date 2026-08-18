@@ -65,8 +65,8 @@ authenticated session; all authenticated accounts currently share the same
 library until per-user object ownership is added. Registration sends a
 one-hour verification link, but unverified users can sign in immediately. The
 library displays a reminder with a resend action until the address is verified.
-Admins can list registered accounts at `/admin`; the Better Auth admin plugin
-enforces the role check on its API endpoint independently of the client route.
+Admins can list registered accounts at `/admin` and view the shared inbound
+mailbox at `/inbox`. The API independently enforces the admin role for both.
 
 Authentication needs a strong `BETTER_AUTH_SECRET` in the ignored
 `.secrets/root.env`. Production password reset additionally requires Cloudflare
@@ -97,9 +97,10 @@ bun run terraform:apply
 
 Inbound mail to `upload@inbox.tearleads.com` is handled by the API Worker. It
 stores the full `.eml` and each attachment in the private R2 bucket, with
-delivery and attachment metadata in D1. The ignored `.secrets/root.env` also
-needs `CLOUDFLARE_EMAIL_API_TOKEN`; it is used only to verify the subdomain's
-Email Routing setup. The Terraform token needs Email Routing Rules Write.
+delivery and attachment metadata in D1. Admins can inspect the mailbox in the
+client at `/inbox`. The ignored `.secrets/root.env` also needs
+`CLOUDFLARE_EMAIL_API_TOKEN`; it is used only to verify the subdomain's Email
+Routing setup. The Terraform token needs Email Routing Rules Write.
 
 ## Deploy production
 
