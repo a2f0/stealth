@@ -52,6 +52,8 @@ app.get("/api/admin", requireAuth, requireRole("admin"), (context) =>
   context.json({ user: context.get("authSession").user }),
 );
 
+app.use("/api/objects", requireAuth);
+app.use("/api/objects/*", requireAuth);
 app.route("/api/objects", objects);
 
 app.notFound((context) => context.json({ error: "Not found." }, 404));
