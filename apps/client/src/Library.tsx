@@ -6,12 +6,13 @@ import {
   type StoredObject,
   uploadObject,
 } from "./api";
+import { WorkspaceShell, type WorkspaceUser } from "./WorkspaceShell";
 
 interface LibraryProps {
   initialNotice?: string | undefined;
   onResendVerification: () => Promise<void>;
   onSignOut: () => Promise<void>;
-  user: { email: string; emailVerified: boolean; name: string };
+  user: WorkspaceUser;
 }
 
 export function Library({
@@ -64,127 +65,79 @@ export function Library({
     }
   }
 
-  async function signOut() {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onSignOut();
-    } catch (cause) {
-      setError(messageFrom(cause));
-      setBusy(false);
-    }
-  }
-
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <a className="brand" href="/" aria-label="Stealth home">
-          <span className="brandMark">S</span>
-          <span>stealth</span>
-        </a>
-        <nav aria-label="Workspace">
-          <a className="navItem active" href="#library">
-            <span className="navIcon">⌁</span> Library
-          </a>
-          <a className="navItem" href="#recent">
-            <span className="navIcon">◷</span> Recent
-          </a>
-        </nav>
-        <div className="accountBlock">
-          <span className="accountAvatar">{initialsFor(user.name)}</span>
-          <span className="accountIdentity">
-            <strong>{user.name}</strong>
-            <span>{user.email}</span>
-          </span>
-          <button
-            aria-label="Sign out"
-            className="signOutButton"
-            disabled={busy}
-            onClick={() => void signOut()}
-            title="Sign out"
-            type="button"
-          >
-            ↪
-          </button>
+    <WorkspaceShell activePage="library" onSignOut={onSignOut} user={user}>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Personal workspace</p>
+          <h1>Your library</h1>
         </div>
-        <div className="sidebarFoot">
-          <span className="statusDot" /> Cloudflare connected
+        <button
+          className="primaryButton"
+          disabled={busy}
+          onClick={() => fileInput.current?.click()}
+          type="button"
+        >
+          {busy ? "Working…" : "+ Add file"}
+        </button>
+        <input
+          ref={fileInput}
+          hidden
+          name="file"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void upload(file);
+            event.target.value = "";
+          }}
+          type="file"
+        />
+      </header>
+
+      <section className="content" id="library">
+        <VerificationStatus
+          email={user.email}
+          emailVerified={user.emailVerified}
+          initialNotice={initialNotice}
+          onResend={onResendVerification}
+        />
+        {error && <div className="errorBanner">{error}</div>}
+        <div className="sectionHeading">
+          <h2>All files</h2>
+          <span>{objects.length} items</span>
         </div>
-      </aside>
-
-      <main>
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Personal workspace</p>
-            <h1>Your library</h1>
+        {objects.length === 0 ? (
+          <EmptyState onUpload={() => fileInput.current?.click()} />
+        ) : (
+          <div className="fileGrid">
+            {objects.map((object) => (
+              <article className="fileCard" key={object.id}>
+                <a href={objectDownloadUrl(object.id)}>
+                  <div className="filePreview">
+                    {extensionFor(object.filename)}
+                  </div>
+                  <div className="fileMeta">
+                    <strong>{object.filename}</strong>
+                    <span>
+                      {formatBytes(object.size)} ·{" "}
+                      {formatDate(object.createdAt)}
+                    </span>
+                  </div>
+                </a>
+                <button
+                  aria-label={`Delete ${object.filename}`}
+                  className="deleteButton"
+                  disabled={busy}
+                  onClick={() => void remove(object)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </article>
+            ))}
           </div>
-          <button
-            className="primaryButton"
-            disabled={busy}
-            onClick={() => fileInput.current?.click()}
-            type="button"
-          >
-            {busy ? "Working…" : "+ Add file"}
-          </button>
-          <input
-            ref={fileInput}
-            hidden
-            name="file"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void upload(file);
-              event.target.value = "";
-            }}
-            type="file"
-          />
-        </header>
-
-        <section className="content" id="library">
-          <VerificationStatus
-            email={user.email}
-            emailVerified={user.emailVerified}
-            initialNotice={initialNotice}
-            onResend={onResendVerification}
-          />
-          {error && <div className="errorBanner">{error}</div>}
-          <div className="sectionHeading">
-            <h2>All files</h2>
-            <span>{objects.length} items</span>
-          </div>
-          {objects.length === 0 ? (
-            <EmptyState onUpload={() => fileInput.current?.click()} />
-          ) : (
-            <div className="fileGrid">
-              {objects.map((object) => (
-                <article className="fileCard" key={object.id}>
-                  <a href={objectDownloadUrl(object.id)}>
-                    <div className="filePreview">
-                      {extensionFor(object.filename)}
-                    </div>
-                    <div className="fileMeta">
-                      <strong>{object.filename}</strong>
-                      <span>
-                        {formatBytes(object.size)} ·{" "}
-                        {formatDate(object.createdAt)}
-                      </span>
-                    </div>
-                  </a>
-                  <button
-                    aria-label={`Delete ${object.filename}`}
-                    className="deleteButton"
-                    disabled={busy}
-                    onClick={() => void remove(object)}
-                    type="button"
-                  >
-                    ×
-                  </button>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-      </main>
-    </div>
+        )}
+      </section>
+    </WorkspaceShell>
   );
 }
 
@@ -255,17 +208,6 @@ function EmptyState({ onUpload }: { onUpload: () => void }) {
         Choose a file
       </button>
     </div>
-  );
-}
-
-function initialsFor(name: string) {
-  return (
-    name
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase())
-      .join("") || "?"
   );
 }
 

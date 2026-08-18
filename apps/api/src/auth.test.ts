@@ -123,6 +123,47 @@ describe("password authentication", () => {
     });
     expect(newPassword.status).toBe(200);
   });
+
+  it("only lets admins list users", async () => {
+    const fixture = await createFixture();
+    const signUp = await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+    });
+    expect(signUp.status).toBe(200);
+
+    const userSignIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const userCookie = userSignIn.headers.get("set-cookie");
+    const forbidden = await get(
+      fixture.auth,
+      "/admin/list-users?limit=25",
+      userCookie,
+    );
+    expect(forbidden.status).toBe(403);
+
+    fixture.database
+      .query('UPDATE "user" SET role = ? WHERE email = ?')
+      .run("admin", email);
+    const adminSignIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const adminCookie = adminSignIn.headers.get("set-cookie");
+    const listing = await get(
+      fixture.auth,
+      "/admin/list-users?limit=25&sortBy=createdAt&sortDirection=desc",
+      adminCookie,
+    );
+    expect(listing.status).toBe(200);
+    expect(await listing.json()).toMatchObject({
+      total: 1,
+      users: [{ email, role: "admin" }],
+    });
+  });
 });
 
 async function createFixture() {
@@ -165,6 +206,18 @@ function post(
       body: JSON.stringify(body),
       headers: { "content-type": "application/json", origin },
       method: "POST",
+    }),
+  );
+}
+
+function get(
+  auth: ReturnType<typeof createAuth>,
+  path: string,
+  cookie: string | null,
+) {
+  return auth.handler(
+    new Request(`${baseURL}/api/auth${path}`, {
+      headers: { cookie: cookie ?? "", origin },
     }),
   );
 }

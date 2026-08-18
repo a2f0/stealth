@@ -49,6 +49,7 @@ The main endpoints under `https://api.tearleads.com/api/auth` are:
 - `GET /get-session`
 - `POST /request-password-reset`
 - `POST /reset-password`
+- `GET /admin/list-users` (admin only)
 
 After creating the first account, bootstrap its admin role with:
 
@@ -64,6 +65,8 @@ authenticated session; all authenticated accounts currently share the same
 library until per-user object ownership is added. Registration sends a
 one-hour verification link, but unverified users can sign in immediately. The
 library displays a reminder with a resend action until the address is verified.
+Admins can list registered accounts at `/admin`; the Better Auth admin plugin
+enforces the role check on its API endpoint independently of the client route.
 
 Authentication needs a strong `BETTER_AUTH_SECRET` in the ignored
 `.secrets/root.env`. Production password reset additionally requires Cloudflare
