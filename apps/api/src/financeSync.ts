@@ -101,33 +101,64 @@ async function persistPage(
   itemId: string,
   page: TransactionsSyncResponse,
 ) {
-  await runStatements(
-    database,
-    page.accounts.map((account) =>
-      accountStatement(database, organizationId, itemId, account),
-    ),
-  );
-  const updates = [...page.added, ...page.modified].map((transaction) =>
-    transactionStatement(database, organizationId, itemId, transaction),
-  );
+  const accountIds = new Map<string, string>();
+  for (const account of page.accounts) {
+    accountIds.set(
+      account.account_id,
+      await upsertAccount(database, organizationId, itemId, account),
+    );
+  }
+  for (const transaction of [...page.added, ...page.modified]) {
+    const accountId = accountIds.get(transaction.account_id);
+    if (!accountId) {
+      throw new Error("Plaid returned a transaction without its account.");
+    }
+    await upsertTransaction(
+      database,
+      organizationId,
+      itemId,
+      accountId,
+      transaction,
+    );
+  }
   const removals = page.removed.map(({ transaction_id: transactionId }) =>
     database
       .prepare(
-        `DELETE FROM plaid_transactions
+        `UPDATE plaid_transactions
+         SET source_status = 'removed', updated_at = ?
          WHERE plaid_transaction_id = ? AND plaid_item_record_id = ?`,
       )
-      .bind(transactionId, itemId),
+      .bind(new Date().toISOString(), transactionId, itemId),
   );
-  await runStatements(database, [...updates, ...removals]);
+  await runStatements(database, removals);
 }
 
-function accountStatement(
+async function upsertAccount(
   database: D1Database,
   organizationId: string,
   itemId: string,
   account: PlaidAccount,
 ) {
-  return database
+  const existing = await database
+    .prepare(
+      `SELECT id FROM plaid_accounts
+       WHERE plaid_item_record_id = ? AND plaid_account_id = ?`,
+    )
+    .bind(itemId, account.account_id)
+    .first<{ id: string }>();
+  const candidates = existing
+    ? []
+    : await disconnectedAccountCandidates(
+        database,
+        organizationId,
+        itemId,
+        account,
+      );
+  const id =
+    existing?.id ??
+    (candidates.length === 1 ? candidates[0]?.id : undefined) ??
+    crypto.randomUUID();
+  await database
     .prepare(
       `INSERT INTO plaid_accounts
        (id, plaid_account_id, organization_id, plaid_item_record_id, name,
@@ -135,6 +166,8 @@ function accountStatement(
         currency_code, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
+         plaid_account_id = excluded.plaid_account_id,
+         plaid_item_record_id = excluded.plaid_item_record_id,
          name = excluded.name, official_name = excluded.official_name,
          mask = excluded.mask, type = excluded.type,
          subtype = excluded.subtype,
@@ -144,7 +177,7 @@ function accountStatement(
          updated_at = excluded.updated_at`,
     )
     .bind(
-      accountRecordId(itemId, account.account_id),
+      id,
       account.account_id,
       organizationId,
       itemId,
@@ -157,25 +190,86 @@ function accountStatement(
       account.balances.available,
       currency(account),
       new Date().toISOString(),
-    );
+    )
+    .run();
+  return id;
 }
 
-function transactionStatement(
+async function disconnectedAccountCandidates(
   database: D1Database,
   organizationId: string,
   itemId: string,
+  account: PlaidAccount,
+) {
+  const result = await database
+    .prepare(
+      `SELECT account.id
+       FROM plaid_accounts AS account
+       JOIN plaid_items AS archived_item
+         ON archived_item.id = account.plaid_item_record_id
+       JOIN plaid_items AS current_item ON current_item.id = ?
+       WHERE account.organization_id = ?
+         AND archived_item.status = 'disconnected'
+         AND COALESCE(archived_item.institution_id, '') =
+             COALESCE(current_item.institution_id, '')
+         AND COALESCE(archived_item.institution_name, '') =
+             COALESCE(current_item.institution_name, '')
+         AND COALESCE(account.mask, '') = COALESCE(?, '')
+         AND account.type = ?
+         AND COALESCE(account.subtype, '') = COALESCE(?, '')
+       LIMIT 2`,
+    )
+    .bind(itemId, organizationId, account.mask, account.type, account.subtype)
+    .all<{ id: string }>();
+  return result.results;
+}
+
+async function upsertTransaction(
+  database: D1Database,
+  organizationId: string,
+  itemId: string,
+  accountId: string,
   transaction: PlaidTransaction,
 ) {
-  return database
+  const existing = await findSourceTransaction(
+    database,
+    itemId,
+    transaction.transaction_id,
+  );
+  const pending =
+    !existing && transaction.pending_transaction_id
+      ? await findSourceTransaction(
+          database,
+          itemId,
+          transaction.pending_transaction_id,
+        )
+      : null;
+  const candidates =
+    existing || pending
+      ? []
+      : await disconnectedTransactionCandidates(
+          database,
+          organizationId,
+          accountId,
+          transaction,
+        );
+  const id =
+    existing?.id ??
+    pending?.id ??
+    (candidates.length === 1 ? candidates[0]?.id : undefined) ??
+    crypto.randomUUID();
+  await database
     .prepare(
       `INSERT INTO plaid_transactions
        (id, plaid_transaction_id, organization_id, plaid_item_record_id,
         account_record_id, name, merchant_name, amount, currency_code,
         transaction_date,
         authorized_date, category_primary, category_detailed, payment_channel,
-        pending, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        pending, pending_transaction_id, source_status, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
        ON CONFLICT(id) DO UPDATE SET
+         plaid_transaction_id = excluded.plaid_transaction_id,
+         plaid_item_record_id = excluded.plaid_item_record_id,
          account_record_id = excluded.account_record_id, name = excluded.name,
          merchant_name = excluded.merchant_name, amount = excluded.amount,
          currency_code = excluded.currency_code,
@@ -184,14 +278,16 @@ function transactionStatement(
          category_primary = excluded.category_primary,
          category_detailed = excluded.category_detailed,
          payment_channel = excluded.payment_channel,
-         pending = excluded.pending, updated_at = excluded.updated_at`,
+         pending = excluded.pending,
+         pending_transaction_id = excluded.pending_transaction_id,
+         source_status = 'active', updated_at = excluded.updated_at`,
     )
     .bind(
-      transactionRecordId(itemId, transaction.transaction_id),
+      id,
       transaction.transaction_id,
       organizationId,
       itemId,
-      accountRecordId(itemId, transaction.account_id),
+      accountId,
       transaction.name,
       transaction.merchant_name,
       transaction.amount,
@@ -202,8 +298,62 @@ function transactionStatement(
       transaction.personal_finance_category?.detailed ?? null,
       transaction.payment_channel,
       transaction.pending ? 1 : 0,
+      transaction.pending_transaction_id,
       new Date().toISOString(),
-    );
+    )
+    .run();
+}
+
+function findSourceTransaction(
+  database: D1Database,
+  itemId: string,
+  plaidTransactionId: string,
+) {
+  return database
+    .prepare(
+      `SELECT id FROM plaid_transactions
+       WHERE plaid_item_record_id = ? AND plaid_transaction_id = ?`,
+    )
+    .bind(itemId, plaidTransactionId)
+    .first<{ id: string }>();
+}
+
+async function disconnectedTransactionCandidates(
+  database: D1Database,
+  organizationId: string,
+  accountId: string,
+  transaction: PlaidTransaction,
+) {
+  const result = await database
+    .prepare(
+      `SELECT txn.id
+       FROM plaid_transactions AS txn
+       JOIN plaid_items AS item ON item.id = txn.plaid_item_record_id
+       WHERE txn.organization_id = ? AND txn.account_record_id = ?
+         AND item.status = 'disconnected'
+         AND txn.source_status = 'active'
+         AND txn.transaction_date = ?
+         AND COALESCE(txn.authorized_date, '') = COALESCE(?, '')
+         AND txn.amount = ?
+         AND COALESCE(txn.currency_code, '') = COALESCE(?, '')
+         AND txn.name = ?
+         AND COALESCE(txn.merchant_name, '') = COALESCE(?, '')
+         AND txn.pending = ?
+       LIMIT 2`,
+    )
+    .bind(
+      organizationId,
+      accountId,
+      transaction.date,
+      transaction.authorized_date,
+      transaction.amount,
+      transaction.iso_currency_code ?? transaction.unofficial_currency_code,
+      transaction.name,
+      transaction.merchant_name,
+      transaction.pending ? 1 : 0,
+    )
+    .all<{ id: string }>();
+  return result.results;
 }
 
 async function runStatements(
@@ -275,12 +425,4 @@ function currency(account: PlaidAccount) {
     account.balances.iso_currency_code ??
     account.balances.unofficial_currency_code
   );
-}
-
-function accountRecordId(itemId: string, accountId: string) {
-  return `${itemId}:${accountId}`;
-}
-
-function transactionRecordId(itemId: string, transactionId: string) {
-  return `${itemId}:${transactionId}`;
 }

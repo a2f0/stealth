@@ -28,6 +28,7 @@ export interface FinanceTransaction {
   accountId: string;
   accountName: string;
   amount: number;
+  annotation: FinanceTransactionAnnotation;
   authorizedDate: string | null;
   categoryDetailed: string | null;
   categoryPrimary: string | null;
@@ -38,6 +39,20 @@ export interface FinanceTransaction {
   paymentChannel: string | null;
   pending: boolean;
   transactionDate: string;
+}
+
+export interface FinanceTransactionAnnotation {
+  categoryOverride: string | null;
+  labels: string[];
+  note: string;
+  reviewed: boolean;
+}
+
+export interface FinanceTransactionAnnotationInput {
+  categoryOverride: string | null;
+  labels: string[];
+  note: string;
+  reviewed: boolean;
 }
 
 export interface FinanceData {
@@ -84,6 +99,24 @@ export async function disconnectFinanceConnection(id: string) {
     { credentials: "include", method: "DELETE" },
   );
   if (!response.ok) throw await parseError(response);
+}
+
+export async function deleteFinanceConnectionData(id: string) {
+  const response = await fetch(
+    `${apiUrl}/api/finance/connections/${encodeURIComponent(id)}/data`,
+    { credentials: "include", method: "DELETE" },
+  );
+  if (!response.ok) throw await parseError(response);
+}
+
+export function updateFinanceTransactionAnnotation(
+  id: string,
+  input: FinanceTransactionAnnotationInput,
+) {
+  return request<{ annotation: FinanceTransactionAnnotation }>(
+    `/transactions/${encodeURIComponent(id)}/annotation`,
+    { body: JSON.stringify(input), method: "PATCH" },
+  );
 }
 
 async function request<T>(path: string, init?: RequestInit) {
