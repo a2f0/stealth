@@ -154,6 +154,84 @@ describe("password authentication", () => {
     expect(newPassword.status).toBe(200);
   });
 
+  it("keeps multiple browser accounts signed in and switches between them", async () => {
+    const fixture = await createFixture();
+    const secondEmail = "second@example.com";
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+    });
+    await post(fixture.auth, "/sign-up/email", {
+      email: secondEmail,
+      name: "Second Person",
+      password: originalPassword,
+    });
+
+    const cookies = new CookieJar();
+    cookies.absorb(
+      await post(
+        fixture.auth,
+        "/sign-in/email",
+        { email, password: originalPassword },
+        cookies.header(),
+      ),
+    );
+    cookies.absorb(
+      await post(
+        fixture.auth,
+        "/sign-in/email",
+        { email: secondEmail, password: originalPassword },
+        cookies.header(),
+      ),
+    );
+
+    const listing = await get(
+      fixture.auth,
+      "/multi-session/list-device-sessions",
+      cookies.header(),
+    );
+    expect(listing.status).toBe(200);
+    const sessions = (await listing.json()) as DeviceSession[];
+    expect(sessions.map(({ user }) => user.email).sort()).toEqual([
+      email,
+      secondEmail,
+    ]);
+    expect(await activeEmail(fixture.auth, cookies)).toBe(secondEmail);
+
+    const firstSession = sessions.find(
+      (session) => session.user.email === email,
+    );
+    expect(firstSession).toBeTruthy();
+    const switched = await post(
+      fixture.auth,
+      "/multi-session/set-active",
+      { sessionToken: firstSession?.session.token },
+      cookies.header(),
+    );
+    expect(switched.status).toBe(200);
+    cookies.absorb(switched);
+    expect(await activeEmail(fixture.auth, cookies)).toBe(email);
+
+    const revoked = await post(
+      fixture.auth,
+      "/multi-session/revoke",
+      { sessionToken: firstSession?.session.token },
+      cookies.header(),
+    );
+    expect(revoked.status).toBe(200);
+    cookies.absorb(revoked);
+    expect(await activeEmail(fixture.auth, cookies)).toBe(secondEmail);
+    const remaining = await get(
+      fixture.auth,
+      "/multi-session/list-device-sessions",
+      cookies.header(),
+    );
+    expect(await remaining.json()).toMatchObject([
+      { user: { email: secondEmail } },
+    ]);
+  });
+
   it("only lets admins list users", async () => {
     const fixture = await createFixture();
     const signUp = await post(fixture.auth, "/sign-up/email", {
@@ -456,4 +534,43 @@ function get(
       headers: { cookie: cookie ?? "", origin },
     }),
   );
+}
+
+interface DeviceSession {
+  session: { token: string };
+  user: { email: string };
+}
+
+class CookieJar {
+  readonly #cookies = new Map<string, string>();
+
+  absorb(response: Response) {
+    for (const header of response.headers.getSetCookie()) {
+      const pair = header.split(";", 1)[0] ?? "";
+      const separator = pair.indexOf("=");
+      if (separator < 1) continue;
+      const name = pair.slice(0, separator);
+      const value = pair.slice(separator + 1);
+      if (!value || /max-age=0/i.test(header)) {
+        this.#cookies.delete(name);
+      } else {
+        this.#cookies.set(name, value);
+      }
+    }
+  }
+
+  header() {
+    return [...this.#cookies]
+      .map(([name, value]) => `${name}=${value}`)
+      .join("; ");
+  }
+}
+
+async function activeEmail(
+  auth: ReturnType<typeof createAuth>,
+  cookies: CookieJar,
+) {
+  const response = await get(auth, "/get-session", cookies.header());
+  const session = (await response.json()) as { user: { email: string } };
+  return session.user.email;
 }

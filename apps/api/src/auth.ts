@@ -4,7 +4,7 @@ import {
   type Session,
   type User,
 } from "better-auth";
-import { admin, organization } from "better-auth/plugins";
+import { admin, multiSession, organization } from "better-auth/plugins";
 import type { Bindings } from "./types";
 
 type WaitUntil = (promise: Promise<unknown>) => void;
@@ -80,6 +80,7 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
     },
     plugins: [
       admin({ adminRoles: ["admin"], defaultRole: "user" }),
+      multiSession({ maximumSessions: 5 }),
       configuredOrganizationPlugin(env, waitUntil),
     ],
     rateLimit: {

@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
 import { AuthPage } from "./AuthPage";
+import { useAccountSessions } from "./accountSessions";
 import { authClient } from "./authClient";
 import { Finance } from "./Finance";
 import { Inbox } from "./Inbox";
@@ -12,15 +13,22 @@ import {
   resolveActiveOrganizationId,
   type WorkspaceOrganization,
 } from "./organizationState";
-import { hasRole, WorkspaceShell } from "./WorkspaceShell";
+import { hasRole, WorkspaceShell, type WorkspaceUser } from "./WorkspaceShell";
 
 export function App() {
   const { data: session, error, isPending, refetch } = authClient.useSession();
   const [pathname, setPathname] = useState(window.location.pathname);
-  const requiresAdmin = ["/admin", "/inbox"].includes(pathname);
+  const isAddAccountPage = pathname === "/add-account";
   const isResetPage = pathname === "/reset-password";
   const verification = verificationFeedback();
   const workspace = useWorkspaceOrganizations(session, () => refetch());
+  const accounts = useAccountSessions(session, () => refetch());
+
+  const navigate = (nextPathname: string) => {
+    if (nextPathname === pathname) return;
+    window.history.pushState({}, "", nextPathname);
+    setPathname(nextPathname);
+  };
 
   useEffect(() => {
     const updatePathname = () => setPathname(window.location.pathname);
@@ -39,84 +47,146 @@ export function App() {
   }
 
   if (error && !isResetPage) {
-    return (
-      <div className="fatalState">
-        <p>We couldn’t load your session.</p>
-        <button onClick={() => void refetch()} type="button">
-          Try again
-        </button>
-      </div>
-    );
+    return <SessionError onRetry={() => void refetch()} />;
   }
 
-  if (isResetPage || !session) {
+  if (isAddAccountPage || isResetPage || !session) {
     return (
-      <AuthPage
-        initialError={verification.error}
-        initialMode={isResetPage ? "reset" : "sign-in"}
-        initialNotice={
-          pathname === "/invite"
-            ? "Sign in or create an account with the invited email address to continue."
-            : verification.notice
-        }
-        onAuthenticated={() => refetch()}
+      <AuthenticationRoute
+        addingAccount={isAddAccountPage}
+        navigate={navigate}
+        pathname={pathname}
+        refetchSession={() => refetch()}
+        resettingPassword={isResetPage}
+        sessionPresent={Boolean(session)}
+        verification={verification}
       />
     );
   }
 
-  const onSignOut = async () => {
-    const result = await authClient.signOut();
-    if (result.error) {
-      throw new Error(result.error.message ?? "Could not sign out.");
-    }
-    await refetch();
-  };
+  return (
+    <AuthenticatedWorkspace
+      accounts={accounts}
+      navigate={navigate}
+      pathname={pathname}
+      session={session}
+      verificationNotice={verification.notice}
+      workspace={workspace}
+    />
+  );
+}
 
-  const navigate = (nextPathname: string) => {
-    if (nextPathname === pathname) return;
-    window.history.pushState({}, "", nextPathname);
-    setPathname(nextPathname);
-  };
-  if (requiresAdmin && !hasRole(session.user.role, "admin")) {
+function AuthenticationRoute({
+  addingAccount,
+  navigate,
+  pathname,
+  refetchSession,
+  resettingPassword,
+  sessionPresent,
+  verification,
+}: {
+  addingAccount: boolean;
+  navigate: (pathname: string) => void;
+  pathname: string;
+  refetchSession: () => Promise<unknown>;
+  resettingPassword: boolean;
+  sessionPresent: boolean;
+  verification: ReturnType<typeof verificationFeedback>;
+}) {
+  const invitationNotice =
+    pathname === "/invite"
+      ? "Sign in or create an account with the invited email address to continue."
+      : verification.notice;
+  return (
+    <AuthPage
+      initialError={verification.error}
+      initialMode={resettingPassword ? "reset" : "sign-in"}
+      initialNotice={
+        addingAccount
+          ? "Sign in to keep another account available on this browser."
+          : invitationNotice
+      }
+      onAuthenticated={async () => {
+        await refetchSession();
+        if (addingAccount) navigate("/");
+      }}
+      onCancel={
+        sessionPresent && addingAccount ? () => navigate("/") : undefined
+      }
+      variant={addingAccount ? "add-account" : "default"}
+    />
+  );
+}
+
+interface AuthenticatedSession extends OrganizationSession {
+  session: OrganizationSession["session"] & { token: string };
+  user: WorkspaceUser & { id: string };
+}
+
+function AuthenticatedWorkspace({
+  accounts,
+  navigate,
+  pathname,
+  session,
+  verificationNotice,
+  workspace,
+}: {
+  accounts: ReturnType<typeof useAccountSessions>;
+  navigate: (pathname: string) => void;
+  pathname: string;
+  session: AuthenticatedSession;
+  verificationNotice: string | undefined;
+  workspace: ReturnType<typeof useWorkspaceOrganizations>;
+}) {
+  if (
+    ["/admin", "/inbox"].includes(pathname) &&
+    !hasRole(session.user.role, "admin")
+  ) {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
-
   const library = (
     <Library
-      initialNotice={verification.notice}
-      onResendVerification={async () => {
-        const result = await authClient.sendVerificationEmail({
-          callbackURL: `${window.location.origin}/?verified=true`,
-          email: session.user.email,
-        });
-        if (result.error) {
-          throw new Error(
-            result.error.message ?? "Could not send verification email.",
-          );
-        }
-      }}
+      initialNotice={verificationNotice}
+      onResendVerification={() => resendVerification(session.user.email)}
       user={session.user}
     />
   );
-
+  const contentKey =
+    pathname === "/invite"
+      ? "organization-invitation"
+      : `${session.user.id}:${workspace.activeOrganizationId ?? ""}`;
   return (
     <WorkspaceShell
+      accountLoadError={accounts.loadError}
+      accounts={accounts.accounts}
       activePage={activePageFor(pathname)}
       activeOrganizationId={workspace.activeOrganizationId}
-      contentKey={
-        pathname === "/invite"
-          ? "organization-invitation"
-          : workspace.activeOrganizationId
-      }
+      activeSessionToken={session.session.token}
+      contentKey={contentKey}
+      onAccountChange={accounts.switchAccount}
+      onAddAccount={() => navigate("/add-account")}
       onNavigate={navigate}
       onOrganizationChange={workspace.switchOrganization}
-      onSignOut={onSignOut}
+      onRefreshAccounts={accounts.refresh}
+      onSignOut={accounts.signOutActiveAccount}
       organizations={workspace.organizations}
       user={session.user}
     >
       {contentForPath(pathname, library, navigate, workspace.refresh)}
     </WorkspaceShell>
   );
+}
+
+async function resendVerification(email: string) {
+  const result = await authClient.sendVerificationEmail({
+    callbackURL: `${window.location.origin}/?verified=true`,
+    email,
+  });
+  if (result.error) {
+    throw new Error(
+      result.error.message ?? "Could not send verification email.",
+    );
+  }
 }
 
 interface OrganizationSession {
@@ -212,6 +282,17 @@ function AdminAccessDenied({ onNavigate }: { onNavigate: () => void }) {
       <p>Administrator access is required.</p>
       <button onClick={onNavigate} type="button">
         Return to your library
+      </button>
+    </div>
+  );
+}
+
+function SessionError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="fatalState">
+      <p>We couldn’t load your session.</p>
+      <button onClick={onRetry} type="button">
+        Try again
       </button>
     </div>
   );
