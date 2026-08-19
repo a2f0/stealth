@@ -1,5 +1,6 @@
 import {
   type Dispatch,
+  type FormEvent,
   type SetStateAction,
   useCallback,
   useEffect,
@@ -8,14 +9,17 @@ import {
 } from "react";
 import {
   createPlaidLinkToken,
+  deleteFinanceConnectionData,
   disconnectFinanceConnection,
   exchangePlaidPublicToken,
   type FinanceAccount,
   type FinanceConnection,
   type FinanceData,
   type FinanceTransaction,
+  type FinanceTransactionAnnotationInput,
   getFinanceData,
   syncFinanceConnection,
+  updateFinanceTransactionAnnotation,
 } from "./financeApi";
 import { filterTransactionsByAccount } from "./financeTransactions";
 
@@ -35,36 +39,8 @@ export function Finance() {
   }, []);
   useEffect(() => void load(), [load]);
   const plaid = usePlaidConnect(load, setError, setNotice);
+  const actions = financeActions(load, setWorking, setError, setNotice);
   const busy = working || plaid.busy;
-
-  async function sync(id: string) {
-    setWorking(true);
-    setError(undefined);
-    try {
-      setNotice(syncNotice(await syncFinanceConnection(id)));
-      await load();
-    } catch (cause) {
-      setError(messageFrom(cause));
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function disconnect(connection: FinanceConnection) {
-    const name = connection.institutionName ?? "this institution";
-    if (!window.confirm(`Disconnect ${name}?`)) return;
-    setWorking(true);
-    setError(undefined);
-    try {
-      await disconnectFinanceConnection(connection.id);
-      setNotice("Bank connection removed.");
-      await load();
-    } catch (cause) {
-      setError(messageFrom(cause));
-    } finally {
-      setWorking(false);
-    }
-  }
 
   return (
     <FinanceView
@@ -73,10 +49,70 @@ export function Finance() {
       error={error}
       notice={notice}
       onConnect={plaid.connect}
-      onDisconnect={disconnect}
-      onSync={sync}
+      onDeleteData={actions.deleteData}
+      onDisconnect={actions.disconnect}
+      onAnnotate={actions.annotate}
+      onSync={actions.sync}
     />
   );
+}
+
+function financeActions(
+  load: () => Promise<void>,
+  setWorking: Dispatch<SetStateAction<boolean>>,
+  setError: Dispatch<SetStateAction<string | undefined>>,
+  setNotice: Dispatch<SetStateAction<string | undefined>>,
+) {
+  async function run(action: () => Promise<string>) {
+    setWorking(true);
+    setError(undefined);
+    try {
+      setNotice(await action());
+      await load();
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setWorking(false);
+    }
+  }
+  return {
+    annotate: (
+      transaction: FinanceTransaction,
+      input: FinanceTransactionAnnotationInput,
+    ) =>
+      run(async () => {
+        await updateFinanceTransactionAnnotation(transaction.id, input);
+        return "Transaction annotation saved.";
+      }),
+    deleteData: async (connection: FinanceConnection) => {
+      const name = connection.institutionName ?? "this institution";
+      if (
+        window.confirm(
+          `Permanently delete all imported data for ${name}? This also deletes its transaction annotations and cannot be undone.`,
+        )
+      ) {
+        await run(async () => {
+          await deleteFinanceConnectionData(connection.id);
+          return "Imported bank data permanently deleted.";
+        });
+      }
+    },
+    disconnect: async (connection: FinanceConnection) => {
+      const name = connection.institutionName ?? "this institution";
+      if (
+        window.confirm(
+          `Disconnect ${name}? Plaid access will be revoked, but imported transactions and annotations will remain.`,
+        )
+      ) {
+        await run(async () => {
+          await disconnectFinanceConnection(connection.id);
+          return "Bank disconnected. Imported history was retained.";
+        });
+      }
+    },
+    sync: (id: string) =>
+      run(async () => syncNotice(await syncFinanceConnection(id))),
+  };
 }
 
 function FinanceView({
@@ -85,7 +121,9 @@ function FinanceView({
   error,
   notice,
   onConnect,
+  onDeleteData,
   onDisconnect,
+  onAnnotate,
   onSync,
 }: {
   busy: boolean;
@@ -93,10 +131,16 @@ function FinanceView({
   error: string | undefined;
   notice: string | undefined;
   onConnect: () => Promise<void>;
+  onDeleteData: (connection: FinanceConnection) => Promise<void>;
   onDisconnect: (connection: FinanceConnection) => Promise<void>;
+  onAnnotate: (
+    transaction: FinanceTransaction,
+    input: FinanceTransactionAnnotationInput,
+  ) => Promise<void>;
   onSync: (id: string) => Promise<void>;
 }) {
   const [selectedAccountId, setSelectedAccountId] = useState<string>();
+  const [selectedTransactionId, setSelectedTransactionId] = useState<string>();
   const selectedAccount = data?.accounts.find(
     (account) => account.id === selectedAccountId,
   );
@@ -128,6 +172,8 @@ function FinanceView({
         <Connections
           busy={busy}
           connections={data?.connections}
+          onConnect={onConnect}
+          onDeleteData={onDeleteData}
           onDisconnect={onDisconnect}
           onSync={onSync}
         />
@@ -142,7 +188,15 @@ function FinanceView({
         />
         <TransactionHistory
           accountName={selectedAccount?.name}
+          busy={busy}
+          onAnnotate={onAnnotate}
           onClearFilter={() => setSelectedAccountId(undefined)}
+          onSelectAnnotation={(transactionId) =>
+            setSelectedTransactionId((current) =>
+              current === transactionId ? undefined : transactionId,
+            )
+          }
+          selectedTransactionId={selectedTransactionId}
           transactions={transactions}
         />
       </section>
@@ -226,11 +280,15 @@ function useOAuthResume(
 function Connections({
   busy,
   connections,
+  onConnect,
+  onDeleteData,
   onDisconnect,
   onSync,
 }: {
   busy: boolean;
   connections: FinanceConnection[] | undefined;
+  onConnect: () => Promise<void>;
+  onDeleteData: (connection: FinanceConnection) => Promise<void>;
   onDisconnect: (connection: FinanceConnection) => Promise<void>;
   onSync: (id: string) => Promise<void>;
 }) {
@@ -257,20 +315,42 @@ function Connections({
               {connection.status}
             </span>
             <div className="financeConnectionActions">
-              <button
-                disabled={busy}
-                onClick={() => void onSync(connection.id)}
-                type="button"
-              >
-                Sync now
-              </button>
-              <button
-                disabled={busy}
-                onClick={() => void onDisconnect(connection)}
-                type="button"
-              >
-                Disconnect
-              </button>
+              {connection.status === "disconnected" ? (
+                <>
+                  <button
+                    disabled={busy}
+                    onClick={() => void onConnect()}
+                    type="button"
+                  >
+                    Reconnect
+                  </button>
+                  <button
+                    className="danger"
+                    disabled={busy}
+                    onClick={() => void onDeleteData(connection)}
+                    type="button"
+                  >
+                    Delete data
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    disabled={busy}
+                    onClick={() => void onSync(connection.id)}
+                    type="button"
+                  >
+                    Sync now
+                  </button>
+                  <button
+                    disabled={busy}
+                    onClick={() => void onDisconnect(connection)}
+                    type="button"
+                  >
+                    Disconnect
+                  </button>
+                </>
+              )}
             </div>
           </article>
         ))}
@@ -324,13 +404,27 @@ function AccountGrid({
 
 function TransactionHistory({
   accountName,
+  busy,
+  onAnnotate,
   onClearFilter,
+  onSelectAnnotation,
+  selectedTransactionId,
   transactions,
 }: {
   accountName: string | undefined;
+  busy: boolean;
+  onAnnotate: (
+    transaction: FinanceTransaction,
+    input: FinanceTransactionAnnotationInput,
+  ) => Promise<void>;
   onClearFilter: () => void;
+  onSelectAnnotation: (transactionId: string) => void;
+  selectedTransactionId: string | undefined;
   transactions: FinanceTransaction[] | undefined;
 }) {
+  const selectedTransaction = transactions?.find(
+    (transaction) => transaction.id === selectedTransactionId,
+  );
   return (
     <section className="financeTransactions">
       <div className="sectionHeading">
@@ -347,6 +441,15 @@ function TransactionHistory({
           )}
         </div>
       </div>
+      {selectedTransaction && (
+        <TransactionAnnotationForm
+          busy={busy}
+          key={selectedTransaction.id}
+          onClose={() => onSelectAnnotation(selectedTransaction.id)}
+          onSave={(input) => onAnnotate(selectedTransaction, input)}
+          transaction={selectedTransaction}
+        />
+      )}
       {transactions?.length ? (
         <div className="financeTransactionTable">
           {transactions.map((transaction) => (
@@ -356,9 +459,20 @@ function TransactionHistory({
               </time>
               <div>
                 <strong>{transaction.merchantName ?? transaction.name}</strong>
-                <small>
-                  {transaction.accountName} · {category(transaction)}
-                </small>
+                <div className="financeTransactionMeta">
+                  <small>
+                    {transaction.accountName} · {category(transaction)}
+                    {transaction.annotation.reviewed ? " · reviewed" : ""}
+                  </small>
+                  <button
+                    aria-expanded={selectedTransactionId === transaction.id}
+                    className="financeAnnotationTrigger"
+                    onClick={() => onSelectAnnotation(transaction.id)}
+                    type="button"
+                  >
+                    {hasAnnotation(transaction) ? "Edit note" : "Annotate"}
+                  </button>
+                </div>
               </div>
               {transaction.pending && <span>Pending</span>}
               <b className={transaction.amount < 0 ? "credit" : "debit"}>
@@ -385,6 +499,109 @@ function TransactionHistory({
         <p className="auditLoading">Loading finances…</p>
       )}
     </section>
+  );
+}
+
+function TransactionAnnotationForm({
+  busy,
+  onClose,
+  onSave,
+  transaction,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onSave: (input: FinanceTransactionAnnotationInput) => Promise<void>;
+  transaction: FinanceTransaction;
+}) {
+  const [categoryOverride, setCategoryOverride] = useState(
+    transaction.annotation.categoryOverride ?? "",
+  );
+  const [labels, setLabels] = useState(
+    transaction.annotation.labels.join(", "),
+  );
+  const [note, setNote] = useState(transaction.annotation.note);
+  const [reviewed, setReviewed] = useState(transaction.annotation.reviewed);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      await onSave({
+        categoryOverride: categoryOverride.trim() || null,
+        labels: labels
+          .split(",")
+          .map((label) => label.trim())
+          .filter(Boolean),
+        note,
+        reviewed,
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form
+      className="financeAnnotationForm"
+      onSubmit={(event) => void submit(event)}
+    >
+      <div className="financeAnnotationHeading">
+        <div>
+          <span>Transaction annotation</span>
+          <strong>{transaction.merchantName ?? transaction.name}</strong>
+        </div>
+        <button onClick={onClose} type="button">
+          Close
+        </button>
+      </div>
+      <div className="financeAnnotationFields">
+        <label>
+          Category override
+          <input
+            maxLength={100}
+            onChange={(event) => setCategoryOverride(event.target.value)}
+            placeholder={transaction.categoryPrimary ?? "Uncategorized"}
+            value={categoryOverride}
+          />
+        </label>
+        <label>
+          Labels
+          <input
+            onChange={(event) => setLabels(event.target.value)}
+            placeholder="tax, travel, follow up"
+            value={labels}
+          />
+        </label>
+      </div>
+      <label>
+        Note
+        <textarea
+          maxLength={2000}
+          onChange={(event) => setNote(event.target.value)}
+          placeholder="Add context to this transaction…"
+          rows={3}
+          value={note}
+        />
+      </label>
+      <div className="financeAnnotationFooter">
+        <label className="financeReviewedField">
+          <input
+            checked={reviewed}
+            onChange={(event) => setReviewed(event.target.checked)}
+            type="checkbox"
+          />
+          Reviewed
+        </label>
+        <button
+          className="primaryButton"
+          disabled={busy || saving}
+          type="submit"
+        >
+          {saving ? "Saving…" : "Save annotation"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -451,9 +668,23 @@ function syncTime(connection: FinanceConnection) {
 }
 
 function category(transaction: FinanceTransaction) {
-  return (transaction.categoryPrimary ?? "Uncategorized")
+  return (
+    transaction.annotation.categoryOverride ??
+    transaction.categoryPrimary ??
+    "Uncategorized"
+  )
     .toLowerCase()
     .replaceAll("_", " ");
+}
+
+function hasAnnotation(transaction: FinanceTransaction) {
+  const annotation = transaction.annotation;
+  return Boolean(
+    annotation.note ||
+      annotation.categoryOverride ||
+      annotation.labels.length ||
+      annotation.reviewed,
+  );
 }
 
 function formatDate(value: string) {

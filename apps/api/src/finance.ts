@@ -33,6 +33,10 @@ interface TransactionRow {
   account_id: string;
   account_name: string;
   amount: number;
+  annotation_category_override: string | null;
+  annotation_labels: string | null;
+  annotation_note: string | null;
+  annotation_reviewed: number | null;
   authorized_date: string | null;
   category_detailed: string | null;
   category_primary: string | null;
@@ -62,6 +66,20 @@ interface FinanceInput {
   [key: string]: unknown;
 }
 
+interface AnnotationInput {
+  categoryOverride?: unknown;
+  labels?: unknown;
+  note?: unknown;
+  reviewed?: unknown;
+}
+
+interface Annotation {
+  categoryOverride: string | null;
+  labels: string[];
+  note: string;
+  reviewed: boolean;
+}
+
 interface LinkTokenRequest extends Record<string, unknown> {
   redirect_uri?: string;
 }
@@ -88,6 +106,8 @@ export function createFinanceRouter(requestPlaid: PlaidRequest = plaidRequest) {
   finance.delete("/connections/:id", async (context) =>
     disconnectConnection(context, requestPlaid),
   );
+  finance.delete("/connections/:id/data", deleteConnectionData);
+  finance.patch("/transactions/:id/annotation", updateTransactionAnnotation);
   finance.onError((error, context) => {
     if (error instanceof PlaidApiError) {
       const status = error.status === 503 ? 503 : 502;
@@ -222,20 +242,111 @@ async function disconnectConnection(
   await requestPlaid(context.env, "/item/remove", {
     access_token: accessToken,
   });
+  const now = new Date().toISOString();
+  await context.env.DB.prepare(
+    `UPDATE plaid_items
+       SET access_token_ciphertext = '', access_token_iv = '', cursor = NULL,
+           status = 'disconnected', error_code = NULL, disconnected_at = ?,
+           updated_at = ?
+       WHERE id = ? AND organization_id = ?`,
+  )
+    .bind(now, now, item.id, organizationId)
+    .run();
+  return context.body(null, 204);
+}
+
+async function deleteConnectionData(context: FinanceContext) {
+  const connectionId = context.req.param("id");
+  if (!connectionId) {
+    return context.json({ error: "Connection not found." }, 404);
+  }
+  const organizationId = context.get("organizationId");
+  const connection = await context.env.DB.prepare(
+    `SELECT status FROM plaid_items WHERE id = ? AND organization_id = ?`,
+  )
+    .bind(connectionId, organizationId)
+    .first<{ status: string }>();
+  if (!connection) {
+    return context.json({ error: "Connection not found." }, 404);
+  }
+  if (connection.status !== "disconnected") {
+    return context.json(
+      { error: "Disconnect the bank before deleting its imported data." },
+      409,
+    );
+  }
   await context.env.DB.batch([
+    context.env.DB.prepare(
+      `DELETE FROM finance_transaction_annotations
+         WHERE organization_id = ? AND transaction_id IN (
+           SELECT id FROM plaid_transactions
+           WHERE plaid_item_record_id = ? AND organization_id = ?
+         )`,
+    ).bind(organizationId, connectionId, organizationId),
     context.env.DB.prepare(
       `DELETE FROM plaid_transactions
          WHERE plaid_item_record_id = ? AND organization_id = ?`,
-    ).bind(item.id, organizationId),
+    ).bind(connectionId, organizationId),
     context.env.DB.prepare(
       `DELETE FROM plaid_accounts
          WHERE plaid_item_record_id = ? AND organization_id = ?`,
-    ).bind(item.id, organizationId),
+    ).bind(connectionId, organizationId),
     context.env.DB.prepare(
       "DELETE FROM plaid_items WHERE id = ? AND organization_id = ?",
-    ).bind(item.id, organizationId),
+    ).bind(connectionId, organizationId),
   ]);
   return context.body(null, 204);
+}
+
+async function updateTransactionAnnotation(context: FinanceContext) {
+  const transactionId = context.req.param("id");
+  const input = await annotationInput(context);
+  if (!transactionId || !input) {
+    return context.json({ error: "A valid annotation is required." }, 400);
+  }
+  const annotation = normalizeAnnotation(input);
+  if (!annotation) {
+    return context.json({ error: "A valid annotation is required." }, 400);
+  }
+  const organizationId = context.get("organizationId");
+  const transaction = await context.env.DB.prepare(
+    `SELECT id FROM plaid_transactions
+       WHERE id = ? AND organization_id = ?`,
+  )
+    .bind(transactionId, organizationId)
+    .first<{ id: string }>();
+  if (!transaction) {
+    return context.json({ error: "Transaction not found." }, 404);
+  }
+  const now = new Date().toISOString();
+  const userId = context.get("authSession").user.id;
+  await context.env.DB.prepare(
+    `INSERT INTO finance_transaction_annotations
+       (transaction_id, organization_id, note, category_override, labels,
+        reviewed, created_by, updated_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(transaction_id) DO UPDATE SET
+         note = excluded.note,
+         category_override = excluded.category_override,
+         labels = excluded.labels,
+         reviewed = excluded.reviewed,
+         updated_by = excluded.updated_by,
+         updated_at = excluded.updated_at`,
+  )
+    .bind(
+      transactionId,
+      organizationId,
+      annotation.note,
+      annotation.categoryOverride,
+      JSON.stringify(annotation.labels),
+      annotation.reviewed ? 1 : 0,
+      userId,
+      userId,
+      now,
+      now,
+    )
+    .run();
+  return context.json({ annotation });
 }
 
 async function insertConnection(
@@ -309,11 +420,17 @@ async function listTransactions(database: D1Database, organizationId: string) {
               txn.transaction_date, txn.authorized_date,
               txn.category_primary, txn.category_detailed,
               txn.payment_channel, txn.pending,
-              account.id AS account_id, account.name AS account_name
+              account.id AS account_id, account.name AS account_name,
+              annotation.note AS annotation_note,
+              annotation.category_override AS annotation_category_override,
+              annotation.labels AS annotation_labels,
+              annotation.reviewed AS annotation_reviewed
        FROM plaid_transactions AS txn
        JOIN plaid_accounts AS account
          ON account.id = txn.account_record_id
-       WHERE txn.organization_id = ?
+       LEFT JOIN finance_transaction_annotations AS annotation
+         ON annotation.transaction_id = txn.id
+       WHERE txn.organization_id = ? AND txn.source_status = 'active'
        ORDER BY txn.transaction_date DESC, txn.id DESC
        LIMIT 250`,
     )
@@ -330,7 +447,8 @@ async function findItem(
   return database
     .prepare(
       `SELECT id, access_token_ciphertext, access_token_iv, cursor
-       FROM plaid_items WHERE id = ? AND organization_id = ?`,
+       FROM plaid_items
+       WHERE id = ? AND organization_id = ? AND status <> 'disconnected'`,
     )
     .bind(id, organizationId)
     .first<PlaidItemRow>();
@@ -379,6 +497,12 @@ function toTransaction(row: TransactionRow) {
     accountId: row.account_id,
     accountName: row.account_name,
     amount: row.amount,
+    annotation: {
+      categoryOverride: row.annotation_category_override,
+      labels: parseLabels(row.annotation_labels),
+      note: row.annotation_note ?? "",
+      reviewed: Boolean(row.annotation_reviewed),
+    },
     authorizedDate: row.authorized_date,
     categoryDetailed: row.category_detailed,
     categoryPrimary: row.category_primary,
@@ -412,6 +536,53 @@ function clientUserId(organizationId: string, userId: string) {
 async function financeInput(context: FinanceContext) {
   const input: unknown = await context.req.json().catch(() => null);
   return isRecord(input) ? input : null;
+}
+
+async function annotationInput(context: FinanceContext) {
+  const input: unknown = await context.req.json().catch(() => null);
+  return isRecord(input) ? (input as AnnotationInput) : null;
+}
+
+function normalizeAnnotation(input: AnnotationInput): Annotation | null {
+  if (
+    typeof input.note !== "string" ||
+    input.note.length > 2_000 ||
+    !(
+      input.categoryOverride === null ||
+      (typeof input.categoryOverride === "string" &&
+        input.categoryOverride.length <= 100)
+    ) ||
+    !Array.isArray(input.labels) ||
+    input.labels.length > 12 ||
+    input.labels.some(
+      (label) => typeof label !== "string" || label.trim().length > 50,
+    ) ||
+    typeof input.reviewed !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    categoryOverride: input.categoryOverride?.trim() || null,
+    labels: [
+      ...new Set(
+        input.labels.map((label) => (label as string).trim()).filter(Boolean),
+      ),
+    ],
+    note: input.note.trim(),
+    reviewed: input.reviewed,
+  };
+}
+
+function parseLabels(value: string | null) {
+  if (!value) return [];
+  try {
+    const labels: unknown = JSON.parse(value);
+    return Array.isArray(labels)
+      ? labels.filter((label): label is string => typeof label === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function isRecord(value: unknown): value is FinanceInput {

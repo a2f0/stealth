@@ -14,7 +14,7 @@ import type { Bindings } from "./types";
 const encryptionKey = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)));
 
 describe("finance", () => {
-  it("links and imports transactions without exposing the access token", async () => {
+  it("retains and reconciles imported history after a disconnect", async () => {
     const fixture = await createFixture();
     const linkToken = await jsonRequest(
       fixture.app,
@@ -51,7 +51,7 @@ describe("finance", () => {
     };
     expect(storedToken.organization_id).toBe("org_user-1");
     expect(storedToken.access_token_ciphertext).not.toContain(
-      "access-sandbox-test",
+      "access-sandbox-test-1",
     );
 
     const sync = await jsonRequest(
@@ -84,10 +84,34 @@ describe("finance", () => {
       {
         accountName: "Checking",
         amount: 42.75,
+        annotation: {
+          categoryOverride: null,
+          labels: [],
+          note: "",
+          reviewed: false,
+        },
         categoryPrimary: "FOOD_AND_DRINK",
         merchantName: "Test Cafe",
       },
     ]);
+    const accountId = listing.body.accounts[0]?.id;
+    const transactionId = listing.body.transactions[0]?.id;
+    expect(accountId).toBeString();
+    expect(transactionId).toBeString();
+
+    const annotated = await jsonRequest(
+      fixture.app,
+      fixture.bindings,
+      `/transactions/${transactionId}/annotation`,
+      "PATCH",
+      {
+        categoryOverride: "Client meal",
+        labels: ["reimbursable", "client"],
+        note: "Dinner after the site visit.",
+        reviewed: true,
+      },
+    );
+    expect(annotated.response.status).toBe(200);
 
     const otherOrganization = testApp("organization-2", fixture.requestPlaid);
     const hidden = await jsonRequest<FinanceListing>(
@@ -105,6 +129,26 @@ describe("finance", () => {
       "POST",
     );
     expect(cannotSync.response.status).toBe(404);
+    const cannotAnnotate = await jsonRequest(
+      otherOrganization,
+      fixture.bindings,
+      `/transactions/${transactionId}/annotation`,
+      "PATCH",
+      {
+        categoryOverride: null,
+        labels: [],
+        note: "Not mine",
+        reviewed: false,
+      },
+    );
+    expect(cannotAnnotate.response.status).toBe(404);
+
+    const cannotDeleteActive = await fixture.app.request(
+      financePath(`/connections/${exchange.body.connectionId}/data`),
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(cannotDeleteActive.status).toBe(409);
 
     const disconnected = await fixture.app.request(
       financePath(`/connections/${exchange.body.connectionId}`),
@@ -118,19 +162,184 @@ describe("finance", () => {
       "/",
       "GET",
     );
-    expect(afterDisconnect.body.connections).toEqual([]);
-    expect(afterDisconnect.body.transactions).toEqual([]);
+    expect(afterDisconnect.body.connections).toMatchObject([
+      { accountCount: 1, status: "disconnected" },
+    ]);
+    expect(afterDisconnect.body.accounts[0]?.id).toBe(accountId);
+    expect(afterDisconnect.body.transactions[0]).toMatchObject({
+      annotation: {
+        categoryOverride: "Client meal",
+        labels: ["reimbursable", "client"],
+        note: "Dinner after the site visit.",
+        reviewed: true,
+      },
+      id: transactionId,
+    });
+    const revoked = fixture.database
+      .query(
+        `SELECT access_token_ciphertext, access_token_iv, status
+         FROM plaid_items WHERE id = ?`,
+      )
+      .get(exchange.body.connectionId) as {
+      access_token_ciphertext: string;
+      access_token_iv: string;
+      status: string;
+    };
+    expect(revoked).toEqual({
+      access_token_ciphertext: "",
+      access_token_iv: "",
+      status: "disconnected",
+    });
+
+    const reconnected = await jsonRequest<{ connectionId: string }>(
+      fixture.app,
+      fixture.bindings,
+      "/exchange",
+      "POST",
+      {
+        institutionId: "ins_test",
+        institutionName: "First Test Bank",
+        publicToken: "public-sandbox-test",
+      },
+    );
+    expect(reconnected.response.status).toBe(201);
+    await jsonRequest(
+      fixture.app,
+      fixture.bindings,
+      `/connections/${reconnected.body.connectionId}/sync`,
+      "POST",
+    );
+    const afterReconnect = await jsonRequest<FinanceListing>(
+      fixture.app,
+      fixture.bindings,
+      "/",
+      "GET",
+    );
+    expect(afterReconnect.body.connections).toHaveLength(2);
+    expect(afterReconnect.body.accounts).toHaveLength(1);
+    expect(afterReconnect.body.accounts[0]?.id).toBe(accountId);
+    expect(afterReconnect.body.transactions).toHaveLength(1);
+    expect(afterReconnect.body.transactions[0]).toMatchObject({
+      annotation: {
+        categoryOverride: "Client meal",
+        labels: ["reimbursable", "client"],
+        note: "Dinner after the site visit.",
+        reviewed: true,
+      },
+      id: transactionId,
+    });
+
+    const deleteArchive = await fixture.app.request(
+      financePath(`/connections/${exchange.body.connectionId}/data`),
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(deleteArchive.status).toBe(204);
+    const disconnectCurrent = await fixture.app.request(
+      financePath(`/connections/${reconnected.body.connectionId}`),
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(disconnectCurrent.status).toBe(204);
+    const deleteCurrent = await fixture.app.request(
+      financePath(`/connections/${reconnected.body.connectionId}/data`),
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(deleteCurrent.status).toBe(204);
+    const afterDelete = await jsonRequest<FinanceListing>(
+      fixture.app,
+      fixture.bindings,
+      "/",
+      "GET",
+    );
+    expect(afterDelete.body.connections).toEqual([]);
+    expect(afterDelete.body.accounts).toEqual([]);
+    expect(afterDelete.body.transactions).toEqual([]);
+  });
+
+  it("preserves an annotation when a pending transaction posts", async () => {
+    const fixture = await createFixture({ pendingTransition: true });
+    const exchange = await jsonRequest<{ connectionId: string }>(
+      fixture.app,
+      fixture.bindings,
+      "/exchange",
+      "POST",
+      {
+        institutionId: "ins_test",
+        institutionName: "First Test Bank",
+        publicToken: "public-sandbox-test",
+      },
+    );
+    await jsonRequest(
+      fixture.app,
+      fixture.bindings,
+      `/connections/${exchange.body.connectionId}/sync`,
+      "POST",
+    );
+    const pending = await jsonRequest<FinanceListing>(
+      fixture.app,
+      fixture.bindings,
+      "/",
+      "GET",
+    );
+    const transactionId = pending.body.transactions[0]?.id;
+    expect(pending.body.transactions[0]?.pending).toBe(true);
+    await jsonRequest(
+      fixture.app,
+      fixture.bindings,
+      `/transactions/${transactionId}/annotation`,
+      "PATCH",
+      {
+        categoryOverride: null,
+        labels: ["watch"],
+        note: "Waiting for this charge to settle.",
+        reviewed: false,
+      },
+    );
+
+    const sync = await jsonRequest(
+      fixture.app,
+      fixture.bindings,
+      `/connections/${exchange.body.connectionId}/sync`,
+      "POST",
+    );
+    expect(sync.body).toEqual({ added: 1, modified: 0, removed: 1 });
+    const posted = await jsonRequest<FinanceListing>(
+      fixture.app,
+      fixture.bindings,
+      "/",
+      "GET",
+    );
+    expect(posted.body.transactions).toHaveLength(1);
+    expect(posted.body.transactions[0]).toMatchObject({
+      annotation: {
+        labels: ["watch"],
+        note: "Waiting for this charge to settle.",
+      },
+      id: transactionId,
+      pending: false,
+    });
   });
 });
 
 interface FinanceListing {
-  accounts: object[];
+  accounts: { id: string }[];
   configured: boolean;
-  connections: object[];
-  transactions: object[];
+  connections: { accountCount: number; status: string }[];
+  transactions: {
+    annotation: {
+      categoryOverride: string | null;
+      labels: string[];
+      note: string;
+      reviewed: boolean;
+    };
+    id: string;
+    pending: boolean;
+  }[];
 }
 
-async function createFixture() {
+async function createFixture(options?: { pendingTransition?: boolean }) {
   const database = new Database(":memory:");
   await applyMigration(database, "0003_create_auth.sql");
   database
@@ -151,7 +360,8 @@ async function createFixture() {
     );
   await applyMigration(database, "0004_create_organizations.sql");
   await applyMigration(database, "0007_create_finance.sql");
-  const requestPlaid = mockPlaid();
+  await applyMigration(database, "0009_retain_finance_history.sql");
+  const requestPlaid = mockPlaid(options);
   const bindings = bindingsFor(database);
   return {
     app: testApp("org_user-1", requestPlaid),
@@ -161,7 +371,9 @@ async function createFixture() {
   };
 }
 
-function mockPlaid(): PlaidRequest {
+function mockPlaid(options?: { pendingTransition?: boolean }): PlaidRequest {
+  let exchangeCount = 0;
+  let syncCount = 0;
   return async <T>(_env: Bindings, path: string, body: PlaidRequestBody) => {
     if (path === "/link/token/create") {
       expect(body.transactions).toEqual({ days_requested: 730 });
@@ -172,28 +384,34 @@ function mockPlaid(): PlaidRequest {
     }
     if (path === "/item/public_token/exchange") {
       expect(body.public_token).toBe("public-sandbox-test");
+      exchangeCount += 1;
       return {
-        access_token: "access-sandbox-test",
-        item_id: "item-sandbox-test",
+        access_token: `access-sandbox-test-${exchangeCount}`,
+        item_id: `item-sandbox-test-${exchangeCount}`,
       } as T;
     }
     if (path === "/transactions/sync") {
-      expect(body.access_token).toBe("access-sandbox-test");
-      return transactionPage() as T;
+      expect(body.access_token).toStartWith("access-sandbox-test-");
+      syncCount += 1;
+      if (options?.pendingTransition) {
+        return (syncCount === 1 ? pendingPage() : postedPage()) as T;
+      }
+      const connectionNumber = String(body.access_token).split("-").at(-1);
+      return transactionPage(connectionNumber) as T;
     }
     if (path === "/item/remove") {
-      expect(body.access_token).toBe("access-sandbox-test");
+      expect(body.access_token).toStartWith("access-sandbox-test-");
       return { request_id: "remove-test" } as T;
     }
     throw new Error(`Unexpected Plaid path: ${path}`);
   };
 }
 
-function transactionPage(): TransactionsSyncResponse {
+function transactionPage(connectionNumber = "1"): TransactionsSyncResponse {
   return {
     accounts: [
       {
-        account_id: "account-test",
+        account_id: `account-test-${connectionNumber}`,
         balances: {
           available: 1200,
           current: 1250.5,
@@ -209,7 +427,7 @@ function transactionPage(): TransactionsSyncResponse {
     ],
     added: [
       {
-        account_id: "account-test",
+        account_id: `account-test-${connectionNumber}`,
         amount: 42.75,
         authorized_date: "2026-08-18",
         date: "2026-08-19",
@@ -218,11 +436,12 @@ function transactionPage(): TransactionsSyncResponse {
         name: "Test Cafe Purchase",
         payment_channel: "in store",
         pending: false,
+        pending_transaction_id: null,
         personal_finance_category: {
           detailed: "FOOD_AND_DRINK_RESTAURANT",
           primary: "FOOD_AND_DRINK",
         },
-        transaction_id: "transaction-test",
+        transaction_id: `transaction-test-${connectionNumber}`,
         unofficial_currency_code: null,
       },
     ],
@@ -231,6 +450,27 @@ function transactionPage(): TransactionsSyncResponse {
     next_cursor: "cursor-test",
     removed: [],
   };
+}
+
+function pendingPage(): TransactionsSyncResponse {
+  const page = transactionPage();
+  const transaction = page.added[0];
+  if (!transaction) throw new Error("Missing transaction fixture.");
+  transaction.pending = true;
+  transaction.transaction_id = "transaction-pending";
+  page.next_cursor = "cursor-pending";
+  return page;
+}
+
+function postedPage(): TransactionsSyncResponse {
+  const page = transactionPage();
+  const transaction = page.added[0];
+  if (!transaction) throw new Error("Missing transaction fixture.");
+  transaction.pending_transaction_id = "transaction-pending";
+  transaction.transaction_id = "transaction-posted";
+  page.next_cursor = "cursor-posted";
+  page.removed = [{ transaction_id: "transaction-pending" }];
+  return page;
 }
 
 function testApp(organizationId: string, requestPlaid: PlaidRequest) {

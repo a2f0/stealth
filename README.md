@@ -105,8 +105,15 @@ The organization-scoped Finance page at `/finance` uses
 and [Transactions Sync](https://plaid.com/docs/api/products/transactions/) to
 import up to 24 months of account and transaction history. Syncing is manual in
 this first release; Plaid webhooks can be added later for automatic updates.
-Users can disconnect an institution, which calls Plaid's `/item/remove` before
-deleting the locally imported data.
+Users can add organization-scoped notes, category overrides, labels, and a
+reviewed flag to imported transactions.
+
+Disconnecting an institution calls Plaid's `/item/remove`, erases the stored
+access token, and retains the imported history and annotations. A later Link
+connection reconciles unambiguous matching accounts and transactions onto the
+same internal records so annotations survive changed Plaid IDs. Deleting the
+local history is a separate, permanent action that is only available after the
+institution has been disconnected.
 
 Plaid access tokens are encrypted with AES-GCM before being stored in D1. Add
 these values to the ignored `.secrets/root.env` before local Plaid testing or a

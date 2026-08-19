@@ -25,6 +25,7 @@ export interface PlaidTransaction {
   name: string;
   payment_channel: string | null;
   pending: boolean;
+  pending_transaction_id: string | null;
   personal_finance_category: {
     detailed: string;
     primary: string;

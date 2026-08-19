@@ -1979,6 +1979,11 @@ button:disabled {
   background: #ffe0d8;
 }
 
+.financeConnectionStatus.disconnected {
+  color: #66665e;
+  background: #e6e5de;
+}
+
 .financeConnectionActions {
   display: flex;
   gap: 7px;
@@ -1997,6 +2002,11 @@ button:disabled {
 
 .financeConnectionList button:hover {
   border-color: #181916;
+}
+
+.financeConnectionList button.danger {
+  color: #842b1d;
+  border-color: #dfb4aa;
 }
 
 .financeAccountGrid {
@@ -2090,6 +2100,116 @@ button:disabled {
   border-color: #181916;
 }
 
+.financeAnnotationForm {
+  margin-bottom: 13px;
+  padding: 17px;
+  border: 1px solid #cecec5;
+  border-radius: 13px;
+  background: #f4f3ed;
+}
+
+.financeAnnotationHeading,
+.financeAnnotationFooter,
+.financeAnnotationFields,
+.financeTransactionMeta {
+  display: flex;
+  align-items: center;
+}
+
+.financeAnnotationHeading,
+.financeAnnotationFooter {
+  justify-content: space-between;
+}
+
+.financeAnnotationHeading {
+  margin-bottom: 15px;
+}
+
+.financeAnnotationHeading span,
+.financeAnnotationHeading strong {
+  display: block;
+}
+
+.financeAnnotationHeading span {
+  margin-bottom: 4px;
+  color: #85857c;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.financeAnnotationHeading strong {
+  font-size: 12px;
+}
+
+.financeAnnotationHeading button,
+.financeAnnotationTrigger {
+  border: 0;
+  color: #57584f;
+  background: transparent;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.financeAnnotationFields {
+  gap: 12px;
+}
+
+.financeAnnotationFields > label {
+  flex: 1;
+}
+
+.financeAnnotationForm > label,
+.financeAnnotationFields label {
+  display: grid;
+  gap: 6px;
+  color: #62635b;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.financeAnnotationForm input[type="text"],
+.financeAnnotationForm input:not([type]),
+.financeAnnotationForm textarea {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #cecec5;
+  border-radius: 8px;
+  color: #181916;
+  background: #fff;
+  font:
+    10px / 1.5 Inter,
+    sans-serif;
+  text-transform: none;
+}
+
+.financeAnnotationForm > label {
+  margin: 12px 0;
+}
+
+.financeAnnotationForm textarea {
+  resize: vertical;
+}
+
+.financeAnnotationFooter {
+  gap: 16px;
+}
+
+.financeReviewedField {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #4d4e46;
+  font-size: 10px;
+}
+
+.financeAnnotationFooter .primaryButton {
+  padding: 9px 12px;
+  font-size: 9px;
+}
+
 .financeTransactionTable article {
   display: grid;
   grid-template-columns: 58px minmax(180px, 1fr) auto minmax(90px, auto);
@@ -2124,6 +2244,18 @@ button:disabled {
   color: #85857c;
   font-size: 9px;
   text-transform: capitalize;
+}
+
+.financeTransactionMeta {
+  flex-wrap: wrap;
+  gap: 3px 9px;
+}
+
+.financeAnnotationTrigger {
+  padding: 0;
+  color: #477c20;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
 }
 
 .financeTransactionTable article > span {
@@ -2327,6 +2459,11 @@ button:disabled {
   .financeTransactionTable article {
     grid-template-columns: 48px minmax(0, 1fr) auto;
     gap: 10px;
+  }
+
+  .financeAnnotationFields {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .financeTransactionTable article > span {
