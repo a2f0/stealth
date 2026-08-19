@@ -17,6 +17,7 @@ import {
   getFinanceData,
   syncFinanceConnection,
 } from "./financeApi";
+import { filterTransactionsByAccount } from "./financeTransactions";
 
 const linkTokenStorageKey = "stealth.plaid.linkToken";
 
@@ -95,6 +96,15 @@ function FinanceView({
   onDisconnect: (connection: FinanceConnection) => Promise<void>;
   onSync: (id: string) => Promise<void>;
 }) {
+  const [selectedAccountId, setSelectedAccountId] = useState<string>();
+  const selectedAccount = data?.accounts.find(
+    (account) => account.id === selectedAccountId,
+  );
+  const transactions = filterTransactionsByAccount(
+    data?.transactions,
+    selectedAccount?.id,
+  );
+
   return (
     <>
       <header className="topbar">
@@ -121,8 +131,20 @@ function FinanceView({
           onDisconnect={onDisconnect}
           onSync={onSync}
         />
-        <AccountGrid accounts={data?.accounts} />
-        <TransactionHistory transactions={data?.transactions} />
+        <AccountGrid
+          accounts={data?.accounts}
+          onSelect={(accountId) =>
+            setSelectedAccountId((current) =>
+              current === accountId ? undefined : accountId,
+            )
+          }
+          selectedAccountId={selectedAccount?.id}
+        />
+        <TransactionHistory
+          accountName={selectedAccount?.name}
+          onClearFilter={() => setSelectedAccountId(undefined)}
+          transactions={transactions}
+        />
       </section>
     </>
   );
@@ -257,7 +279,15 @@ function Connections({
   );
 }
 
-function AccountGrid({ accounts }: { accounts: FinanceAccount[] | undefined }) {
+function AccountGrid({
+  accounts,
+  onSelect,
+  selectedAccountId,
+}: {
+  accounts: FinanceAccount[] | undefined;
+  onSelect: (accountId: string) => void;
+  selectedAccountId: string | undefined;
+}) {
   if (!accounts?.length) return null;
   return (
     <section className="financeAccounts">
@@ -267,7 +297,15 @@ function AccountGrid({ accounts }: { accounts: FinanceAccount[] | undefined }) {
       </div>
       <div className="financeAccountGrid">
         {accounts.map((account) => (
-          <article key={account.id}>
+          <button
+            aria-pressed={selectedAccountId === account.id}
+            className={`financeAccountCard${
+              selectedAccountId === account.id ? " selected" : ""
+            }`}
+            key={account.id}
+            onClick={() => onSelect(account.id)}
+            type="button"
+          >
             <span>{account.institutionName ?? account.type}</span>
             <h3>{account.name}</h3>
             <strong>
@@ -277,7 +315,7 @@ function AccountGrid({ accounts }: { accounts: FinanceAccount[] | undefined }) {
               {account.subtype ?? account.type}
               {account.mask ? ` · •••• ${account.mask}` : ""}
             </small>
-          </article>
+          </button>
         ))}
       </div>
     </section>
@@ -285,15 +323,29 @@ function AccountGrid({ accounts }: { accounts: FinanceAccount[] | undefined }) {
 }
 
 function TransactionHistory({
+  accountName,
+  onClearFilter,
   transactions,
 }: {
+  accountName: string | undefined;
+  onClearFilter: () => void;
   transactions: FinanceTransaction[] | undefined;
 }) {
   return (
     <section className="financeTransactions">
       <div className="sectionHeading">
         <h2>Transactions</h2>
-        <span>{transactions?.length ?? 0} recent</span>
+        <div className="financeTransactionSummary">
+          <span>
+            {transactions?.length ?? 0}
+            {accountName ? ` for ${accountName}` : " recent"}
+          </span>
+          {accountName && (
+            <button onClick={onClearFilter} type="button">
+              All accounts
+            </button>
+          )}
+        </div>
       </div>
       {transactions?.length ? (
         <div className="financeTransactionTable">
@@ -318,8 +370,16 @@ function TransactionHistory({
       ) : transactions ? (
         <div className="emptyState compactEmptyState financeEmptyState">
           <div className="emptyGlyph">$</div>
-          <h3>No transactions imported yet.</h3>
-          <p>Connect an account or sync an existing connection.</p>
+          <h3>
+            {accountName
+              ? `No transactions for ${accountName}.`
+              : "No transactions imported yet."}
+          </h3>
+          <p>
+            {accountName
+              ? "Choose another account or show all accounts."
+              : "Connect an account or sync an existing connection."}
+          </p>
         </div>
       ) : (
         <p className="auditLoading">Loading finances…</p>
