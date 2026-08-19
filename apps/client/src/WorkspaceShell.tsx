@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { WorkspaceOrganization } from "./organizationState";
 
 export interface WorkspaceUser {
   email: string;
@@ -21,17 +22,25 @@ interface WorkspaceShellProps {
     | "inbox"
     | "library"
     | "organization";
+  activeOrganizationId: string | undefined;
   children: ReactNode;
+  contentKey: string | undefined;
   onNavigate: (pathname: string) => void;
+  onOrganizationChange: (organizationId: string) => Promise<void>;
   onSignOut: () => Promise<void>;
+  organizations: WorkspaceOrganization[];
   user: WorkspaceUser;
 }
 
 export function WorkspaceShell({
   activePage,
+  activeOrganizationId,
   children,
+  contentKey,
   onNavigate,
+  onOrganizationChange,
   onSignOut,
+  organizations,
   user,
 }: WorkspaceShellProps) {
   return (
@@ -46,6 +55,11 @@ export function WorkspaceShell({
           <span className="brandMark">S</span>
           <span>stealth</span>
         </a>
+        <OrganizationSwitcher
+          activeOrganizationId={activeOrganizationId}
+          onOrganizationChange={onOrganizationChange}
+          organizations={organizations}
+        />
         <nav aria-label="Workspace">
           <a
             className={activePage === "library" ? "navItem active" : "navItem"}
@@ -112,7 +126,55 @@ export function WorkspaceShell({
         <AccountControl onSignOut={onSignOut} user={user} />
       </aside>
 
-      <main>{children}</main>
+      <main key={contentKey}>{children}</main>
+    </div>
+  );
+}
+
+function OrganizationSwitcher({
+  activeOrganizationId,
+  onOrganizationChange,
+  organizations,
+}: {
+  activeOrganizationId: string | undefined;
+  onOrganizationChange: (organizationId: string) => Promise<void>;
+  organizations: WorkspaceOrganization[];
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  if (organizations.length === 0 || !activeOrganizationId) return null;
+
+  async function select(organizationId: string) {
+    if (organizationId === activeOrganizationId) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onOrganizationChange(organizationId);
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="organizationSwitcher">
+      <label>
+        <span>Organization</span>
+        <select
+          aria-label="Active organization"
+          disabled={busy}
+          onChange={(event) => void select(event.target.value)}
+          value={activeOrganizationId}
+        >
+          {organizations.map((organization) => (
+            <option key={organization.id} value={organization.id}>
+              {organization.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && <small role="alert">{error}</small>}
     </div>
   );
 }

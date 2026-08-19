@@ -322,12 +322,51 @@ h1 {
   display: flex;
   align-items: center;
   gap: 11px;
-  margin-bottom: 54px;
+  margin-bottom: 22px;
   color: inherit;
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.04em;
   text-decoration: none;
+}
+
+.organizationSwitcher {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 28px;
+}
+
+.organizationSwitcher label {
+  display: grid;
+  gap: 6px;
+}
+
+.organizationSwitcher label > span {
+  color: #66675f;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.organizationSwitcher select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 29px 9px 10px;
+  border: 1px solid #353630;
+  border-radius: 8px;
+  color: #e9e9df;
+  background: #23241f;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.organizationSwitcher small {
+  color: #ff9c86;
+  font-size: 9px;
+  line-height: 1.4;
 }
 
 .brandMark {
@@ -1085,6 +1124,129 @@ button:disabled {
 
 .settingsSubmit {
   justify-self: start;
+}
+
+.organizationSettingsGrid {
+  display: grid;
+  max-width: 680px;
+  gap: 18px;
+}
+
+.organizationSettingsGrid .settingsCard {
+  max-width: none;
+}
+
+.compactBanner {
+  margin-bottom: 0;
+  padding: 10px 12px;
+  font-size: 11px;
+}
+
+.organizationPeople {
+  gap: 18px;
+}
+
+.organizationPeopleList {
+  overflow: hidden;
+  border: 1px solid #e0dfd7;
+  border-radius: 10px;
+}
+
+.organizationPeopleList > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e6e5de;
+}
+
+.organizationPeopleList > div:last-child {
+  border-bottom: 0;
+}
+
+.organizationPeopleList span,
+.organizationPeopleList strong,
+.organizationPeopleList small {
+  display: block;
+  min-width: 0;
+}
+
+.organizationPeopleList span {
+  overflow: hidden;
+}
+
+.organizationPeopleList strong,
+.organizationPeopleList small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.organizationPeopleList strong {
+  margin-bottom: 3px;
+  font-size: 11px;
+}
+
+.organizationPeopleList small {
+  color: #85857c;
+  font-size: 9px;
+}
+
+.organizationPeopleList b {
+  color: #686860;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.organizationPeopleList button {
+  padding: 6px 8px;
+  border: 1px solid #d1d0c8;
+  border-radius: 7px;
+  color: #6d3a30;
+  background: transparent;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.organizationPeopleList button:hover {
+  border-color: #9d5548;
+}
+
+.invitationContent {
+  max-width: 760px;
+}
+
+.invitationCard {
+  max-width: 620px;
+}
+
+.invitationDetails {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.invitationDetails > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.invitationDetails dt {
+  color: #85857c;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.invitationDetails dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
 }
 
 .adminSection {
@@ -1891,6 +2053,12 @@ button:disabled {
     padding-top: 12px;
     overflow-x: auto;
     border-top: 1px solid #30312b;
+  }
+
+  .organizationSwitcher {
+    order: 2;
+    width: 100%;
+    margin: 12px 0 0;
   }
 
   .accountBlock {

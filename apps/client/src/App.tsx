@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
 import { AuthPage } from "./AuthPage";
@@ -6,7 +6,12 @@ import { authClient } from "./authClient";
 import { Finance } from "./Finance";
 import { Inbox } from "./Inbox";
 import { Library } from "./Library";
+import { OrganizationInvitation } from "./OrganizationInvitation";
 import { OrganizationSettings } from "./OrganizationSettings";
+import {
+  resolveActiveOrganizationId,
+  type WorkspaceOrganization,
+} from "./organizationState";
 import { hasRole, WorkspaceShell } from "./WorkspaceShell";
 
 export function App() {
@@ -15,6 +20,7 @@ export function App() {
   const requiresAdmin = ["/admin", "/inbox"].includes(pathname);
   const isResetPage = pathname === "/reset-password";
   const verification = verificationFeedback();
+  const workspace = useWorkspaceOrganizations(session, () => refetch());
 
   useEffect(() => {
     const updatePathname = () => setPathname(window.location.pathname);
@@ -48,7 +54,11 @@ export function App() {
       <AuthPage
         initialError={verification.error}
         initialMode={isResetPage ? "reset" : "sign-in"}
-        initialNotice={verification.notice}
+        initialNotice={
+          pathname === "/invite"
+            ? "Sign in or create an account with the invited email address to continue."
+            : verification.notice
+        }
         onAuthenticated={() => refetch()}
       />
     );
@@ -67,7 +77,6 @@ export function App() {
     window.history.pushState({}, "", nextPathname);
     setPathname(nextPathname);
   };
-
   if (requiresAdmin && !hasRole(session.user.role, "admin")) {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
@@ -93,19 +102,78 @@ export function App() {
   return (
     <WorkspaceShell
       activePage={activePageFor(pathname)}
+      activeOrganizationId={workspace.activeOrganizationId}
+      contentKey={
+        pathname === "/invite"
+          ? "organization-invitation"
+          : workspace.activeOrganizationId
+      }
       onNavigate={navigate}
+      onOrganizationChange={workspace.switchOrganization}
       onSignOut={onSignOut}
+      organizations={workspace.organizations}
       user={session.user}
     >
-      {contentForPath(pathname, library, navigate)}
+      {contentForPath(pathname, library, navigate, workspace.refresh)}
     </WorkspaceShell>
   );
+}
+
+interface OrganizationSession {
+  session: { activeOrganizationId?: string | null | undefined };
+  user: { id: string };
+}
+
+function useWorkspaceOrganizations(
+  session: OrganizationSession | null | undefined,
+  refetchSession: () => Promise<unknown>,
+) {
+  const [organizations, setOrganizations] = useState<WorkspaceOrganization[]>(
+    [],
+  );
+  const loadOrganizations = useCallback(async () => {
+    const result = await authClient.organization.list();
+    if (result.error) {
+      throw new Error(
+        result.error.message ?? "Could not load your organizations.",
+      );
+    }
+    setOrganizations((result.data ?? []).map(({ id, name }) => ({ id, name })));
+  }, []);
+  const signedInUserId = session?.user.id;
+  useEffect(() => {
+    if (!signedInUserId) {
+      setOrganizations([]);
+      return;
+    }
+    void loadOrganizations().catch(() => setOrganizations([]));
+  }, [loadOrganizations, signedInUserId]);
+  const activeOrganizationId = resolveActiveOrganizationId(
+    session?.session.activeOrganizationId,
+    undefined,
+    organizations,
+  );
+  const switchOrganization = async (organizationId: string) => {
+    const result = await authClient.organization.setActive({ organizationId });
+    if (result.error) {
+      throw new Error(
+        result.error.message ?? "Could not switch organizations.",
+      );
+    }
+    await refetchSession();
+  };
+  const refresh = async () => {
+    await loadOrganizations();
+    await refetchSession();
+  };
+  return { activeOrganizationId, organizations, refresh, switchOrganization };
 }
 
 function contentForPath(
   pathname: string,
   library: ReactNode,
   navigate: (pathname: string) => void,
+  refreshWorkspace: () => Promise<void>,
 ) {
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return <Audits onNavigate={navigate} pathname={pathname} />;
@@ -114,6 +182,15 @@ function contentForPath(
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
   if (pathname === "/organization") return <OrganizationSettings />;
+  if (pathname === "/invite") {
+    return (
+      <OrganizationInvitation
+        invitationId={new URLSearchParams(window.location.search).get("id")}
+        onAccepted={refreshWorkspace}
+        onNavigate={() => navigate("/organization")}
+      />
+    );
+  }
   return library;
 }
 
@@ -125,6 +202,7 @@ function activePageFor(pathname: string) {
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
   if (pathname === "/organization") return "organization" as const;
+  if (pathname === "/invite") return "organization" as const;
   return "library" as const;
 }
 
