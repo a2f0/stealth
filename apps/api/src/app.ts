@@ -74,8 +74,8 @@ app.use("/api/inbox", requireAuth, requireRole("admin"));
 app.use("/api/inbox/*", requireAuth, requireRole("admin"));
 app.route("/api/inbox", inbox);
 
-app.use("/api/objects", requireAuth);
-app.use("/api/objects/*", requireAuth);
+app.use("/api/objects", requireAuth, requireOrganization);
+app.use("/api/objects/*", requireAuth, requireOrganization);
 app.route("/api/objects", objects);
 
 app.notFound((context) => context.json({ error: "Not found." }, 404));
