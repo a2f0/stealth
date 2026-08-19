@@ -98,6 +98,37 @@ risk assessment, or qualified professional judgment. Consult the
 [OSHA electrical safety requirements](https://www.osha.gov/laws-regs/regulations/standardnumber/1910/1910.333)
 when adapting it to a workplace.
 
+## Finance and Plaid
+
+The organization-scoped Finance page at `/finance` uses
+[Plaid Link](https://plaid.com/docs/link/) to connect financial institutions
+and [Transactions Sync](https://plaid.com/docs/api/products/transactions/) to
+import up to 24 months of account and transaction history. Syncing is manual in
+this first release; Plaid webhooks can be added later for automatic updates.
+Users can disconnect an institution, which calls Plaid's `/item/remove` before
+deleting the locally imported data.
+
+Plaid access tokens are encrypted with AES-GCM before being stored in D1. Add
+these values to the ignored `.secrets/root.env` before local Plaid testing or a
+production deployment:
+
+```sh
+export PLAID_CLIENT_ID=your-client-id
+export PLAID_SECRET=your-sandbox-secret
+export PLAID_TOKEN_ENCRYPTION_KEY=your-base64-32-byte-key
+```
+
+Generate the encryption key once with `openssl rand -base64 32`, store the
+result, and do not replace it casually: existing connections require the same
+key to decrypt their Plaid access tokens. The deployment script uploads all
+three values as encrypted Worker secrets.
+
+The Worker currently uses Plaid Sandbox. Add
+`https://app.tearleads.com/finance` to the Plaid Dashboard's allowed redirect
+URIs for OAuth institutions. Before switching `PLAID_ENV` to `production` in
+the API Wrangler configuration, replace the Sandbox secret with the Production
+secret and complete Plaid's application and company profile requirements.
+
 ## Provision Cloudflare resources
 
 Link or create the ignored `.secrets` directory, then review the Terraform

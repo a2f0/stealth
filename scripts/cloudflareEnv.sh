@@ -63,3 +63,18 @@ validate_auth_env() {
     return 1
   fi
 }
+
+validate_plaid_env() {
+  local missing=()
+
+  [[ -z "${PLAID_CLIENT_ID:-}" ]] && missing+=("PLAID_CLIENT_ID")
+  [[ -z "${PLAID_SECRET:-}" ]] && missing+=("PLAID_SECRET")
+  [[ -z "${PLAID_TOKEN_ENCRYPTION_KEY:-}" ]] &&
+    missing+=("PLAID_TOKEN_ENCRYPTION_KEY")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "ERROR: Missing required Plaid variables:" >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    return 1
+  fi
+}

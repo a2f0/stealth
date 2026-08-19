@@ -20,5 +20,14 @@ printf '%s\n' \
   "CORS_ORIGIN=http://localhost:5173" \
   >"$auth_env_file"
 
+for secret_name in \
+  PLAID_CLIENT_ID \
+  PLAID_SECRET \
+  PLAID_TOKEN_ENCRYPTION_KEY; do
+  if [[ -n "${!secret_name:-}" ]]; then
+    printf '%s=%s\n' "$secret_name" "${!secret_name}" >>"$auth_env_file"
+  fi
+done
+
 cd "$REPO_ROOT/apps/api"
 bunx wrangler dev --env-file "$auth_env_file"

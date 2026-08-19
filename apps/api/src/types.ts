@@ -6,6 +6,11 @@ export interface Bindings {
   DB: D1Database;
   EMAIL: SendEmail;
   INBOUND_EMAIL_ADDRESS: string;
+  PLAID_CLIENT_ID?: string;
+  PLAID_ENV?: "development" | "production" | "sandbox";
+  PLAID_REDIRECT_URI?: string;
+  PLAID_SECRET?: string;
+  PLAID_TOKEN_ENCRYPTION_KEY?: string;
   STORAGE: R2Bucket;
 }
 
