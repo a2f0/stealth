@@ -107,7 +107,7 @@ describe("finance", () => {
     expect(cannotSync.response.status).toBe(404);
 
     const disconnected = await fixture.app.request(
-      `/connections/${exchange.body.connectionId}`,
+      financePath(`/connections/${exchange.body.connectionId}`),
       { method: "DELETE" },
       fixture.bindings,
     );
@@ -246,7 +246,7 @@ function testApp(organizationId: string, requestPlaid: PlaidRequest) {
     } as unknown as AuthSession);
     await next();
   });
-  app.route("/", createFinanceRouter(requestPlaid));
+  app.route("/api/finance", createFinanceRouter(requestPlaid));
   return app;
 }
 
@@ -262,8 +262,12 @@ async function jsonRequest<T = unknown>(
     method,
   };
   if (body !== undefined) init.body = JSON.stringify(body);
-  const response = await app.request(path, init, bindings);
+  const response = await app.request(financePath(path), init, bindings);
   return { body: (await response.json()) as T, response };
+}
+
+function financePath(path: string) {
+  return path === "/" ? "/api/finance" : `/api/finance${path}`;
 }
 
 function bindingsFor(database: Database): Bindings {

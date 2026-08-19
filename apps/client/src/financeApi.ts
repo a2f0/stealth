@@ -48,7 +48,7 @@ export interface FinanceData {
 }
 
 export async function getFinanceData() {
-  return request<FinanceData>("/");
+  return request<FinanceData>("");
 }
 
 export async function createPlaidLinkToken() {
