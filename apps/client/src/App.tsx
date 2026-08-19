@@ -3,6 +3,7 @@ import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
 import { AuthPage } from "./AuthPage";
 import { authClient } from "./authClient";
+import { Finance } from "./Finance";
 import { Inbox } from "./Inbox";
 import { Library } from "./Library";
 import { OrganizationSettings } from "./OrganizationSettings";
@@ -109,6 +110,7 @@ function contentForPath(
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return <Audits onNavigate={navigate} pathname={pathname} />;
   }
+  if (pathname === "/finance") return <Finance />;
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
   if (pathname === "/organization") return <OrganizationSettings />;
@@ -119,6 +121,7 @@ function activePageFor(pathname: string) {
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return "audits" as const;
   }
+  if (pathname === "/finance") return "finance" as const;
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
   if (pathname === "/organization") return "organization" as const;

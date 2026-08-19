@@ -47,6 +47,16 @@ describe("api", () => {
 
     expect(response.status).toBe(401);
   });
+
+  it("requires authentication for finance", async () => {
+    const response = await app.request(
+      "/api/finance",
+      undefined,
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
 });
 
 function authBindings(): Bindings {

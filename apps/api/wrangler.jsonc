@@ -11,7 +11,9 @@
     "AUTH_EMAIL_FROM": "security@auth.tearleads.com",
     "BETTER_AUTH_URL": "https://api.tearleads.com",
     "CORS_ORIGIN": "https://app.tearleads.com",
-    "INBOUND_EMAIL_ADDRESS": "upload@inbox.tearleads.com"
+    "INBOUND_EMAIL_ADDRESS": "upload@inbox.tearleads.com",
+    "PLAID_ENV": "sandbox",
+    "PLAID_REDIRECT_URI": "https://app.tearleads.com/finance"
   },
   "d1_databases": [
     {

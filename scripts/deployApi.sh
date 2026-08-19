@@ -10,6 +10,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/cloudflareEnv.sh"
 load_cloudflare_env
 validate_auth_env
+validate_plaid_env
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "Dry-running API Worker deployment..."
@@ -27,6 +28,17 @@ printf '%s' "$BETTER_AUTH_SECRET" | bunx wrangler secret put \
   BETTER_AUTH_SECRET \
   --config "$REPO_ROOT/apps/api/wrangler.jsonc" \
   >/dev/null
+
+echo "Updating Plaid Worker secrets..."
+for secret_name in \
+  PLAID_CLIENT_ID \
+  PLAID_SECRET \
+  PLAID_TOKEN_ENCRYPTION_KEY; do
+  printf '%s' "${!secret_name}" | bunx wrangler secret put \
+    "$secret_name" \
+    --config "$REPO_ROOT/apps/api/wrangler.jsonc" \
+    >/dev/null
+done
 
 echo "Deploying API Worker..."
 bun run --cwd "$REPO_ROOT/apps/api" deploy

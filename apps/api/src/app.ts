@@ -9,6 +9,7 @@ import {
   requireOrganization,
   requireRole,
 } from "./authMiddleware";
+import { finance } from "./finance";
 import { inbox } from "./inbox";
 import { objects } from "./objects";
 import type { Bindings } from "./types";
@@ -47,6 +48,7 @@ app.get("/api", (context) =>
     endpoints: {
       adminOrganizations: "/api/admin/organizations",
       audits: "/api/audits",
+      finance: "/api/finance",
       inbox: "/api/inbox",
       objects: "/api/objects",
       session: "/api/me",
@@ -73,6 +75,10 @@ app.route("/api/audits", audits);
 app.use("/api/inbox", requireAuth, requireRole("admin"));
 app.use("/api/inbox/*", requireAuth, requireRole("admin"));
 app.route("/api/inbox", inbox);
+
+app.use("/api/finance", requireAuth, requireOrganization);
+app.use("/api/finance/*", requireAuth, requireOrganization);
+app.route("/api/finance", finance);
 
 app.use("/api/objects", requireAuth, requireOrganization);
 app.use("/api/objects/*", requireAuth, requireOrganization);

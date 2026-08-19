@@ -14,7 +14,13 @@ export interface WorkspaceUser {
 }
 
 interface WorkspaceShellProps {
-  activePage: "admin" | "audits" | "inbox" | "library" | "organization";
+  activePage:
+    | "admin"
+    | "audits"
+    | "finance"
+    | "inbox"
+    | "library"
+    | "organization";
   children: ReactNode;
   onNavigate: (pathname: string) => void;
   onSignOut: () => Promise<void>;
@@ -54,6 +60,13 @@ export function WorkspaceShell({
             onClick={(event) => handleNavigation(event, "/audits", onNavigate)}
           >
             <span className="navIcon">✓</span> Audits
+          </a>
+          <a
+            className={activePage === "finance" ? "navItem active" : "navItem"}
+            href="/finance"
+            onClick={(event) => handleNavigation(event, "/finance", onNavigate)}
+          >
+            <span className="navIcon">$</span> Finance
           </a>
           <a
             className={

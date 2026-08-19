@@ -1571,6 +1571,228 @@ button:disabled {
   max-width: 650px;
 }
 
+.financeContent {
+  max-width: 1240px;
+}
+
+.financeConnections,
+.financeAccounts,
+.financeTransactions {
+  margin-bottom: 46px;
+}
+
+.financeConnectionList,
+.financeTransactionTable {
+  overflow: hidden;
+  border: 1px solid #ddddd5;
+  border-radius: 13px;
+  background: #faf9f5;
+}
+
+.financeConnectionList article {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 17px;
+  border-bottom: 1px solid #e4e3dc;
+}
+
+.financeConnectionList article:last-child {
+  border-bottom: 0;
+}
+
+.financeInstitutionMark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  place-items: center;
+  color: #181916;
+  background: #b7ff5b;
+  font-family: "DM Mono", monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.financeConnectionList strong,
+.financeConnectionList small {
+  display: block;
+}
+
+.financeConnectionList strong {
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.financeConnectionList small {
+  color: #85857c;
+  font-size: 9px;
+}
+
+.financeConnectionStatus {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #365c16;
+  background: #e4f4ce;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.financeConnectionStatus.error {
+  color: #842b1d;
+  background: #ffe0d8;
+}
+
+.financeConnectionActions {
+  display: flex;
+  gap: 7px;
+}
+
+.financeConnectionList button {
+  padding: 8px 10px;
+  border: 1px solid #cecec5;
+  border-radius: 8px;
+  color: #4d4e46;
+  background: transparent;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.financeConnectionList button:hover {
+  border-color: #181916;
+}
+
+.financeAccountGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 13px;
+}
+
+.financeAccountGrid article {
+  min-height: 175px;
+  padding: 19px;
+  border: 1px solid #30312b;
+  border-radius: 14px;
+  color: #eeeee6;
+  background:
+    radial-gradient(circle at 85% 10%, #b7ff5b1d, transparent 33%), #20211d;
+}
+
+.financeAccountGrid article > span {
+  color: #85867e;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.financeAccountGrid h3 {
+  margin: 25px 0 7px;
+  color: #c6c7be;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.financeAccountGrid strong {
+  display: block;
+  margin-bottom: 19px;
+  font-size: 23px;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+}
+
+.financeAccountGrid small {
+  color: #77786f;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.financeTransactionTable article {
+  display: grid;
+  grid-template-columns: 58px minmax(180px, 1fr) auto minmax(90px, auto);
+  align-items: center;
+  gap: 18px;
+  padding: 14px 17px;
+  border-bottom: 1px solid #e4e3dc;
+}
+
+.financeTransactionTable article:last-child {
+  border-bottom: 0;
+}
+
+.financeTransactionTable time {
+  color: #85857c;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.financeTransactionTable strong,
+.financeTransactionTable small {
+  display: block;
+}
+
+.financeTransactionTable strong {
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.financeTransactionTable small {
+  color: #85857c;
+  font-size: 9px;
+  text-transform: capitalize;
+}
+
+.financeTransactionTable article > span {
+  grid-column: 3;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #70550a;
+  background: #fff0bd;
+  font-family: "DM Mono", monospace;
+  font-size: 7px;
+  text-transform: uppercase;
+}
+
+.financeTransactionTable b {
+  grid-column: 4;
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.financeTransactionTable b.credit {
+  color: #477c20;
+}
+
+.financeSetupNotice {
+  margin-bottom: 28px;
+  padding: 17px 19px;
+  border: 1px solid #e3cf91;
+  border-radius: 12px;
+  background: #fff5d5;
+}
+
+.financeSetupNotice strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.financeSetupNotice p {
+  margin: 0;
+  color: #6d633f;
+  font-size: 11px;
+}
+
+.financeEmptyState {
+  background: #faf9f5;
+}
+
 @media (max-width: 720px) {
   .authShell {
     display: block;
@@ -1699,5 +1921,28 @@ button:disabled {
 
   .auditRequired {
     padding: 5px 0;
+  }
+
+  .financeConnectionList article {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+  }
+
+  .financeConnectionActions {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .financeTransactionTable article {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .financeTransactionTable article > span {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .financeTransactionTable b {
+    grid-column: 3;
   }
 }
