@@ -207,7 +207,8 @@ h1 {
   font-weight: 700;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   padding: 13px 14px;
   border: 1px solid #d5d5cd;
@@ -220,11 +221,13 @@ h1 {
     box-shadow 140ms ease;
 }
 
-.field input:hover {
+.field input:hover,
+.field select:hover {
   border-color: #a8a89f;
 }
 
-.field input:focus {
+.field input:focus,
+.field select:focus {
   border-color: #181916;
   box-shadow: 0 0 0 3px #b7ff5b45;
   outline: 0;

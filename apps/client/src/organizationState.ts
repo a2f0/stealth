@@ -3,6 +3,15 @@ export interface WorkspaceOrganization {
   name: string;
 }
 
+export const organizationInvitationRoles = [
+  "member",
+  "admin",
+  "owner",
+] as const;
+
+export type OrganizationInvitationRole =
+  (typeof organizationInvitationRoles)[number];
+
 export function createOrganizationSlug(name: string, suffix: string) {
   const base = name
     .normalize("NFKD")
@@ -42,6 +51,16 @@ export function resolveActiveOrganizationId(
 
 export function canManageOrganization(role: string | null | undefined) {
   return hasOrganizationRole(role, "owner", "admin");
+}
+
+export function assignableOrganizationRoles(
+  role: string | null | undefined,
+): OrganizationInvitationRole[] {
+  if (hasOrganizationRole(role, "owner")) {
+    return [...organizationInvitationRoles];
+  }
+  if (hasOrganizationRole(role, "admin")) return ["member", "admin"];
+  return [];
 }
 
 export function canLeaveOrganization(

@@ -338,7 +338,7 @@ describe("password authentication", () => {
       .get(email) as { id: string; name: string };
     const invitedEmail = "invitee@example.com";
 
-    const invite = await post(
+    const firstInvite = await post(
       fixture.auth,
       "/organization/invite-member",
       {
@@ -348,21 +348,42 @@ describe("password authentication", () => {
       },
       ownerCookie,
     );
+    expect(firstInvite.status).toBe(200);
+    const firstInvitation = (await firstInvite.json()) as { id: string };
+    const invite = await post(
+      fixture.auth,
+      "/organization/invite-member",
+      {
+        email: invitedEmail,
+        organizationId: organization.id,
+        role: "admin",
+      },
+      ownerCookie,
+    );
     expect(invite.status).toBe(200);
     const invitation = (await invite.json()) as { id: string };
     await Promise.all(fixture.pending);
     expect(
-      fixture.messages.find(({ subject }) => subject.startsWith("You're")),
+      fixture.database
+        .query("SELECT status FROM invitation WHERE id = ?")
+        .get(firstInvitation.id),
+    ).toEqual({ status: "canceled" });
+    expect(
+      fixture.messages.filter(({ subject }) => subject.startsWith("You're")),
     ).toMatchObject({
+      length: 2,
+    });
+    const invitationMessage = fixture.messages
+      .filter(({ subject }) => subject.startsWith("You're"))
+      .at(-1);
+    expect(invitationMessage).toMatchObject({
       subject: `You're invited to ${organization.name}`,
       to: invitedEmail,
     });
-    const invitationMessage = fixture.messages.find(({ subject }) =>
-      subject.startsWith("You're"),
-    );
     expect(invitationMessage?.text).toContain(
       `${origin}/invite?id=${invitation.id}`,
     );
+    expect(invitationMessage?.text).toContain("with the admin role");
 
     const inviteeSignUp = await post(fixture.auth, "/sign-up/email", {
       email: invitedEmail,
@@ -397,11 +418,21 @@ describe("password authentication", () => {
     expect(
       fixture.database
         .query(
+          `SELECT member.role
+           FROM member
+           JOIN user ON user.id = member.userId
+           WHERE user.email = ? AND member.organizationId = ?`,
+        )
+        .get(invitedEmail, organization.id),
+    ).toEqual({ role: "admin" });
+    expect(
+      fixture.database
+        .query(
           `SELECT user.defaultOrganizationId, invitation.status
            FROM user JOIN invitation ON invitation.email = user.email
-           WHERE user.email = ?`,
+           WHERE user.email = ? AND invitation.id = ?`,
         )
-        .get(invitedEmail),
+        .get(invitedEmail, invitation.id),
     ).toEqual({
       defaultOrganizationId: organization.id,
       status: "accepted",
