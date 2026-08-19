@@ -1,7 +1,14 @@
-import { type MouseEvent, type ReactNode, useState } from "react";
+import {
+  type CSSProperties,
+  type MouseEvent,
+  type ReactNode,
+  useState,
+} from "react";
 import { AccountControl } from "./AccountControl";
 import type { AccountSession } from "./accountSessions";
 import type { WorkspaceOrganization } from "./organizationState";
+import { SidebarResizeHandle } from "./SidebarResizeHandle";
+import { readSidebarWidth } from "./sidebarWidth";
 
 export interface WorkspaceUser {
   email: string;
@@ -51,8 +58,12 @@ export function WorkspaceShell({
   organizations,
   user,
 }: WorkspaceShellProps) {
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const shellStyle = {
+    "--sidebar-width": `${sidebarWidth}px`,
+  } as CSSProperties;
   return (
-    <div className="shell">
+    <div className="shell" style={shellStyle}>
       <aside className="sidebar">
         <a
           aria-label="Stealth home"
@@ -142,6 +153,11 @@ export function WorkspaceShell({
           user={user}
         />
       </aside>
+
+      <SidebarResizeHandle
+        onWidthChange={setSidebarWidth}
+        width={sidebarWidth}
+      />
 
       <main key={contentKey}>{children}</main>
     </div>

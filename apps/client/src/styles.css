@@ -307,8 +307,53 @@ h1 {
 
 .shell {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: var(--sidebar-width, 240px) minmax(0, 1fr);
   min-height: 100vh;
+}
+
+.sidebarResizeHandle {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: var(--sidebar-width, 240px);
+  z-index: 5;
+  width: 9px;
+  margin: 0;
+  padding: 0;
+  transform: translateX(-50%);
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebarResizeHandle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: #30312b;
+  content: "";
+  transition:
+    width 120ms ease,
+    background 120ms ease;
+}
+
+.sidebarResizeHandle:hover::after,
+.sidebarResizeHandle:focus-visible::after,
+.sidebarResizeHandle.dragging::after {
+  width: 2px;
+  background: #b7ff5b;
+}
+
+.sidebarResizeHandle:focus-visible {
+  outline: 0;
+}
+
+body.sidebarResizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .sidebar {
@@ -428,6 +473,7 @@ nav {
 .accountBlock {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 25px;
+  position: relative;
   align-items: center;
   gap: 10px;
   margin: 0;
@@ -472,7 +518,7 @@ nav {
 }
 
 .accountMenu {
-  position: relative;
+  position: static;
 }
 
 .accountMenuButton {
@@ -494,8 +540,8 @@ nav {
 
 .accountMenuPopover {
   position: absolute;
-  right: 0;
   bottom: calc(100% + 8px);
+  left: 0;
   z-index: 10;
   width: min(292px, calc(100vw - 28px));
   padding: 8px;
@@ -2135,6 +2181,10 @@ button:disabled {
     display: block;
   }
 
+  .sidebarResizeHandle {
+    display: none;
+  }
+
   .sidebar {
     position: static;
     flex-direction: row;
@@ -2177,7 +2227,9 @@ button:disabled {
 
   .accountMenuPopover {
     top: calc(100% + 8px);
+    right: 0;
     bottom: auto;
+    left: auto;
   }
 
   .topbar {
