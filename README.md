@@ -63,8 +63,9 @@ Pass `--local` as the third argument to update the local D1 database instead.
 Later role changes can use Better Auth's admin API. Public account registration
 is enabled for now. The client includes sign-up, sign-in, sign-out, reset
 request, and new-password screens. Object-storage endpoints require an
-authenticated session; all authenticated accounts currently share the same
-library until per-user object ownership is added. Registration sends a
+authenticated session, and each organization's upload library is isolated in
+D1 with new R2 objects stored below an organization-specific prefix.
+Registration sends a
 one-hour verification link, but unverified users can sign in immediately. The
 library displays a reminder with a resend action until the address is verified.
 Admins can list registered accounts at `/admin` and view the shared inbound
