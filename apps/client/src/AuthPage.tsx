@@ -2,12 +2,15 @@ import { type FormEvent, useState } from "react";
 import { authClient } from "./authClient";
 
 type AuthMode = "forgot" | "reset" | "sign-in" | "sign-up";
+type AuthVariant = "add-account" | "default";
 
 interface AuthPageProps {
   initialError?: string | undefined;
   initialMode?: AuthMode;
   initialNotice?: string | undefined;
   onAuthenticated: () => Promise<void>;
+  onCancel?: (() => void) | undefined;
+  variant?: AuthVariant;
 }
 
 const content: Record<
@@ -41,6 +44,8 @@ export function AuthPage({
   initialMode = "sign-in",
   initialNotice,
   onAuthenticated,
+  onCancel,
+  variant = "default",
 }: AuthPageProps) {
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [name, setName] = useState("");
@@ -86,7 +91,7 @@ export function AuthPage({
     }
   }
 
-  const copy = content[mode];
+  const copy = contentFor(mode, variant);
 
   return (
     <div className="authShell">
@@ -96,7 +101,7 @@ export function AuthPage({
         <div className="authCard">
           <p className="eyebrow">{copy.eyebrow}</p>
           <h2>{copy.title}</h2>
-          <p className="authIntro">{descriptionFor(mode)}</p>
+          <p className="authIntro">{descriptionFor(mode, variant)}</p>
 
           <form
             autoComplete="on"
@@ -154,6 +159,13 @@ export function AuthPage({
             <p className="authSwitch">
               <button onClick={() => chooseMode("sign-in")} type="button">
                 Back to sign in
+              </button>
+            </p>
+          )}
+          {onCancel && (
+            <p className="authSwitch authCancel">
+              <button onClick={onCancel} type="button">
+                Cancel and return to your account
               </button>
             </p>
           )}
@@ -373,7 +385,18 @@ function AuthInput({
   );
 }
 
-function descriptionFor(mode: AuthMode) {
+function contentFor(mode: AuthMode, variant: AuthVariant) {
+  if (mode === "sign-in" && variant === "add-account") {
+    return {
+      button: "Add account",
+      eyebrow: "Another account",
+      title: "Sign in to another account",
+    };
+  }
+  return content[mode];
+}
+
+function descriptionFor(mode: AuthMode, variant: AuthVariant) {
   if (mode === "forgot") {
     return "Enter your email and we’ll send you a secure, one-time link.";
   }
@@ -382,6 +405,9 @@ function descriptionFor(mode: AuthMode) {
   }
   if (mode === "sign-up") {
     return "Start with an email address and a strong password.";
+  }
+  if (variant === "add-account") {
+    return "This account will stay available on this browser so you can switch without signing in again.";
   }
   return "Sign in with the email and password attached to your account.";
 }

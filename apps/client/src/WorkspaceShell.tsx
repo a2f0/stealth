@@ -1,10 +1,6 @@
-import {
-  type MouseEvent,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { type MouseEvent, type ReactNode, useState } from "react";
+import { AccountControl } from "./AccountControl";
+import type { AccountSession } from "./accountSessions";
 import type { WorkspaceOrganization } from "./organizationState";
 
 export interface WorkspaceUser {
@@ -15,6 +11,8 @@ export interface WorkspaceUser {
 }
 
 interface WorkspaceShellProps {
+  accountLoadError: string | undefined;
+  accounts: AccountSession[];
   activePage:
     | "admin"
     | "audits"
@@ -23,22 +21,32 @@ interface WorkspaceShellProps {
     | "library"
     | "organization";
   activeOrganizationId: string | undefined;
+  activeSessionToken: string;
   children: ReactNode;
   contentKey: string | undefined;
+  onAccountChange: (sessionToken: string) => Promise<void>;
+  onAddAccount: () => void;
   onNavigate: (pathname: string) => void;
   onOrganizationChange: (organizationId: string) => Promise<void>;
+  onRefreshAccounts: () => Promise<void>;
   onSignOut: () => Promise<void>;
   organizations: WorkspaceOrganization[];
   user: WorkspaceUser;
 }
 
 export function WorkspaceShell({
+  accountLoadError,
+  accounts,
   activePage,
   activeOrganizationId,
+  activeSessionToken,
   children,
   contentKey,
+  onAccountChange,
+  onAddAccount,
   onNavigate,
   onOrganizationChange,
+  onRefreshAccounts,
   onSignOut,
   organizations,
   user,
@@ -123,7 +131,16 @@ export function WorkspaceShell({
         <div className="sidebarFoot">
           <span className="statusDot" /> Cloudflare connected
         </div>
-        <AccountControl onSignOut={onSignOut} user={user} />
+        <AccountControl
+          accounts={accounts}
+          activeSessionToken={activeSessionToken}
+          loadError={accountLoadError}
+          onAddAccount={onAddAccount}
+          onRefreshAccounts={onRefreshAccounts}
+          onSignOut={onSignOut}
+          onSwitchAccount={onAccountChange}
+          user={user}
+        />
       </aside>
 
       <main key={contentKey}>{children}</main>
@@ -179,101 +196,6 @@ function OrganizationSwitcher({
   );
 }
 
-function AccountControl({
-  onSignOut,
-  user,
-}: {
-  onSignOut: () => Promise<void>;
-  user: WorkspaceUser;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [open, setOpen] = useState(false);
-  const menu = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !menu.current?.contains(event.target)
-      ) {
-        setOpen(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-        trigger.current?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", closeOnOutsideClick);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsideClick);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  async function signOut() {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onSignOut();
-    } catch (cause) {
-      setError(messageFrom(cause));
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="accountBlock">
-      <span className="accountAvatar">{initialsFor(user.name)}</span>
-      <span className="accountIdentity">
-        <strong>{user.name}</strong>
-        <span>{user.email}</span>
-      </span>
-      <div className="accountMenu" ref={menu}>
-        <button
-          aria-expanded={open}
-          aria-haspopup="menu"
-          aria-label="Account menu"
-          className="accountMenuButton"
-          disabled={busy}
-          onClick={() => {
-            setError(undefined);
-            setOpen((current) => !current);
-          }}
-          ref={trigger}
-          type="button"
-        >
-          ⋮
-        </button>
-        {open && (
-          <div className="accountMenuPopover" role="menu">
-            {error && (
-              <p className="accountMenuError" role="alert">
-                {error}
-              </p>
-            )}
-            <button
-              className="accountMenuItem"
-              disabled={busy}
-              onClick={() => void signOut()}
-              role="menuitem"
-              type="button"
-            >
-              {busy ? "Signing out…" : "Sign out"}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function handleNavigation(
   event: MouseEvent<HTMLAnchorElement>,
   pathname: string,
@@ -301,17 +223,8 @@ export function hasRole(
   );
 }
 
-function initialsFor(name: string) {
-  return (
-    name
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase())
-      .join("") || "?"
-  );
-}
-
 function messageFrom(cause: unknown) {
-  return cause instanceof Error ? cause.message : "Could not sign out.";
+  return cause instanceof Error
+    ? cause.message
+    : "Could not switch organizations.";
 }

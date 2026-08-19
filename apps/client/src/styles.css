@@ -301,6 +301,10 @@ h1 {
   font-weight: 700;
 }
 
+.authCancel {
+  margin-top: 12px;
+}
+
 .shell {
   display: grid;
   grid-template-columns: 240px 1fr;
@@ -493,12 +497,104 @@ nav {
   right: 0;
   bottom: calc(100% + 8px);
   z-index: 10;
-  width: 150px;
-  padding: 6px;
+  width: min(292px, calc(100vw - 28px));
+  padding: 8px;
   border: 1px solid #3c3d36;
   border-radius: 9px;
   background: #262722;
   box-shadow: 0 14px 35px #0006;
+}
+
+.accountMenuLabel {
+  margin: 3px 8px 7px;
+  color: #92938a;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.accountChoices {
+  display: grid;
+  gap: 3px;
+}
+
+.accountChoice {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 7px;
+  color: #eeeee6;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.accountChoice:hover:not(:disabled) {
+  background: #30312b;
+}
+
+.accountChoice.active {
+  background: #30312b;
+  cursor: default;
+}
+
+.accountChoice:disabled {
+  opacity: 1;
+}
+
+.accountChoiceAvatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  place-items: center;
+  color: #181916;
+  background: #b7ff5b;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.accountChoiceIdentity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.accountChoiceIdentity strong,
+.accountChoiceIdentity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountChoiceIdentity strong {
+  font-size: 11px;
+}
+
+.accountChoiceIdentity small {
+  color: #92938a;
+  font-size: 9px;
+}
+
+.accountChoiceStatus {
+  color: #b7ff5b;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  text-align: center;
+}
+
+.accountMenuActions {
+  display: grid;
+  gap: 2px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid #3c3d36;
 }
 
 .accountMenuItem {
@@ -517,6 +613,16 @@ nav {
 .accountMenuItem:hover {
   color: #181916;
   background: #b7ff5b;
+}
+
+.accountMenuItem:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.accountSignOut {
+  color: #b9b9b0;
+  font-weight: 500;
 }
 
 .accountMenuError {
