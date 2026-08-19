@@ -9,8 +9,10 @@ import {
   type OrganizationGroup,
 } from "./organizationGroupsApi";
 import {
+  assignableOrganizationRoles,
   canLeaveOrganization,
   canManageOrganization,
+  type OrganizationInvitationRole,
 } from "./organizationState";
 
 interface OrganizationRecord {
@@ -30,6 +32,7 @@ interface OrganizationInvitationRecord {
   email: string;
   expiresAt: Date;
   id: string;
+  role: string;
   status: string;
 }
 
@@ -300,6 +303,8 @@ function OrganizationSettingsView({
             />
             {canManage && (
               <InviteMemberForm
+                key={data.organization.id}
+                memberRole={data.memberRole}
                 onSent={onReload}
                 organizationId={data.organization.id}
               />
@@ -425,13 +430,17 @@ function OrganizationDetailsCard({
 }
 
 function InviteMemberForm({
+  memberRole,
   onSent,
   organizationId,
 }: {
+  memberRole: string;
   onSent: () => Promise<void>;
   organizationId: string;
 }) {
+  const assignableRoles = assignableOrganizationRoles(memberRole);
   const [email, setEmail] = useState("");
+  const [role, setRole] = useState<OrganizationInvitationRole>("member");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -447,16 +456,18 @@ function InviteMemberForm({
       const result = await authClient.organization.inviteMember({
         email: invitedEmail,
         organizationId,
-        resend: true,
-        role: "member",
+        role,
       });
       if (result.error) {
         throw new Error(
           result.error.message ?? "Could not send this invitation.",
         );
       }
+      const assignedRole = result.data?.role ?? role;
       setEmail("");
-      setNotice(`Invitation sent to ${invitedEmail}.`);
+      setNotice(
+        `Invitation sent to ${invitedEmail} with the ${assignedRole} role.`,
+      );
       await onSent();
     } catch (cause) {
       setError(messageFrom(cause));
@@ -485,6 +496,24 @@ function InviteMemberForm({
           type="email"
           value={email}
         />
+      </label>
+      <label className="field">
+        <span>Organization role</span>
+        <select
+          disabled={busy}
+          name="invite-role"
+          onChange={(event) =>
+            setRole(event.target.value as OrganizationInvitationRole)
+          }
+          value={role}
+        >
+          {assignableRoles.map((assignableRole) => (
+            <option key={assignableRole} value={assignableRole}>
+              {formatRole(assignableRole)}
+            </option>
+          ))}
+        </select>
+        <small>{roleDescription(role)}</small>
       </label>
       {error && <div className="errorBanner compactBanner">{error}</div>}
       {notice && <div className="successBanner compactBanner">{notice}</div>}
@@ -545,7 +574,10 @@ function PendingInvitations({
           <div key={invitation.id}>
             <span>
               <strong>{invitation.email}</strong>
-              <small>Expires {formatDate(invitation.expiresAt)}</small>
+              <small>
+                {formatRole(invitation.role)} · Expires{" "}
+                {formatDate(invitation.expiresAt)}
+              </small>
             </span>
             <button
               disabled={busy}
@@ -565,6 +597,16 @@ function formatDate(value: Date) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
     new Date(value),
   );
+}
+
+function formatRole(role: string) {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+function roleDescription(role: OrganizationInvitationRole) {
+  if (role === "owner") return "Full access, including ownership controls.";
+  if (role === "admin") return "Can manage people, groups, and settings.";
+  return "Standard access to the organization workspace.";
 }
 
 function messageFrom(cause: unknown) {

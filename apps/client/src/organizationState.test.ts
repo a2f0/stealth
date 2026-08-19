@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  assignableOrganizationRoles,
   canLeaveOrganization,
   canManageOrganization,
   createOrganizationSlug,
@@ -37,6 +38,16 @@ describe("organization state", () => {
     expect(canManageOrganization("owner")).toBe(true);
     expect(canManageOrganization("admin,member")).toBe(true);
     expect(canManageOrganization("member")).toBe(false);
+  });
+
+  it("only lets owners assign the owner role in an invitation", () => {
+    expect(assignableOrganizationRoles("owner")).toEqual([
+      "member",
+      "admin",
+      "owner",
+    ]);
+    expect(assignableOrganizationRoles("admin")).toEqual(["member", "admin"]);
+    expect(assignableOrganizationRoles("member")).toEqual([]);
   });
 
   it("lets members leave while preserving an owner and fallback workspace", () => {

@@ -114,6 +114,7 @@ function authDatabaseHooks(env: Bindings) {
 function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
   return organization({
     allowUserToCreateOrganization: true,
+    cancelPendingInvitationsOnReInvite: true,
     disableOrganizationDeletion: true,
     invitationExpiresIn: 60 * 60 * 48,
     organizationHooks: {
@@ -144,6 +145,7 @@ function queueInvitationEmail(
     id: string;
     inviter: { user: { email: string; name: string } };
     organization: { name: string };
+    role: string;
   },
 ) {
   const invitationURL = new URL("/invite", env.CORS_ORIGIN);
@@ -155,7 +157,7 @@ function queueInvitationEmail(
       text: [
         "Hi,",
         "",
-        `${data.inviter.user.name} (${data.inviter.user.email}) invited you to join ${data.organization.name} on Stealth.`,
+        `${data.inviter.user.name} (${data.inviter.user.email}) invited you to join ${data.organization.name} on Stealth with the ${data.role} role.`,
         "",
         "Accept the invitation:",
         invitationURL.toString(),
