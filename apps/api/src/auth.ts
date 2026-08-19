@@ -19,10 +19,7 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
     },
     baseURL: env.BETTER_AUTH_URL,
     database: env.DB,
-    databaseHooks: {
-      session: { create: { before: activateDefaultOrganization } },
-      user: { create: { after: provisionDefaultOrganization } },
-    },
+    databaseHooks: authDatabaseHooks(env),
     emailAndPassword: {
       autoSignIn: false,
       customSyntheticUser: ({ coreFields, additionalFields, id }) => ({
@@ -102,6 +99,18 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
   });
 }
 
+function authDatabaseHooks(env: Bindings) {
+  return {
+    session: { create: { before: activateDefaultOrganization } },
+    user: {
+      create: {
+        after: (user: User, context: GenericEndpointContext | null) =>
+          provisionDefaultOrganization(user, context, env.DB),
+      },
+    },
+  };
+}
+
 function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
   return organization({
     allowUserToCreateOrganization: true,
@@ -110,6 +119,7 @@ function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
     organizationHooks: {
       afterCreateOrganization: async ({ organization, user }) => {
         await updateDefaultOrganization(env.DB, user.id, organization.id);
+        await createDefaultFinanceGroup(env.DB, organization.id, user.id);
       },
       afterAcceptInvitation: async ({ organization, user }) => {
         await updateDefaultOrganization(env.DB, user.id, organization.id);
@@ -117,6 +127,11 @@ function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
     },
     sendInvitationEmail: async (data) => {
       queueInvitationEmail(env, waitUntil, data);
+    },
+    teams: {
+      allowRemovingAllTeams: true,
+      enabled: true,
+      maximumTeams: 50,
     },
   });
 }
@@ -155,6 +170,7 @@ function queueInvitationEmail(
 async function provisionDefaultOrganization(
   user: User,
   context: GenericEndpointContext | null,
+  database: D1Database,
 ) {
   if (!context) {
     throw new Error(
@@ -190,6 +206,7 @@ async function provisionDefaultOrganization(
       update: { defaultOrganizationId: organizationRecord.id },
       where: [{ field: "id", value: user.id }],
     });
+    await createDefaultFinanceGroup(database, organizationRecord.id, user.id);
   } catch (error) {
     await adapter.delete({
       model: "organization",
@@ -197,6 +214,50 @@ async function provisionDefaultOrganization(
     });
     throw error;
   }
+}
+
+async function createDefaultFinanceGroup(
+  database: D1Database,
+  organizationId: string,
+  userId: string,
+) {
+  const teamId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await runStatement(
+    database,
+    `INSERT INTO "team"
+     ("id", "name", "organizationId", "memberCount", "createdAt", "updatedAt")
+     VALUES (?, 'Finance', ?, 1, ?, ?)`,
+    [teamId, organizationId, now, now],
+  );
+  await runStatement(
+    database,
+    `INSERT INTO "teamMember"
+     ("id", "teamId", "userId", "membershipKey", "createdAt")
+     VALUES (?, ?, ?, NULL, ?)`,
+    [crypto.randomUUID(), teamId, userId, now],
+  );
+  await runStatement(
+    database,
+    `INSERT INTO "organization_group_capability"
+     ("organization_id", "team_id", "capability") VALUES (?, ?, 'finance')`,
+    [organizationId, teamId],
+  );
+}
+
+async function runStatement(
+  database: D1Database,
+  query: string,
+  values: string[],
+) {
+  const statement = database.prepare(query);
+  if (typeof statement.bind === "function") {
+    await statement.bind(...values).run();
+    return;
+  }
+  await (
+    statement as unknown as { run: (...bindings: string[]) => unknown }
+  ).run(...values);
 }
 
 async function activateDefaultOrganization(

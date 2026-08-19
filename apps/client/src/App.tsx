@@ -20,6 +20,7 @@ import {
   resolveActiveOrganizationId,
   type WorkspaceOrganization,
 } from "./organizationState";
+import { useOrganizationAccess } from "./useOrganizationAccess";
 import { hasRole, WorkspaceShell, type WorkspaceUser } from "./WorkspaceShell";
 
 export function App() {
@@ -29,6 +30,10 @@ export function App() {
   const isResetPage = pathname === "/reset-password";
   const verification = verificationFeedback();
   const workspace = useWorkspaceOrganizations(session, () => refetch());
+  const access = useOrganizationAccess(
+    session?.user.id,
+    workspace.activeOrganizationId,
+  );
   const accounts = useAccountSessions(session, () => refetch());
 
   const navigate = (nextPathname: string) => {
@@ -78,6 +83,7 @@ export function App() {
   return (
     <AuthenticatedWorkspace
       accounts={accounts}
+      access={access}
       navigate={navigate}
       pathname={pathname}
       session={session}
@@ -161,6 +167,7 @@ interface AuthenticatedSession extends OrganizationSession {
 }
 
 function AuthenticatedWorkspace({
+  access,
   accounts,
   navigate,
   pathname,
@@ -168,6 +175,7 @@ function AuthenticatedWorkspace({
   verificationNotice,
   workspace,
 }: {
+  access: ReturnType<typeof useOrganizationAccess>;
   accounts: ReturnType<typeof useAccountSessions>;
   navigate: (pathname: string) => void;
   pathname: string;
@@ -180,6 +188,10 @@ function AuthenticatedWorkspace({
     !hasRole(session.user.role, "admin")
   ) {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
+  }
+  if (pathname === "/finance" && access.isPending) return <LoadingScreen />;
+  if (pathname === "/finance" && !access.can("finance")) {
+    return <FeatureAccessDenied onNavigate={() => navigate("/")} />;
   }
   const library = (
     <Library
@@ -201,6 +213,7 @@ function AuthenticatedWorkspace({
       activePage={activePageFor(pathname)}
       activeOrganizationId={workspace.activeOrganizationId}
       activeSessionToken={session.session.token}
+      canAccessFinance={access.can("finance")}
       contentKey={contentKey}
       onAccountChange={accounts.switchAccount}
       onAddAccount={addAccount}
@@ -218,6 +231,7 @@ function AuthenticatedWorkspace({
         navigate,
         workspace.refresh,
         addAccount,
+        access.refresh,
       )}
     </WorkspaceShell>
   );
@@ -313,6 +327,7 @@ function contentForPath(
   navigate: (pathname: string) => void,
   refreshWorkspace: () => Promise<void>,
   addAccount: () => void,
+  refreshAccess: () => Promise<void>,
 ) {
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return <Audits onNavigate={navigate} pathname={pathname} />;
@@ -321,7 +336,12 @@ function contentForPath(
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
   if (pathname === "/organization") {
-    return <OrganizationSettings onLeft={refreshWorkspace} />;
+    return (
+      <OrganizationSettings
+        onAccessChanged={refreshAccess}
+        onLeft={refreshWorkspace}
+      />
+    );
   }
   if (pathname === "/invite") {
     return (
@@ -356,6 +376,17 @@ function AdminAccessDenied({ onNavigate }: { onNavigate: () => void }) {
   return (
     <div className="fatalState">
       <p>Administrator access is required.</p>
+      <button onClick={onNavigate} type="button">
+        Return to your library
+      </button>
+    </div>
+  );
+}
+
+function FeatureAccessDenied({ onNavigate }: { onNavigate: () => void }) {
+  return (
+    <div className="fatalState">
+      <p>Finance group membership is required.</p>
       <button onClick={onNavigate} type="button">
         Return to your library
       </button>

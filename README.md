@@ -75,6 +75,12 @@ rename their organization at `/organization`, and admins can inspect all
 organizations on the `/admin` page. The API independently enforces the admin
 role for administrative data.
 
+Organization owners and organization admins can manage groups and group
+members at `/organization`. Groups use Better Auth teams underneath and can
+grant application capabilities. Every organization starts with a Finance group
+containing its initial owner; Finance navigation and every `/api/finance`
+request require membership in a group with the Finance capability.
+
 Authentication needs a strong `BETTER_AUTH_SECRET` in the ignored
 `.secrets/root.env`. Production password reset additionally requires Cloudflare
 Email Sending to be enabled for `auth.tearleads.com`, with
