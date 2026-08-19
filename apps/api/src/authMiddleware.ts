@@ -31,19 +31,51 @@ export const requireAuth = createMiddleware<AuthEnv>(async (context, next) => {
 
 export const requireOrganization = createMiddleware<AuthEnv>(
   async (context, next) => {
-    const organizationId =
-      context.get("authSession").session.activeOrganizationId ??
-      context.get("authSession").user.defaultOrganizationId;
-    if (!organizationId) {
+    const session = context.get("authSession");
+    const candidates = organizationCandidates(
+      session.session.activeOrganizationId,
+      session.user.defaultOrganizationId,
+    );
+    if (candidates.length === 0) {
       return context.json(
         { error: "A default organization is required." },
         409,
       );
     }
+    const placeholders = candidates.map(() => "?").join(", ");
+    const memberships = await context.env.DB.prepare(
+      `SELECT "organizationId"
+       FROM "member"
+       WHERE "userId" = ? AND "organizationId" IN (${placeholders})`,
+    )
+      .bind(session.user.id, ...candidates)
+      .all<{ organizationId: string }>();
+    const membershipIds = new Set(
+      memberships.results.map(({ organizationId }) => organizationId),
+    );
+    const organizationId = candidates.find((candidate) =>
+      membershipIds.has(candidate),
+    );
+    if (!organizationId) {
+      return context.json({ error: "Organization membership required." }, 403);
+    }
     context.set("organizationId", organizationId);
     return next();
   },
 );
+
+function organizationCandidates(
+  activeOrganizationId: string | null | undefined,
+  defaultOrganizationId: string | null | undefined,
+) {
+  const candidates: string[] = [];
+  for (const organizationId of [activeOrganizationId, defaultOrganizationId]) {
+    if (organizationId && !candidates.includes(organizationId)) {
+      candidates.push(organizationId);
+    }
+  }
+  return candidates;
+}
 
 export function requireRole(role: "admin" | "user") {
   return createMiddleware<AuthEnv>(async (context, next) => {
