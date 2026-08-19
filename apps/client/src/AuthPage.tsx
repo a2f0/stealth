@@ -2,13 +2,14 @@ import { type FormEvent, useState } from "react";
 import { authClient } from "./authClient";
 
 type AuthMode = "forgot" | "reset" | "sign-in" | "sign-up";
+export type AuthenticationAction = "sign-in" | "sign-up";
 type AuthVariant = "add-account" | "default";
 
 interface AuthPageProps {
   initialError?: string | undefined;
   initialMode?: AuthMode;
   initialNotice?: string | undefined;
-  onAuthenticated: () => Promise<void>;
+  onAuthenticated: (action: AuthenticationAction) => Promise<void>;
   onCancel?: (() => void) | undefined;
   variant?: AuthVariant;
 }
@@ -180,7 +181,7 @@ interface AuthActionInput {
   email: string;
   mode: AuthMode;
   name: string;
-  onAuthenticated: () => Promise<void>;
+  onAuthenticated: (action: AuthenticationAction) => Promise<void>;
   password: string;
   resetToken: string | null;
 }
@@ -208,7 +209,7 @@ async function performAuthAction(
       password: input.password,
     });
     throwForAuthError(result.error);
-    await input.onAuthenticated();
+    await input.onAuthenticated("sign-in");
     return {};
   }
 
@@ -220,10 +221,15 @@ async function performAuthAction(
       password: input.password,
     });
     throwForAuthError(result.error);
+    const signInResult = await authClient.signIn.email({
+      email: input.email,
+      password: input.password,
+    });
+    throwForAuthError(signInResult.error);
+    await input.onAuthenticated("sign-up");
     return {
-      nextMode: "sign-in" as const,
       notice:
-        "Account created. Check your inbox to verify your email, then sign in.",
+        "Account created. Check your inbox when you’re ready to verify your email.",
     };
   }
 

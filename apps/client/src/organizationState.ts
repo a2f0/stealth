@@ -3,6 +3,20 @@ export interface WorkspaceOrganization {
   name: string;
 }
 
+export function createOrganizationSlug(name: string, suffix: string) {
+  const base = name
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 48);
+  const safeSuffix = suffix
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 8);
+  return `${base || "organization"}-${safeSuffix}`;
+}
+
 export function resolveActiveOrganizationId(
   activeOrganizationId: string | null | undefined,
   defaultOrganizationId: string | null | undefined,
@@ -27,10 +41,28 @@ export function resolveActiveOrganizationId(
 }
 
 export function canManageOrganization(role: string | null | undefined) {
+  return hasOrganizationRole(role, "owner", "admin");
+}
+
+export function canLeaveOrganization(
+  role: string | null | undefined,
+  memberRoles: string[],
+  hasAnotherOrganization: boolean,
+) {
+  if (!hasAnotherOrganization) return false;
+  if (!hasOrganizationRole(role, "owner")) return true;
   return (
-    role
-      ?.split(",")
-      .some((value) => value.trim() === "owner" || value.trim() === "admin") ??
+    memberRoles.filter((memberRole) => hasOrganizationRole(memberRole, "owner"))
+      .length > 1
+  );
+}
+
+function hasOrganizationRole(
+  role: string | null | undefined,
+  ...expectedRoles: string[]
+) {
+  return (
+    role?.split(",").some((value) => expectedRoles.includes(value.trim())) ??
     false
   );
 }

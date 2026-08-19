@@ -104,15 +104,17 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
 
 function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
   return organization({
-    allowUserToCreateOrganization: false,
+    allowUserToCreateOrganization: true,
     disableOrganizationDeletion: true,
     invitationExpiresIn: 60 * 60 * 48,
     organizationHooks: {
+      afterCreateOrganization: async ({ organization, user }) => {
+        await updateDefaultOrganization(env.DB, user.id, organization.id);
+      },
       afterAcceptInvitation: async ({ organization, user }) => {
         await updateDefaultOrganization(env.DB, user.id, organization.id);
       },
     },
-    organizationLimit: 1,
     sendInvitationEmail: async (data) => {
       queueInvitationEmail(env, waitUntil, data);
     },

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   accountReturnPath,
   addAccountPath,
+  invitationIdForPath,
   workspaceContentKey,
 } from "./accountNavigation";
 
@@ -25,6 +26,21 @@ describe("account navigation", () => {
       accountReturnPath("?returnTo=https%3A%2F%2Fevil.example", origin),
     ).toBe("/");
     expect(accountReturnPath("?returnTo=%2F%2Fevil.example", origin)).toBe("/");
+  });
+
+  it("finds an invitation in a safe return path", () => {
+    expect(invitationIdForPath("/invite?id=invitation-id", origin)).toBe(
+      "invitation-id",
+    );
+    expect(invitationIdForPath("/organization?id=invitation-id", origin)).toBe(
+      undefined,
+    );
+    expect(
+      invitationIdForPath(
+        "https://evil.example/invite?id=invitation-id",
+        origin,
+      ),
+    ).toBe(undefined);
   });
 
   it("reloads invitations when the active account changes", () => {

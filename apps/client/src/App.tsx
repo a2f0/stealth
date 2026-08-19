@@ -1,10 +1,11 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
-import { AuthPage } from "./AuthPage";
+import { type AuthenticationAction, AuthPage } from "./AuthPage";
 import {
   accountReturnPath,
   addAccountPath,
+  invitationIdForPath,
   workspaceContentKey,
 } from "./accountNavigation";
 import { useAccountSessions } from "./accountSessions";
@@ -15,6 +16,7 @@ import { Library } from "./Library";
 import { OrganizationInvitation } from "./OrganizationInvitation";
 import { OrganizationSettings } from "./OrganizationSettings";
 import {
+  createOrganizationSlug,
   resolveActiveOrganizationId,
   type WorkspaceOrganization,
 } from "./organizationState";
@@ -119,9 +121,31 @@ function AuthenticationRoute({
           ? "Sign in to keep another account available on this browser."
           : invitationNotice
       }
-      onAuthenticated={async () => {
+      onAuthenticated={async (action: AuthenticationAction) => {
+        const invitationId =
+          action === "sign-up"
+            ? invitationIdForPath(
+                addingAccount ? returnTo : currentLocation(),
+                window.location.origin,
+              )
+            : undefined;
+        if (invitationId) {
+          const result = await authClient.organization.acceptInvitation({
+            invitationId,
+          });
+          if (result.error) {
+            await refetchSession();
+            throw new Error(
+              result.error.message ?? "Could not accept this invitation.",
+            );
+          }
+        }
         await refetchSession();
-        if (addingAccount) navigate(returnTo);
+        if (invitationId) {
+          navigate("/organization");
+        } else if (addingAccount) {
+          navigate(returnTo);
+        }
       }}
       onCancel={
         sessionPresent && addingAccount ? () => navigate(returnTo) : undefined
@@ -181,6 +205,7 @@ function AuthenticatedWorkspace({
       onAccountChange={accounts.switchAccount}
       onAddAccount={addAccount}
       onNavigate={navigate}
+      onOrganizationCreate={workspace.createOrganization}
       onOrganizationChange={workspace.switchOrganization}
       onRefreshAccounts={accounts.refresh}
       onSignOut={accounts.signOutActiveAccount}
@@ -212,7 +237,10 @@ async function resendVerification(email: string) {
 
 interface OrganizationSession {
   session: { activeOrganizationId?: string | null | undefined };
-  user: { id: string };
+  user: {
+    defaultOrganizationId?: string | null | undefined;
+    id: string;
+  };
 }
 
 function useWorkspaceOrganizations(
@@ -241,9 +269,22 @@ function useWorkspaceOrganizations(
   }, [loadOrganizations, signedInUserId]);
   const activeOrganizationId = resolveActiveOrganizationId(
     session?.session.activeOrganizationId,
-    undefined,
+    session?.user.defaultOrganizationId,
     organizations,
   );
+  const createOrganization = async (name: string) => {
+    const result = await authClient.organization.create({
+      name,
+      slug: createOrganizationSlug(name, crypto.randomUUID()),
+    });
+    if (result.error) {
+      throw new Error(
+        result.error.message ?? "Could not create this organization.",
+      );
+    }
+    await loadOrganizations();
+    await refetchSession();
+  };
   const switchOrganization = async (organizationId: string) => {
     const result = await authClient.organization.setActive({ organizationId });
     if (result.error) {
@@ -257,7 +298,13 @@ function useWorkspaceOrganizations(
     await loadOrganizations();
     await refetchSession();
   };
-  return { activeOrganizationId, organizations, refresh, switchOrganization };
+  return {
+    activeOrganizationId,
+    createOrganization,
+    organizations,
+    refresh,
+    switchOrganization,
+  };
 }
 
 function contentForPath(
@@ -273,7 +320,9 @@ function contentForPath(
   if (pathname === "/finance") return <Finance />;
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
-  if (pathname === "/organization") return <OrganizationSettings />;
+  if (pathname === "/organization") {
+    return <OrganizationSettings onLeft={refreshWorkspace} />;
+  }
   if (pathname === "/invite") {
     return (
       <OrganizationInvitation
