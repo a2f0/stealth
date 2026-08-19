@@ -1,6 +1,9 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { authClient } from "./authClient";
-import { canManageOrganization } from "./organizationState";
+import {
+  canLeaveOrganization,
+  canManageOrganization,
+} from "./organizationState";
 
 interface OrganizationRecord {
   createdAt: Date;
@@ -23,13 +26,18 @@ interface OrganizationInvitationRecord {
 }
 
 interface OrganizationSettingsData {
+  fallbackOrganization?: OrganizationRecord | undefined;
   invitations: OrganizationInvitationRecord[];
   memberRole: string;
   members: OrganizationMemberRecord[];
   organization: OrganizationRecord;
 }
 
-export function OrganizationSettings() {
+export function OrganizationSettings({
+  onLeft,
+}: {
+  onLeft: () => Promise<void>;
+}) {
   const { data: session } = authClient.useSession();
   const state = useOrganizationSettingsData(
     session?.session.activeOrganizationId,
@@ -90,11 +98,49 @@ export function OrganizationSettings() {
       name={state.name}
       notice={state.notice}
       onCancel={cancelInvitation}
+      onLeave={() => leaveOrganization(state, onLeft)}
       onName={state.setName}
       onReload={state.load}
       onSave={save}
     />
   );
+}
+
+async function leaveOrganization(
+  state: ReturnType<typeof useOrganizationSettingsData>,
+  onLeft: () => Promise<void>,
+) {
+  const data = state.data;
+  const organization = data?.organization;
+  const canLeave = canLeaveOrganization(
+    data?.memberRole,
+    data?.members.map(({ role }) => role) ?? [],
+    Boolean(data?.fallbackOrganization),
+  );
+  if (!organization || !canLeave) return;
+  if (
+    !window.confirm(
+      `Leave ${organization.name}? You’ll lose access to its files and workspace data.`,
+    )
+  ) {
+    return;
+  }
+  state.startAction();
+  try {
+    const result = await authClient.organization.leave({
+      organizationId: organization.id,
+    });
+    if (result.error) {
+      throw new Error(
+        result.error.message ?? "Could not leave this organization.",
+      );
+    }
+    await onLeft();
+  } catch (cause) {
+    state.setError(messageFrom(cause));
+  } finally {
+    state.setBusy(false);
+  }
 }
 
 function useOrganizationSettingsData(activeOrganizationId?: string | null) {
@@ -167,6 +213,9 @@ async function fetchOrganizationSettings(activeOrganizationId?: string | null) {
     );
   }
   return {
+    fallbackOrganization: organizationResult.data?.find(
+      ({ id }) => id !== organization.id,
+    ),
     invitations: (
       (invitationsResult.data ?? []) as OrganizationInvitationRecord[]
     ).filter(({ status }) => status === "pending"),
@@ -184,6 +233,7 @@ function OrganizationSettingsView({
   name,
   notice,
   onCancel,
+  onLeave,
   onName,
   onReload,
   onSave,
@@ -195,6 +245,7 @@ function OrganizationSettingsView({
   name: string;
   notice: string | undefined;
   onCancel: (invitationId: string) => Promise<void>;
+  onLeave: () => Promise<void>;
   onName: (name: string) => void;
   onReload: () => Promise<void>;
   onSave: (event: FormEvent) => Promise<void>;
@@ -238,6 +289,16 @@ function OrganizationSettingsView({
                 onCancel={onCancel}
               />
             )}
+            <LeaveOrganizationCard
+              busy={busy}
+              canLeave={canLeaveOrganization(
+                data.memberRole,
+                data.members.map(({ role }) => role),
+                Boolean(data.fallbackOrganization),
+              )}
+              data={data}
+              onLeave={onLeave}
+            />
           </div>
         ) : !error ? (
           <div className="emptyState compactEmptyState">
@@ -247,6 +308,40 @@ function OrganizationSettingsView({
         ) : null}
       </section>
     </>
+  );
+}
+
+function LeaveOrganizationCard({
+  busy,
+  canLeave,
+  data,
+  onLeave,
+}: {
+  busy: boolean;
+  canLeave: boolean;
+  data: OrganizationSettingsData;
+  onLeave: () => Promise<void>;
+}) {
+  const restriction = !data.fallbackOrganization
+    ? "Join another organization before leaving this one."
+    : !canLeave
+      ? "Assign another owner before leaving this organization."
+      : "Your account and your other organizations will remain available.";
+  return (
+    <section className="settingsCard leaveOrganizationCard">
+      <div>
+        <h2>Leave organization</h2>
+        <p>{restriction}</p>
+      </div>
+      <button
+        className="dangerButton settingsSubmit"
+        disabled={busy || !canLeave}
+        onClick={() => void onLeave()}
+        type="button"
+      >
+        {busy ? "Leaving…" : "Leave organization"}
+      </button>
+    </section>
   );
 }
 

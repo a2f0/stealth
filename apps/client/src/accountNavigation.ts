@@ -15,6 +15,18 @@ export function accountReturnPath(search: string, origin: string) {
   }
 }
 
+export function invitationIdForPath(path: string, origin: string) {
+  try {
+    const target = new URL(path, origin);
+    if (target.origin !== origin || target.pathname !== "/invite") {
+      return undefined;
+    }
+    return target.searchParams.get("id")?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function workspaceContentKey(
   pathname: string,
   userId: string,

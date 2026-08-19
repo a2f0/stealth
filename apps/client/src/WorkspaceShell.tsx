@@ -35,6 +35,7 @@ interface WorkspaceShellProps {
   onAddAccount: () => void;
   onNavigate: (pathname: string) => void;
   onOrganizationChange: (organizationId: string) => Promise<void>;
+  onOrganizationCreate: (name: string) => Promise<void>;
   onRefreshAccounts: () => Promise<void>;
   onSignOut: () => Promise<void>;
   organizations: WorkspaceOrganization[];
@@ -53,6 +54,7 @@ export function WorkspaceShell({
   onAddAccount,
   onNavigate,
   onOrganizationChange,
+  onOrganizationCreate,
   onRefreshAccounts,
   onSignOut,
   organizations,
@@ -77,6 +79,7 @@ export function WorkspaceShell({
         <OrganizationSwitcher
           activeOrganizationId={activeOrganizationId}
           onOrganizationChange={onOrganizationChange}
+          onOrganizationCreate={onOrganizationCreate}
           organizations={organizations}
         />
         <nav aria-label="Workspace">
@@ -167,10 +170,12 @@ export function WorkspaceShell({
 function OrganizationSwitcher({
   activeOrganizationId,
   onOrganizationChange,
+  onOrganizationCreate,
   organizations,
 }: {
   activeOrganizationId: string | undefined;
   onOrganizationChange: (organizationId: string) => Promise<void>;
+  onOrganizationCreate: (name: string) => Promise<void>;
   organizations: WorkspaceOrganization[];
 }) {
   const [busy, setBusy] = useState(false);
@@ -178,6 +183,20 @@ function OrganizationSwitcher({
   if (organizations.length === 0 || !activeOrganizationId) return null;
 
   async function select(organizationId: string) {
+    if (organizationId === "create") {
+      const name = window.prompt("Organization name")?.trim();
+      if (!name) return;
+      setBusy(true);
+      setError(undefined);
+      try {
+        await onOrganizationCreate(name);
+      } catch (cause) {
+        setError(messageFrom(cause));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (organizationId === activeOrganizationId) return;
     setBusy(true);
     setError(undefined);
@@ -205,6 +224,7 @@ function OrganizationSwitcher({
               {organization.name}
             </option>
           ))}
+          <option value="create">Create organization…</option>
         </select>
       </label>
       {error && <small role="alert">{error}</small>}

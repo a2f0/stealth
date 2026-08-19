@@ -311,7 +311,7 @@ describe("password authentication", () => {
     ).toEqual({ name: "Example Person's Organization" });
   });
 
-  it("invites a user into an organization and activates it on acceptance", async () => {
+  it("invites a user, accepts after sign-up, and safely leaves", async () => {
     const fixture = await createFixture();
     await post(fixture.auth, "/sign-up/email", {
       email,
@@ -359,16 +359,18 @@ describe("password authentication", () => {
       `${origin}/invite?id=${invitation.id}`,
     );
 
-    await post(fixture.auth, "/sign-up/email", {
+    const inviteeSignUp = await post(fixture.auth, "/sign-up/email", {
       email: invitedEmail,
       name: "Invited Person",
       password: originalPassword,
     });
+    expect(inviteeSignUp.status).toBe(200);
     const inviteeSignIn = await post(fixture.auth, "/sign-in/email", {
       email: invitedEmail,
       password: originalPassword,
     });
     const inviteeCookie = inviteeSignIn.headers.get("set-cookie");
+    expect(inviteeCookie).toContain("better-auth.session_token=");
     const accepted = await post(
       fixture.auth,
       "/organization/accept-invitation",
@@ -430,6 +432,112 @@ describe("password authentication", () => {
     expect(await switchedSession.json()).toMatchObject({
       session: { activeOrganizationId: personalOrganization.id },
       user: { defaultOrganizationId: organization.id },
+    });
+
+    const secondarySignIn = await post(fixture.auth, "/sign-in/email", {
+      email: invitedEmail,
+      password: originalPassword,
+    });
+    const secondaryCookie = secondarySignIn.headers.get("set-cookie");
+    expect(
+      await (await get(fixture.auth, "/get-session", secondaryCookie)).json(),
+    ).toMatchObject({
+      session: { activeOrganizationId: organization.id },
+    });
+    expect(
+      (
+        await post(
+          fixture.auth,
+          "/organization/set-active",
+          { organizationId: organization.id },
+          inviteeCookie,
+        )
+      ).status,
+    ).toBe(200);
+
+    const leave = await post(
+      fixture.auth,
+      "/organization/leave",
+      { organizationId: organization.id },
+      inviteeCookie,
+    );
+    expect(leave.status).toBe(200);
+    expect(
+      fixture.database
+        .query(
+          `SELECT user.defaultOrganizationId,
+                  (SELECT COUNT(*) FROM member
+                   WHERE member.userId = user.id) AS membershipCount
+           FROM user WHERE user.email = ?`,
+        )
+        .get(invitedEmail),
+    ).toEqual({
+      defaultOrganizationId: personalOrganization.id,
+      membershipCount: 1,
+    });
+    expect(
+      fixture.database
+        .query(
+          `SELECT session.activeOrganizationId
+           FROM session JOIN user ON user.id = session.userId
+           WHERE user.email = ?
+           ORDER BY session.activeOrganizationId`,
+        )
+        .all(invitedEmail),
+    ).toEqual([
+      { activeOrganizationId: null },
+      { activeOrganizationId: personalOrganization.id },
+    ]);
+    expect(
+      (
+        await post(
+          fixture.auth,
+          "/organization/set-active",
+          { organizationId: personalOrganization.id },
+          inviteeCookie,
+        )
+      ).status,
+    ).toBe(200);
+  });
+
+  it("lets a user create and activate another organization", async () => {
+    const fixture = await createFixture();
+    const signUp = await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+    });
+    expect(signUp.status).toBe(200);
+    const signIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const cookie = signIn.headers.get("set-cookie");
+    const created = await post(
+      fixture.auth,
+      "/organization/create",
+      { name: "Field Operations", slug: "field-operations-12345678" },
+      cookie,
+    );
+    expect(created.status).toBe(200);
+    const organization = (await created.json()) as { id: string };
+    expect(
+      fixture.database
+        .query(
+          `SELECT user.defaultOrganizationId,
+                  (SELECT COUNT(*) FROM member
+                   WHERE member.userId = user.id) AS membershipCount
+           FROM user WHERE user.email = ?`,
+        )
+        .get(email),
+    ).toEqual({
+      defaultOrganizationId: organization.id,
+      membershipCount: 2,
+    });
+    expect(
+      await (await get(fixture.auth, "/get-session", cookie)).json(),
+    ).toMatchObject({
+      session: { activeOrganizationId: organization.id },
     });
   });
 
@@ -493,6 +601,7 @@ async function createFixture() {
 
   await applyMigration(database, "0003_create_auth.sql");
   await applyMigration(database, "0004_create_organizations.sql");
+  await applyMigration(database, "0008_keep_organization_defaults_valid.sql");
 
   return { auth, database, messages, pending };
 }
