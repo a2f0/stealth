@@ -8,5 +8,9 @@ import { apiUrl } from "./config";
 
 export const authClient = createAuthClient({
   baseURL: apiUrl,
-  plugins: [adminClient(), multiSessionClient(), organizationClient()],
+  plugins: [
+    adminClient(),
+    multiSessionClient(),
+    organizationClient({ teams: { enabled: true } }),
+  ],
 });

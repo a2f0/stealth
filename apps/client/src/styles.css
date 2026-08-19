@@ -1388,6 +1388,117 @@ button:disabled {
   border-color: #9d5548;
 }
 
+.organizationGroupsCard {
+  gap: 18px;
+}
+
+.organizationGroupCreate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.organizationGroupCreate .primaryButton,
+.organizationGroupActions .primaryButton,
+.organizationGroupActions .dangerButton {
+  padding: 10px 13px;
+  font-size: 10px;
+}
+
+.organizationGroupList {
+  display: grid;
+  gap: 12px;
+}
+
+.organizationGroupEditor {
+  display: grid;
+  gap: 15px;
+  padding: 17px;
+  border: 1px solid #ddddd5;
+  border-radius: 11px;
+  background: #f5f4ee;
+}
+
+.organizationGroupHeading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 18px;
+}
+
+.organizationCapabilityToggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  color: #4f5048;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.organizationGroupMembers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 0;
+  border: 0;
+}
+
+.organizationGroupMembers legend {
+  margin-bottom: 8px;
+  color: #77776f;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.organizationGroupMembers label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #dfded6;
+  border-radius: 8px;
+  background: #faf9f5;
+  cursor: pointer;
+}
+
+.organizationGroupMembers span,
+.organizationGroupMembers strong,
+.organizationGroupMembers small {
+  display: block;
+  min-width: 0;
+}
+
+.organizationGroupMembers span {
+  overflow: hidden;
+}
+
+.organizationGroupMembers strong,
+.organizationGroupMembers small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.organizationGroupMembers strong {
+  margin-bottom: 2px;
+  font-size: 9px;
+}
+
+.organizationGroupMembers small {
+  color: #85857c;
+  font-size: 8px;
+}
+
+.organizationGroupActions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .invitationContent {
   max-width: 760px;
 }
@@ -2445,6 +2556,16 @@ button:disabled {
 
   .auditRequired {
     padding: 5px 0;
+  }
+
+  .organizationGroupCreate,
+  .organizationGroupHeading,
+  .organizationGroupMembers {
+    grid-template-columns: 1fr;
+  }
+
+  .organizationGroupCreate .primaryButton {
+    justify-self: start;
   }
 
   .financeConnectionList article {

@@ -38,6 +38,11 @@ describe("password authentication", () => {
       name: "Example Person's Organization",
       role: "owner",
     });
+    expect(financeGroupFor(fixture.database, organization.id)).toMatchObject({
+      capability: "finance",
+      memberCount: 1,
+      name: "Finance",
+    });
     const storedPassword = fixture.database
       .query(
         "SELECT password FROM account WHERE userId = (SELECT id FROM user WHERE email = ?)",
@@ -539,6 +544,11 @@ describe("password authentication", () => {
     ).toMatchObject({
       session: { activeOrganizationId: organization.id },
     });
+    expect(financeGroupFor(fixture.database, organization.id)).toMatchObject({
+      capability: "finance",
+      memberCount: 1,
+      name: "Finance",
+    });
   });
 
   it("backfills an organization for an existing user", async () => {
@@ -578,6 +588,19 @@ describe("password authentication", () => {
   });
 });
 
+function financeGroupFor(database: Database, organizationId: string) {
+  return database
+    .query(
+      `SELECT "team"."name", "team"."memberCount",
+              access."capability"
+       FROM "team"
+       JOIN organization_group_capability AS access
+         ON access.team_id = "team"."id"
+       WHERE "team"."organizationId" = ? AND access.capability = 'finance'`,
+    )
+    .get(organizationId);
+}
+
 async function createFixture() {
   const database = new Database(":memory:");
   const messages: EmailMessageBuilder[] = [];
@@ -602,6 +625,7 @@ async function createFixture() {
   await applyMigration(database, "0003_create_auth.sql");
   await applyMigration(database, "0004_create_organizations.sql");
   await applyMigration(database, "0008_keep_organization_defaults_valid.sql");
+  await applyMigration(database, "0010_create_organization_groups.sql");
 
   return { auth, database, messages, pending };
 }

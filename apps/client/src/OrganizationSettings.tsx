@@ -1,6 +1,14 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { authClient } from "./authClient";
 import {
+  type OrganizationGroupMember,
+  OrganizationGroups,
+} from "./OrganizationGroups";
+import {
+  getOrganizationGroups,
+  type OrganizationGroup,
+} from "./organizationGroupsApi";
+import {
   canLeaveOrganization,
   canManageOrganization,
 } from "./organizationState";
@@ -12,10 +20,10 @@ interface OrganizationRecord {
   slug: string;
 }
 
-interface OrganizationMemberRecord {
+interface OrganizationMemberRecord extends OrganizationGroupMember {
   id: string;
   role: string;
-  user: { email: string; name: string };
+  user: { email: string; id: string; name: string };
 }
 
 interface OrganizationInvitationRecord {
@@ -27,6 +35,7 @@ interface OrganizationInvitationRecord {
 
 interface OrganizationSettingsData {
   fallbackOrganization?: OrganizationRecord | undefined;
+  groups: OrganizationGroup[];
   invitations: OrganizationInvitationRecord[];
   memberRole: string;
   members: OrganizationMemberRecord[];
@@ -34,8 +43,10 @@ interface OrganizationSettingsData {
 }
 
 export function OrganizationSettings({
+  onAccessChanged,
   onLeft,
 }: {
+  onAccessChanged: () => Promise<void>;
   onLeft: () => Promise<void>;
 }) {
   const { data: session } = authClient.useSession();
@@ -44,6 +55,10 @@ export function OrganizationSettings({
   );
   const organization = state.data?.organization;
   const canManage = canManageOrganization(state.data?.memberRole);
+
+  async function groupsChanged() {
+    await Promise.all([state.load(), onAccessChanged()]);
+  }
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -98,6 +113,7 @@ export function OrganizationSettings({
       name={state.name}
       notice={state.notice}
       onCancel={cancelInvitation}
+      onGroupsChanged={groupsChanged}
       onLeave={() => leaveOrganization(state, onLeft)}
       onName={state.setName}
       onReload={state.load}
@@ -212,14 +228,19 @@ async function fetchOrganizationSettings(activeOrganizationId?: string | null) {
       requestError.message ?? "Could not load organization members.",
     );
   }
+  const memberRole = roleResult.data?.role ?? "member";
+  const groups = canManageOrganization(memberRole)
+    ? (await getOrganizationGroups()).groups
+    : [];
   return {
     fallbackOrganization: organizationResult.data?.find(
       ({ id }) => id !== organization.id,
     ),
+    groups,
     invitations: (
       (invitationsResult.data ?? []) as OrganizationInvitationRecord[]
     ).filter(({ status }) => status === "pending"),
-    memberRole: roleResult.data?.role ?? "member",
+    memberRole,
     members: (membersResult.data?.members ?? []) as OrganizationMemberRecord[],
     organization,
   };
@@ -233,6 +254,7 @@ function OrganizationSettingsView({
   name,
   notice,
   onCancel,
+  onGroupsChanged,
   onLeave,
   onName,
   onReload,
@@ -245,6 +267,7 @@ function OrganizationSettingsView({
   name: string;
   notice: string | undefined;
   onCancel: (invitationId: string) => Promise<void>;
+  onGroupsChanged: () => Promise<void>;
   onLeave: () => Promise<void>;
   onName: (name: string) => void;
   onReload: () => Promise<void>;
@@ -279,6 +302,13 @@ function OrganizationSettingsView({
               <InviteMemberForm
                 onSent={onReload}
                 organizationId={data.organization.id}
+              />
+            )}
+            {canManage && (
+              <OrganizationGroups
+                groups={data.groups}
+                members={data.members}
+                onChanged={onGroupsChanged}
               />
             )}
             <OrganizationMembers members={data.members} />

@@ -29,6 +29,7 @@ interface WorkspaceShellProps {
     | "organization";
   activeOrganizationId: string | undefined;
   activeSessionToken: string;
+  canAccessFinance: boolean;
   children: ReactNode;
   contentKey: string | undefined;
   onAccountChange: (sessionToken: string) => Promise<void>;
@@ -48,6 +49,7 @@ export function WorkspaceShell({
   activePage,
   activeOrganizationId,
   activeSessionToken,
+  canAccessFinance,
   children,
   contentKey,
   onAccountChange,
@@ -97,13 +99,19 @@ export function WorkspaceShell({
           >
             <span className="navIcon">✓</span> Audits
           </a>
-          <a
-            className={activePage === "finance" ? "navItem active" : "navItem"}
-            href="/finance"
-            onClick={(event) => handleNavigation(event, "/finance", onNavigate)}
-          >
-            <span className="navIcon">$</span> Finance
-          </a>
+          {canAccessFinance && (
+            <a
+              className={
+                activePage === "finance" ? "navItem active" : "navItem"
+              }
+              href="/finance"
+              onClick={(event) =>
+                handleNavigation(event, "/finance", onNavigate)
+              }
+            >
+              <span className="navIcon">$</span> Finance
+            </a>
+          )}
           <a
             className={
               activePage === "organization" ? "navItem active" : "navItem"
