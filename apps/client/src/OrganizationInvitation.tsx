@@ -14,10 +14,12 @@ export function OrganizationInvitation({
   invitationId,
   onAccepted,
   onNavigate,
+  onUseAnotherAccount,
 }: {
   invitationId: string | null;
   onAccepted: () => Promise<void>;
   onNavigate: () => void;
+  onUseAnotherAccount: () => void;
 }) {
   const [invitation, setInvitation] = useState<InvitationDetails>();
   const [accepted, setAccepted] = useState(false);
@@ -85,7 +87,12 @@ export function OrganizationInvitation({
         </div>
       </header>
       <section className="content invitationContent">
-        {error && <div className="errorBanner">{error}</div>}
+        {error && !isRecipientMismatch(error) && (
+          <div className="errorBanner">{error}</div>
+        )}
+        {error && isRecipientMismatch(error) && (
+          <WrongAccount onUseAnotherAccount={onUseAnotherAccount} />
+        )}
         {accepted && invitation ? (
           <div className="settingsCard invitationCard">
             <div>
@@ -133,6 +140,35 @@ export function OrganizationInvitation({
       </section>
     </>
   );
+}
+
+function WrongAccount({
+  onUseAnotherAccount,
+}: {
+  onUseAnotherAccount: () => void;
+}) {
+  return (
+    <div className="settingsCard invitationCard">
+      <div>
+        <h2>This invitation belongs to another account</h2>
+        <p>
+          Switch to the invited account from the account menu in the lower-left,
+          or sign in to another account. You’ll return to this invitation.
+        </p>
+      </div>
+      <button
+        className="primaryButton settingsSubmit"
+        onClick={onUseAnotherAccount}
+        type="button"
+      >
+        Sign in to another account
+      </button>
+    </div>
+  );
+}
+
+function isRecipientMismatch(message: string) {
+  return message.toLowerCase().includes("not the recipient");
 }
 
 function formatDate(value: Date) {
