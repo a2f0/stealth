@@ -2,6 +2,11 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
 import { AuthPage } from "./AuthPage";
+import {
+  accountReturnPath,
+  addAccountPath,
+  workspaceContentKey,
+} from "./accountNavigation";
 import { useAccountSessions } from "./accountSessions";
 import { authClient } from "./authClient";
 import { Finance } from "./Finance";
@@ -25,9 +30,13 @@ export function App() {
   const accounts = useAccountSessions(session, () => refetch());
 
   const navigate = (nextPathname: string) => {
-    if (nextPathname === pathname) return;
-    window.history.pushState({}, "", nextPathname);
-    setPathname(nextPathname);
+    const destination = new URL(nextPathname, window.location.origin);
+    if (destination.origin !== window.location.origin) return;
+    const nextLocation = `${destination.pathname}${destination.search}${destination.hash}`;
+    const currentLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextLocation === currentLocation) return;
+    window.history.pushState({}, "", nextLocation);
+    setPathname(destination.pathname);
   };
 
   useEffect(() => {
@@ -93,6 +102,10 @@ function AuthenticationRoute({
   sessionPresent: boolean;
   verification: ReturnType<typeof verificationFeedback>;
 }) {
+  const returnTo = accountReturnPath(
+    window.location.search,
+    window.location.origin,
+  );
   const invitationNotice =
     pathname === "/invite"
       ? "Sign in or create an account with the invited email address to continue."
@@ -108,10 +121,10 @@ function AuthenticationRoute({
       }
       onAuthenticated={async () => {
         await refetchSession();
-        if (addingAccount) navigate("/");
+        if (addingAccount) navigate(returnTo);
       }}
       onCancel={
-        sessionPresent && addingAccount ? () => navigate("/") : undefined
+        sessionPresent && addingAccount ? () => navigate(returnTo) : undefined
       }
       variant={addingAccount ? "add-account" : "default"}
     />
@@ -151,10 +164,12 @@ function AuthenticatedWorkspace({
       user={session.user}
     />
   );
-  const contentKey =
-    pathname === "/invite"
-      ? "organization-invitation"
-      : `${session.user.id}:${workspace.activeOrganizationId ?? ""}`;
+  const contentKey = workspaceContentKey(
+    pathname,
+    session.user.id,
+    workspace.activeOrganizationId,
+  );
+  const addAccount = () => navigate(addAccountPath(currentLocation()));
   return (
     <WorkspaceShell
       accountLoadError={accounts.loadError}
@@ -164,7 +179,7 @@ function AuthenticatedWorkspace({
       activeSessionToken={session.session.token}
       contentKey={contentKey}
       onAccountChange={accounts.switchAccount}
-      onAddAccount={() => navigate("/add-account")}
+      onAddAccount={addAccount}
       onNavigate={navigate}
       onOrganizationChange={workspace.switchOrganization}
       onRefreshAccounts={accounts.refresh}
@@ -172,7 +187,13 @@ function AuthenticatedWorkspace({
       organizations={workspace.organizations}
       user={session.user}
     >
-      {contentForPath(pathname, library, navigate, workspace.refresh)}
+      {contentForPath(
+        pathname,
+        library,
+        navigate,
+        workspace.refresh,
+        addAccount,
+      )}
     </WorkspaceShell>
   );
 }
@@ -244,6 +265,7 @@ function contentForPath(
   library: ReactNode,
   navigate: (pathname: string) => void,
   refreshWorkspace: () => Promise<void>,
+  addAccount: () => void,
 ) {
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return <Audits onNavigate={navigate} pathname={pathname} />;
@@ -258,10 +280,15 @@ function contentForPath(
         invitationId={new URLSearchParams(window.location.search).get("id")}
         onAccepted={refreshWorkspace}
         onNavigate={() => navigate("/organization")}
+        onUseAnotherAccount={addAccount}
       />
     );
   }
   return library;
+}
+
+function currentLocation() {
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
 
 function activePageFor(pathname: string) {
