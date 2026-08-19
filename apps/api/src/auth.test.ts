@@ -233,6 +233,128 @@ describe("password authentication", () => {
     ).toEqual({ name: "Example Person's Organization" });
   });
 
+  it("invites a user into an organization and activates it on acceptance", async () => {
+    const fixture = await createFixture();
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+    });
+    const ownerSignIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const ownerCookie = ownerSignIn.headers.get("set-cookie");
+    const organization = fixture.database
+      .query(
+        `SELECT organization.id, organization.name
+         FROM organization
+         JOIN user ON user.defaultOrganizationId = organization.id
+         WHERE user.email = ?`,
+      )
+      .get(email) as { id: string; name: string };
+    const invitedEmail = "invitee@example.com";
+
+    const invite = await post(
+      fixture.auth,
+      "/organization/invite-member",
+      {
+        email: invitedEmail,
+        organizationId: organization.id,
+        role: "member",
+      },
+      ownerCookie,
+    );
+    expect(invite.status).toBe(200);
+    const invitation = (await invite.json()) as { id: string };
+    await Promise.all(fixture.pending);
+    expect(
+      fixture.messages.find(({ subject }) => subject.startsWith("You're")),
+    ).toMatchObject({
+      subject: `You're invited to ${organization.name}`,
+      to: invitedEmail,
+    });
+    const invitationMessage = fixture.messages.find(({ subject }) =>
+      subject.startsWith("You're"),
+    );
+    expect(invitationMessage?.text).toContain(
+      `${origin}/invite?id=${invitation.id}`,
+    );
+
+    await post(fixture.auth, "/sign-up/email", {
+      email: invitedEmail,
+      name: "Invited Person",
+      password: originalPassword,
+    });
+    const inviteeSignIn = await post(fixture.auth, "/sign-in/email", {
+      email: invitedEmail,
+      password: originalPassword,
+    });
+    const inviteeCookie = inviteeSignIn.headers.get("set-cookie");
+    const accepted = await post(
+      fixture.auth,
+      "/organization/accept-invitation",
+      { invitationId: invitation.id },
+      inviteeCookie,
+    );
+    expect(accepted.status).toBe(200);
+
+    expect(
+      fixture.database
+        .query(
+          `SELECT COUNT(*) AS count
+           FROM member
+           JOIN user ON user.id = member.userId
+           WHERE user.email = ?`,
+        )
+        .get(invitedEmail),
+    ).toEqual({ count: 2 });
+    expect(
+      fixture.database
+        .query(
+          `SELECT user.defaultOrganizationId, invitation.status
+           FROM user JOIN invitation ON invitation.email = user.email
+           WHERE user.email = ?`,
+        )
+        .get(invitedEmail),
+    ).toEqual({
+      defaultOrganizationId: organization.id,
+      status: "accepted",
+    });
+    const session = await fixture.auth.handler(
+      new Request(`${baseURL}/api/auth/get-session`, {
+        headers: { cookie: inviteeCookie ?? "", origin },
+      }),
+    );
+    expect(await session.json()).toMatchObject({
+      session: { activeOrganizationId: organization.id },
+      user: { defaultOrganizationId: organization.id },
+    });
+    const personalOrganization = fixture.database
+      .query(
+        `SELECT member.organizationId AS id
+         FROM member JOIN user ON user.id = member.userId
+         WHERE user.email = ? AND member.organizationId != ?`,
+      )
+      .get(invitedEmail, organization.id) as { id: string };
+    const switched = await post(
+      fixture.auth,
+      "/organization/set-active",
+      { organizationId: personalOrganization.id },
+      inviteeCookie,
+    );
+    expect(switched.status).toBe(200);
+    const switchedSession = await fixture.auth.handler(
+      new Request(`${baseURL}/api/auth/get-session`, {
+        headers: { cookie: inviteeCookie ?? "", origin },
+      }),
+    );
+    expect(await switchedSession.json()).toMatchObject({
+      session: { activeOrganizationId: personalOrganization.id },
+      user: { defaultOrganizationId: organization.id },
+    });
+  });
+
   it("backfills an organization for an existing user", async () => {
     const database = new Database(":memory:");
     await applyMigration(database, "0003_create_auth.sql");

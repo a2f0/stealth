@@ -8,14 +8,6 @@ import { admin, organization } from "better-auth/plugins";
 import type { Bindings } from "./types";
 
 type WaitUntil = (promise: Promise<unknown>) => void;
-const authPlugins = [
-  admin({ adminRoles: ["admin"], defaultRole: "user" }),
-  organization({
-    allowUserToCreateOrganization: false,
-    disableOrganizationDeletion: true,
-    organizationLimit: 1,
-  }),
-];
 
 export function createAuth(env: Bindings, waitUntil: WaitUntil) {
   return betterAuth({
@@ -86,7 +78,10 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
         );
       },
     },
-    plugins: authPlugins,
+    plugins: [
+      admin({ adminRoles: ["admin"], defaultRole: "user" }),
+      configuredOrganizationPlugin(env, waitUntil),
+    ],
     rateLimit: {
       enabled: true,
       storage: "database",
@@ -104,6 +99,54 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
       },
     },
   });
+}
+
+function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
+  return organization({
+    allowUserToCreateOrganization: false,
+    disableOrganizationDeletion: true,
+    invitationExpiresIn: 60 * 60 * 48,
+    organizationHooks: {
+      afterAcceptInvitation: async ({ organization, user }) => {
+        await updateDefaultOrganization(env.DB, user.id, organization.id);
+      },
+    },
+    organizationLimit: 1,
+    sendInvitationEmail: async (data) => {
+      queueInvitationEmail(env, waitUntil, data);
+    },
+  });
+}
+
+function queueInvitationEmail(
+  env: Bindings,
+  waitUntil: WaitUntil,
+  data: {
+    email: string;
+    id: string;
+    inviter: { user: { email: string; name: string } };
+    organization: { name: string };
+  },
+) {
+  const invitationURL = new URL("/invite", env.CORS_ORIGIN);
+  invitationURL.searchParams.set("id", data.id);
+  waitUntil(
+    env.EMAIL.send({
+      from: { email: env.AUTH_EMAIL_FROM, name: "Stealth" },
+      subject: `You're invited to ${data.organization.name}`,
+      text: [
+        "Hi,",
+        "",
+        `${data.inviter.user.name} (${data.inviter.user.email}) invited you to join ${data.organization.name} on Stealth.`,
+        "",
+        "Accept the invitation:",
+        invitationURL.toString(),
+        "",
+        "This invitation expires in 48 hours. Sign in or create an account using this email address to accept it.",
+      ].join("\n"),
+      to: data.email,
+    }),
+  );
 }
 
 async function provisionDefaultOrganization(
@@ -177,6 +220,24 @@ async function activateDefaultOrganization(
 function defaultOrganizationName(userName: string) {
   const name = userName.trim();
   return name ? `${name}'s Organization` : "My Organization";
+}
+
+async function updateDefaultOrganization(
+  database: D1Database,
+  userId: string,
+  organizationId: string,
+) {
+  const statement = database.prepare(
+    'UPDATE "user" SET "defaultOrganizationId" = ? WHERE "id" = ?',
+  );
+  if (typeof statement.bind === "function") {
+    await statement.bind(organizationId, userId).run();
+    return;
+  }
+  await (statement as unknown as { run: (...values: string[]) => unknown }).run(
+    organizationId,
+    userId,
+  );
 }
 
 type Auth = ReturnType<typeof createAuth>;

@@ -32,6 +32,7 @@ export const requireAuth = createMiddleware<AuthEnv>(async (context, next) => {
 export const requireOrganization = createMiddleware<AuthEnv>(
   async (context, next) => {
     const organizationId =
+      context.get("authSession").session.activeOrganizationId ??
       context.get("authSession").user.defaultOrganizationId;
     if (!organizationId) {
       return context.json(
