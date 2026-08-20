@@ -1376,6 +1376,25 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.memberRoleSelect {
+  min-width: 94px;
+  padding: 7px 9px;
+  border: 1px solid #d1d0c8;
+  border-radius: 7px;
+  color: #686860;
+  background: #faf9f5;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+.memberRoleSelect:hover:not(:disabled) {
+  border-color: #98988f;
+}
+
+.memberRoleSelect:disabled {
+  color: #85857c;
+}
+
 .organizationPeopleList button {
   padding: 6px 8px;
   border: 1px solid #d1d0c8;
