@@ -76,8 +76,8 @@ app.use("/api/audits", requireAuth, requireOrganization);
 app.use("/api/audits/*", requireAuth, requireOrganization);
 app.route("/api/audits", audits);
 
-app.use("/api/inbox", requireAuth, requireRole("admin"));
-app.use("/api/inbox/*", requireAuth, requireRole("admin"));
+app.use("/api/inbox", requireAuth, requireOrganization);
+app.use("/api/inbox/*", requireAuth, requireOrganization);
 app.route("/api/inbox", inbox);
 
 app.use(

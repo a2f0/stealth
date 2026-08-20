@@ -9,6 +9,7 @@ import {
 
 export function Inbox() {
   const [emails, setEmails] = useState<InboundEmailSummary[]>([]);
+  const [inboundAddress, setInboundAddress] = useState<string>();
   const [selectedId, setSelectedId] = useState<string>();
   const [detail, setDetail] = useState<InboundEmailDetail>();
   const [loadingList, setLoadingList] = useState(true);
@@ -19,8 +20,10 @@ export function Inbox() {
     setLoadingList(true);
     setError(undefined);
     try {
-      const nextEmails = await listInboundEmails();
+      const listing = await listInboundEmails();
+      const nextEmails = listing.emails;
       setEmails(nextEmails);
+      setInboundAddress(listing.address);
       setSelectedId((current) =>
         nextEmails.some(({ id }) => id === current)
           ? current
@@ -65,7 +68,7 @@ export function Inbox() {
     <>
       <header className="topbar">
         <div>
-          <p className="eyebrow">Administration</p>
+          <p className="eyebrow">Organization inbox</p>
           <h1>Inbox</h1>
         </div>
         <button
@@ -79,6 +82,12 @@ export function Inbox() {
       </header>
       <section className="content inboxContent">
         {error && <div className="errorBanner">{error}</div>}
+        {inboundAddress && (
+          <div className="inboxAddress">
+            <span>Send inbound email to</span>
+            <code>{inboundAddress}</code>
+          </div>
+        )}
         <div className="inboxLayout">
           <MessageList
             emails={emails}

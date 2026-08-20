@@ -5,7 +5,7 @@ desired Worker custom domains:
 
 - D1 database: `stealth-db`
 - R2 bucket: `stealth-objects`
-- Inbound email: `upload@inbox.tearleads.com` → `stealth-api`
+- Inbound email: `upload+<organization-id>@inbox.tearleads.com` → `stealth-api`
 - Website: `tearleads.com`
 - Client: `app.tearleads.com`
 - API: `api.tearleads.com`
@@ -31,8 +31,8 @@ ln -s ../tearleads-shared/.secrets .secrets
 The `.secrets` path is ignored by Git. The Terraform token needs Zone Read, D1
 Edit, R2 Edit, and Email Routing Rules Write permissions. Workers Scripts Edit
 is also needed when custom domains are enabled. The separate Email API token
-needs Zone Read and Zone Settings Read so deploys can verify the subdomain's
-Email Routing DNS configuration.
+needs Zone Read and Zone Settings Edit so deploys can enable subaddressing and
+verify the subdomain's Email Routing DNS configuration.
 
 ## Plan and apply
 

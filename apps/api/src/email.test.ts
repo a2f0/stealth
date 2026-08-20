@@ -2,7 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { handleEmail } from "./email";
 import type { Bindings } from "./types";
 
-const recipient = "upload@inbox.tearleads.com";
+const organizationId = "organization-1";
+const inboundEmailDomain = "inbox.tearleads.com";
+const recipient = `upload+${organizationId}@${inboundEmailDomain}`;
 const rawEmail = [
   "From: Sender <sender@example.com>",
   `To: ${recipient}`,
@@ -55,9 +57,15 @@ describe("inbound email", () => {
     expect(new TextDecoder().decode(attachmentEntry?.[1])).toBe(
       "hello attachment",
     );
+    expect(
+      rawEntry?.[0]?.startsWith(
+        `organizations/${organizationId}/inbound-emails/`,
+      ),
+    ).toBe(true);
 
     const [emailStatement, attachmentStatement] = database.statements;
-    expect(emailStatement?.values.slice(1, 5)).toEqual([
+    expect(emailStatement?.values.slice(1, 6)).toEqual([
+      organizationId,
       "<test@example.com>",
       "sender@example.com",
       recipient,
@@ -70,10 +78,13 @@ describe("inbound email", () => {
     ]);
   });
 
-  it("rejects mail sent to an unconfigured address", async () => {
+  it("rejects mail sent to an unknown organization", async () => {
     const database = createDatabase();
     const storage = createStorage();
-    const received = createMessage(rawEmail, "other@inbox.tearleads.com");
+    const received = createMessage(
+      rawEmail,
+      `upload+unknown-organization@${inboundEmailDomain}`,
+    );
 
     await handleEmail(
       received.message,
@@ -94,7 +105,7 @@ function createBindings(database: D1Database, storage: R2Bucket): Bindings {
     CORS_ORIGIN: "https://app.tearleads.com",
     DB: database,
     EMAIL: {} as SendEmail,
-    INBOUND_EMAIL_ADDRESS: recipient,
+    INBOUND_EMAIL_DOMAIN: inboundEmailDomain,
     STORAGE: storage,
   };
 }
@@ -104,11 +115,17 @@ function createDatabase() {
   const value = {
     batch: async () => [],
     prepare: (query: string) => {
+      let values: unknown[] = [];
       const statement = {
-        bind: (...values: unknown[]) => {
-          statements.push({ query, values });
+        bind: (...nextValues: unknown[]) => {
+          values = nextValues;
+          if (!query.includes("SELECT id FROM organization")) {
+            statements.push({ query, values });
+          }
           return statement;
         },
+        first: async () =>
+          values[0] === organizationId ? { id: organizationId } : null,
       };
       return statement;
     },

@@ -518,7 +518,7 @@ function bindingsFor(database: Database): Bindings {
     CORS_ORIGIN: "https://app.test",
     DB: toD1(database),
     EMAIL: {} as SendEmail,
-    INBOUND_EMAIL_ADDRESS: "upload@inbox.tearleads.com",
+    INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     PLAID_CLIENT_ID: "client-test",
     PLAID_ENV: "sandbox",
     PLAID_REDIRECT_URI: "https://app.test/finance",

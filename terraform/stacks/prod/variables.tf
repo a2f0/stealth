@@ -28,7 +28,7 @@ variable "r2_bucket_name" {
 }
 
 variable "inbound_email_address" {
-  description = "Email address routed to the API Worker's email handler."
+  description = "Base email address routed to the API Worker's email handler."
   type        = string
   default     = "upload@inbox.tearleads.com"
 }

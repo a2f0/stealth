@@ -19,7 +19,7 @@ output "r2_bucket_name" {
 }
 
 output "inbound_email_address" {
-  description = "Address routed to the API Worker for storage."
+  description = "Base address routed to the API Worker using subaddressing."
   value       = var.inbound_email_address
 }
 
