@@ -3,6 +3,20 @@ export interface WorkspaceOrganization {
   name: string;
 }
 
+type OrganizationSettingsPage = "access" | "general" | "people";
+
+export function isOrganizationPath(pathname: string) {
+  return pathname === "/organization" || pathname.startsWith("/organization/");
+}
+
+export function organizationSettingsPage(
+  pathname: string,
+): OrganizationSettingsPage {
+  if (pathname === "/organization/people") return "people";
+  if (pathname === "/organization/access") return "access";
+  return "general";
+}
+
 export const organizationInvitationRoles = [
   "member",
   "admin",
@@ -92,17 +106,14 @@ export function organizationRoleValue(
   return "member";
 }
 
-export function canLeaveOrganization(
+export function canLeaveOrganizationWithOwnerCount(
   role: string | null | undefined,
-  memberRoles: string[],
+  ownerCount: number,
   hasAnotherOrganization: boolean,
 ) {
   if (!hasAnotherOrganization) return false;
   if (!hasOrganizationRole(role, "owner")) return true;
-  return (
-    memberRoles.filter((memberRole) => hasOrganizationRole(memberRole, "owner"))
-      .length > 1
-  );
+  return ownerCount > 1;
 }
 
 function hasOrganizationRole(

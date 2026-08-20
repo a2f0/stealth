@@ -1,23 +1,86 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   createOrganizationGroup,
   deleteOrganizationGroup,
+  getOrganizationGroups,
   type OrganizationGroup,
   updateOrganizationGroup,
 } from "./organizationGroupsApi";
+import type { OrganizationMember } from "./organizationSettingsApi";
 
-export interface OrganizationGroupMember {
-  id: string;
-  user: { email: string; id: string; name: string };
+export function OrganizationAccessSettings({
+  onAccessChanged,
+  organizationId,
+}: {
+  onAccessChanged: () => Promise<void>;
+  organizationId: string;
+}) {
+  const [data, setData] = useState<Awaited<
+    ReturnType<typeof getOrganizationGroups>
+  > | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>();
+  const load = useCallback(async () => {
+    if (!organizationId) return;
+    setLoading(true);
+    setError(undefined);
+    try {
+      setData(await getOrganizationGroups());
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setLoading(false);
+    }
+  }, [organizationId]);
+  useEffect(() => void load(), [load]);
+
+  async function changed() {
+    await Promise.all([load(), onAccessChanged()]);
+  }
+
+  if (!data && loading) {
+    return (
+      <div className="emptyState compactEmptyState">
+        <div className="emptyGlyph">◇</div>
+        <h3>Loading access settings…</h3>
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <>
+        <div className="errorBanner">{error}</div>
+        <button
+          className="primaryButton"
+          onClick={() => void load()}
+          type="button"
+        >
+          Try again
+        </button>
+      </>
+    );
+  }
+  return (
+    <>
+      {error && <div className="errorBanner">{error}</div>}
+      <div className="organizationSettingsGrid">
+        <OrganizationGroups
+          groups={data.groups}
+          members={data.members}
+          onChanged={changed}
+        />
+      </div>
+    </>
+  );
 }
 
-export function OrganizationGroups({
+function OrganizationGroups({
   groups,
   members,
   onChanged,
 }: {
   groups: OrganizationGroup[];
-  members: OrganizationGroupMember[];
+  members: OrganizationMember[];
   onChanged: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
@@ -95,7 +158,7 @@ function GroupEditor({
   onChanged,
 }: {
   group: OrganizationGroup;
-  members: OrganizationGroupMember[];
+  members: OrganizationMember[];
   onChanged: () => Promise<void>;
 }) {
   const editor = useGroupEditor(group, onChanged);
@@ -236,7 +299,7 @@ function GroupMemberPicker({
 }: {
   disabled: boolean;
   memberIds: Set<string>;
-  members: OrganizationGroupMember[];
+  members: OrganizationMember[];
   onToggle: (userId: string) => void;
 }) {
   return (

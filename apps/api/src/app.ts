@@ -13,6 +13,7 @@ import { finance } from "./finance";
 import { inbox } from "./inbox";
 import { objects } from "./objects";
 import { organizationGroups, requireCapability } from "./organizationGroups";
+import { organizationSettings } from "./organizationSettings";
 import type { Bindings } from "./types";
 
 const app = new Hono<{
@@ -53,6 +54,7 @@ app.get("/api", (context) =>
       inbox: "/api/inbox",
       objects: "/api/objects",
       organizationGroups: "/api/organization-groups",
+      organizationSettings: "/api/organization-settings",
       session: "/api/me",
       health: "/health",
     },
@@ -95,6 +97,10 @@ app.route("/api/finance", finance);
 app.use("/api/organization-groups", requireAuth, requireOrganization);
 app.use("/api/organization-groups/*", requireAuth, requireOrganization);
 app.route("/api/organization-groups", organizationGroups);
+
+app.use("/api/organization-settings", requireAuth, requireOrganization);
+app.use("/api/organization-settings/*", requireAuth, requireOrganization);
+app.route("/api/organization-settings", organizationSettings);
 
 app.use("/api/objects", requireAuth, requireOrganization);
 app.use("/api/objects/*", requireAuth, requireOrganization);

@@ -57,6 +57,16 @@ describe("api", () => {
 
     expect(response.status).toBe(401);
   });
+
+  it("requires authentication for organization settings", async () => {
+    const response = await app.request(
+      "/api/organization-settings/people",
+      undefined,
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
 });
 
 function authBindings(): Bindings {

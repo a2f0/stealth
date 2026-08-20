@@ -1,4 +1,5 @@
 import { apiUrl } from "./config";
+import type { OrganizationMember } from "./organizationSettingsApi";
 
 export type OrganizationCapability = "finance";
 
@@ -18,11 +19,18 @@ interface OrganizationGroupInput {
 }
 
 export function getOrganizationAccess() {
-  return request<{ capabilities: OrganizationCapability[] }>("/access");
+  return request<{
+    capabilities: OrganizationCapability[];
+    memberRole: string;
+    ownerCount: number;
+  }>("/access");
 }
 
 export function getOrganizationGroups() {
-  return request<{ groups: OrganizationGroup[] }>("");
+  return request<{
+    groups: OrganizationGroup[];
+    members: OrganizationMember[];
+  }>("");
 }
 
 export function createOrganizationGroup(input: OrganizationGroupInput) {

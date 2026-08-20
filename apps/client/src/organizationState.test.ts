@@ -1,11 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
   assignableOrganizationRoles,
-  canLeaveOrganization,
+  canLeaveOrganizationWithOwnerCount,
   canManageOrganization,
   createOrganizationSlug,
   editableOrganizationRoles,
   organizationRoleValue,
+  organizationSettingsPage,
   resolveActiveOrganizationId,
 } from "./organizationState";
 
@@ -34,6 +35,13 @@ describe("organization state", () => {
     expect(
       resolveActiveOrganizationId("removed", "personal", organizations),
     ).toBe("personal");
+  });
+
+  it("routes organization settings to focused sub-pages", () => {
+    expect(organizationSettingsPage("/organization")).toBe("general");
+    expect(organizationSettingsPage("/organization/people")).toBe("people");
+    expect(organizationSettingsPage("/organization/access")).toBe("access");
+    expect(organizationSettingsPage("/organization/unknown")).toBe("general");
   });
 
   it("only lets organization managers invite members", () => {
@@ -77,15 +85,9 @@ describe("organization state", () => {
   });
 
   it("lets members leave while preserving an owner and fallback workspace", () => {
-    expect(canLeaveOrganization("member", ["owner", "member"], true)).toBe(
-      true,
-    );
-    expect(canLeaveOrganization("owner", ["owner", "owner"], true)).toBe(true);
-    expect(canLeaveOrganization("owner", ["owner", "member"], true)).toBe(
-      false,
-    );
-    expect(canLeaveOrganization("member", ["owner", "member"], false)).toBe(
-      false,
-    );
+    expect(canLeaveOrganizationWithOwnerCount("member", 1, true)).toBe(true);
+    expect(canLeaveOrganizationWithOwnerCount("owner", 2, true)).toBe(true);
+    expect(canLeaveOrganizationWithOwnerCount("owner", 1, true)).toBe(false);
+    expect(canLeaveOrganizationWithOwnerCount("member", 1, false)).toBe(false);
   });
 });

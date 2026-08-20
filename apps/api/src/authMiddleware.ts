@@ -6,6 +6,7 @@ import type { Bindings } from "./types";
 export interface AuthVariables {
   authSession: AuthSession;
   organizationId: string;
+  organizationRole: string;
 }
 
 type AuthEnv = {
@@ -44,22 +45,26 @@ export const requireOrganization = createMiddleware<AuthEnv>(
     }
     const placeholders = candidates.map(() => "?").join(", ");
     const memberships = await context.env.DB.prepare(
-      `SELECT "organizationId"
+      `SELECT "organizationId", "role"
        FROM "member"
        WHERE "userId" = ? AND "organizationId" IN (${placeholders})`,
     )
       .bind(session.user.id, ...candidates)
-      .all<{ organizationId: string }>();
-    const membershipIds = new Set(
-      memberships.results.map(({ organizationId }) => organizationId),
+      .all<{ organizationId: string; role: string }>();
+    const membershipByOrganization = new Map(
+      memberships.results.map((membership) => [
+        membership.organizationId,
+        membership,
+      ]),
     );
-    const organizationId = candidates.find((candidate) =>
-      membershipIds.has(candidate),
-    );
-    if (!organizationId) {
+    const membership = candidates
+      .map((candidate) => membershipByOrganization.get(candidate))
+      .find((candidate) => candidate !== undefined);
+    if (!membership) {
       return context.json({ error: "Organization membership required." }, 403);
     }
-    context.set("organizationId", organizationId);
+    context.set("organizationId", membership.organizationId);
+    context.set("organizationRole", membership.role);
     return next();
   },
 );

@@ -701,6 +701,39 @@ main {
   border-bottom: 1px solid #ddddd5;
 }
 
+.organizationSettingsHeader {
+  gap: 24px;
+}
+
+.settingsSubnav {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #d8d7cf;
+  border-radius: 10px;
+  background: #f1f0e9;
+}
+
+.settingsSubnav a {
+  padding: 7px 11px;
+  border-radius: 7px;
+  color: #717169;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.settingsSubnav a:hover {
+  color: #181916;
+}
+
+.settingsSubnav a.active {
+  color: #181916;
+  background: #fff;
+  box-shadow: 0 1px 3px #18191614;
+}
+
 .eyebrow {
   margin: 0 0 7px;
   color: #85857c;
@@ -2519,6 +2552,17 @@ button:disabled {
 
   .topbar {
     padding: 32px 20px 24px;
+  }
+
+  .organizationSettingsHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .settingsSubnav {
+    max-width: 100%;
+    overflow-x: auto;
   }
 
   .content {

@@ -11,7 +11,10 @@ describe("organization middleware", () => {
       "default-org",
     ]);
     const body: unknown = await response.json();
-    expect(body).toEqual({ organizationId: "active-org" });
+    expect(body).toEqual({
+      organizationId: "active-org",
+      organizationRole: "member",
+    });
   });
 
   it("falls back to the user's default organization", async () => {
@@ -19,7 +22,10 @@ describe("organization middleware", () => {
       "default-org",
     ]);
     const body: unknown = await response.json();
-    expect(body).toEqual({ organizationId: "default-org" });
+    expect(body).toEqual({
+      organizationId: "default-org",
+      organizationRole: "member",
+    });
   });
 
   it("falls back when the active organization membership is stale", async () => {
@@ -28,7 +34,10 @@ describe("organization middleware", () => {
     ]);
     expect(response.status).toBe(200);
     const body: unknown = await response.json();
-    expect(body).toEqual({ organizationId: "default-org" });
+    expect(body).toEqual({
+      organizationId: "default-org",
+      organizationRole: "member",
+    });
   });
 
   it("rejects an organization pointer without a membership", async () => {
@@ -67,7 +76,10 @@ function testApp(
   });
   app.use("*", requireOrganization);
   app.get("/", (context) =>
-    context.json({ organizationId: context.get("organizationId") }),
+    context.json({
+      organizationId: context.get("organizationId"),
+      organizationRole: context.get("organizationRole"),
+    }),
   );
   return app;
 }
@@ -95,7 +107,10 @@ function membershipDatabase(memberships: string[]) {
                   .filter((organizationId) =>
                     organizationIds.includes(organizationId),
                   )
-                  .map((organizationId) => ({ organizationId }))
+                  .map((organizationId) => ({
+                    organizationId,
+                    role: "member",
+                  }))
               : [],
         }),
       }),
