@@ -188,7 +188,22 @@ function OrganizationSwitcher({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  if (organizations.length === 0 || !activeOrganizationId) return null;
+  if (organizations.length === 0 || !activeOrganizationId) {
+    return (
+      <div className="organizationSwitcher">
+        <span>Organization</span>
+        <button
+          className="organizationCreateButton"
+          disabled={busy}
+          onClick={() => void select("create")}
+          type="button"
+        >
+          {busy ? "Creating…" : "Create organization…"}
+        </button>
+        {error && <small role="alert">{error}</small>}
+      </div>
+    );
+  }
 
   async function select(organizationId: string) {
     if (organizationId === "create") {

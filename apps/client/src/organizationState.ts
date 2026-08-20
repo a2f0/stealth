@@ -45,9 +45,6 @@ export function resolveActiveOrganizationId(
   defaultOrganizationId: string | null | undefined,
   organizations: WorkspaceOrganization[],
 ) {
-  if (organizations.length === 0) {
-    return activeOrganizationId ?? defaultOrganizationId ?? undefined;
-  }
   if (
     activeOrganizationId &&
     organizations.some(({ id }) => id === activeOrganizationId)
@@ -65,6 +62,10 @@ export function resolveActiveOrganizationId(
 
 export function canManageOrganization(role: string | null | undefined) {
   return hasOrganizationRole(role, "owner", "admin");
+}
+
+export function canDeleteOrganization(role: string | null | undefined) {
+  return hasOrganizationRole(role, "owner");
 }
 
 export function assignableOrganizationRoles(

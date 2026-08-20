@@ -199,6 +199,21 @@ bun run deploy:email:verify # verify inbound MX records and Worker route
 bun run deploy:verify   # check all production URLs
 ```
 
+Organization owners can soft-delete an organization from its general settings.
+The organization and its workspace data become inaccessible immediately and
+retain a `deletedAt` timestamp in D1. Preview or permanently purge organizations
+that have been deleted for at least 30 days with:
+
+```sh
+bun run organizations:purge --dry-run
+bun run organizations:purge
+```
+
+The command targets Cloudflare's remote D1 database and R2 bucket by default.
+Pass `--local` to exercise it against local Wrangler storage. R2 objects are
+removed before the corresponding D1 organization is deleted; D1 foreign-key
+cascades then remove the organization's remaining rows.
+
 Production URLs are `api.tearleads.com`, `app.tearleads.com`, and
 `tearleads.com`. See [`terraform/README.md`](terraform/README.md) for state and
 domain details.

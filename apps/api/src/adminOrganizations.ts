@@ -5,6 +5,7 @@ const adminOrganizations = new Hono<{ Bindings: Bindings }>();
 
 interface OrganizationRow {
   created_at: number | string;
+  deleted_at: number | string | null;
   id: string;
   member_count: number;
   name: string;
@@ -17,6 +18,7 @@ adminOrganizations.get("/", async (context) => {
   const result = await context.env.DB.prepare(
     `SELECT organization.id, organization.name, organization.slug,
             organization.createdAt AS created_at,
+            organization.deletedAt AS deleted_at,
             owner.name AS owner_name, owner.email AS owner_email,
             COUNT(member.id) AS member_count
      FROM organization
@@ -31,6 +33,7 @@ adminOrganizations.get("/", async (context) => {
   return context.json({
     organizations: result.results.map((organization) => ({
       createdAt: organization.created_at,
+      deletedAt: organization.deleted_at,
       id: organization.id,
       memberCount: organization.member_count,
       name: organization.name,
