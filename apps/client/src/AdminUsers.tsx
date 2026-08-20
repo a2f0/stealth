@@ -1,5 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
-import { type AdminOrganization, listAdminOrganizations } from "./api";
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
+import {
+  type AdminOrganization,
+  listAdminOrganizations,
+  markAdminOrganizationForDeletion,
+} from "./api";
 import { authClient } from "./authClient";
 
 const pageSize = 25;
@@ -25,6 +35,7 @@ export function AdminUsers() {
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string>();
+  const deletion = useAdminOrganizationDeletion(setOrganizations);
 
   const loadUsers = useCallback(async () => {
     setBusy(true);
@@ -79,6 +90,12 @@ export function AdminUsers() {
 
       <section className="content">
         {error && <div className="errorBanner">{error}</div>}
+        {deletion.error && <div className="errorBanner">{deletion.error}</div>}
+        {deletion.notice && (
+          <div aria-live="polite" className="successBanner pageBanner">
+            {deletion.notice}
+          </div>
+        )}
         <UserSection
           busy={busy}
           hasError={Boolean(error)}
@@ -86,10 +103,57 @@ export function AdminUsers() {
           onPageChange={setPage}
           page={page}
         />
-        <OrganizationSection organizations={organizations} />
+        <OrganizationSection
+          deletingOrganizationId={deletion.deletingOrganizationId}
+          onMarkForDeletion={deletion.markForDeletion}
+          organizations={organizations}
+        />
       </section>
     </>
   );
+}
+
+function useAdminOrganizationDeletion(
+  setOrganizations: Dispatch<SetStateAction<AdminOrganization[] | undefined>>,
+) {
+  const [deletingOrganizationId, setDeletingOrganizationId] =
+    useState<string>();
+  const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+
+  const markForDeletion = async (organization: AdminOrganization) => {
+    const confirmation = window.prompt(
+      `Type ${organization.name} to mark this organization for deletion. It will become unavailable immediately and its data can be permanently purged after 30 days.`,
+    );
+    if (confirmation !== organization.name) return;
+
+    setDeletingOrganizationId(organization.id);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const deletion = await markAdminOrganizationForDeletion(organization.id);
+      setOrganizations((current) =>
+        current?.map((item) =>
+          item.id === organization.id
+            ? {
+                ...item,
+                deletedAt: deletion.deletedAt,
+                deletedByEmail: deletion.deletedByEmail,
+                deletedByName: deletion.deletedByName,
+                deletedByUserId: deletion.deletedByUserId,
+              }
+            : item,
+        ),
+      );
+      setNotice(`${organization.name} was marked for deletion.`);
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setDeletingOrganizationId(undefined);
+    }
+  };
+
+  return { deletingOrganizationId, error, markForDeletion, notice };
 }
 
 function UserSection({
@@ -128,8 +192,12 @@ function UserSection({
 }
 
 function OrganizationSection({
+  deletingOrganizationId,
+  onMarkForDeletion,
   organizations,
 }: {
+  deletingOrganizationId: string | undefined;
+  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
   organizations?: AdminOrganization[] | undefined;
 }) {
   return (
@@ -139,7 +207,11 @@ function OrganizationSection({
         <span>{organizations?.length ?? 0} organizations</span>
       </div>
       {organizations && organizations.length > 0 ? (
-        <OrganizationTable organizations={organizations} />
+        <OrganizationTable
+          deletingOrganizationId={deletingOrganizationId}
+          onMarkForDeletion={onMarkForDeletion}
+          organizations={organizations}
+        />
       ) : organizations ? (
         <div className="emptyState compactEmptyState">
           <div className="emptyGlyph">◇</div>
@@ -151,20 +223,26 @@ function OrganizationSection({
 }
 
 function OrganizationTable({
+  deletingOrganizationId,
+  onMarkForDeletion,
   organizations,
 }: {
+  deletingOrganizationId: string | undefined;
+  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
   organizations: AdminOrganization[];
 }) {
   return (
     <div className="userTableWrap">
-      <table className="userTable">
+      <table className="userTable organizationTable">
         <thead>
           <tr>
             <th>Organization</th>
             <th>Owner</th>
             <th>Members</th>
             <th>Status</th>
+            <th>Marked by</th>
             <th>Created</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -184,11 +262,41 @@ function OrganizationTable({
                   className={`userStatus ${organization.deletedAt ? "banned" : "verified"}`}
                 >
                   {organization.deletedAt
-                    ? `Deleted ${formatDate(organization.deletedAt)}`
+                    ? `Pending deletion · ${formatDate(organization.deletedAt)}`
                     : "Active"}
                 </span>
               </td>
+              <td className="tableIdentity">
+                {organization.deletedAt ? (
+                  <>
+                    <strong>{organization.deletedByName ?? "Unknown"}</strong>
+                    <span>
+                      {organization.deletedByEmail ??
+                        organization.deletedByUserId ??
+                        "Not recorded"}
+                    </span>
+                  </>
+                ) : (
+                  "—"
+                )}
+              </td>
               <td>{formatDate(organization.createdAt)}</td>
+              <td>
+                {organization.deletedAt ? (
+                  "—"
+                ) : (
+                  <button
+                    className="dangerButton tableActionButton"
+                    disabled={deletingOrganizationId !== undefined}
+                    onClick={() => void onMarkForDeletion(organization)}
+                    type="button"
+                  >
+                    {deletingOrganizationId === organization.id
+                      ? "Marking…"
+                      : "Mark for deletion"}
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

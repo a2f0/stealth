@@ -203,8 +203,10 @@ bun run deploy:verify   # check all production URLs
 
 Organization owners can soft-delete an organization from its general settings.
 The organization and its workspace data become inaccessible immediately and
-retain a `deletedAt` timestamp in D1. Preview or permanently purge organizations
-that have been deleted for at least 30 days with:
+retain a `deletedAt` timestamp and the initiating user's ID in D1. Root admins
+can initiate the same lifecycle from the admin organization list. Preview or
+permanently purge organizations that have been deleted for at least 30 days
+with:
 
 ```sh
 bun run organizations:purge --dry-run
