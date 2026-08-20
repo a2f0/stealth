@@ -38,6 +38,16 @@ describe("api", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication to mark an organization for deletion", async () => {
+    const response = await app.request(
+      "/api/admin/organizations/organization-id",
+      { method: "DELETE" },
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
   it("requires authentication for audits", async () => {
     const response = await app.request(
       "/api/audits/templates",

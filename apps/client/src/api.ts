@@ -39,6 +39,9 @@ interface OrganizationInbox {
 
 export interface AdminOrganization {
   createdAt: number | string;
+  deletedByEmail: string | null;
+  deletedByName: string | null;
+  deletedByUserId: string | null;
   deletedAt: number | string | null;
   id: string;
   memberCount: number;
@@ -56,6 +59,23 @@ export async function listAdminOrganizations() {
     response,
   );
   return body.organizations;
+}
+
+export async function markAdminOrganizationForDeletion(id: string) {
+  const response = await fetch(
+    `${apiUrl}/api/admin/organizations/${encodeURIComponent(id)}`,
+    {
+      credentials: "include",
+      method: "DELETE",
+    },
+  );
+  return parseResponse<{
+    deletedAt: string;
+    deletedByEmail: string;
+    deletedByName: string;
+    deletedByUserId: string;
+    organizationId: string;
+  }>(response);
 }
 
 export async function listInboundEmails() {

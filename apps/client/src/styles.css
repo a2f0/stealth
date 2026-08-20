@@ -996,6 +996,10 @@ button:disabled {
   text-align: left;
 }
 
+.organizationTable {
+  min-width: 880px;
+}
+
 .userTable th {
   padding: 12px 16px;
   border-bottom: 1px solid #ddddd5;
@@ -1360,6 +1364,12 @@ button:disabled {
 
 .dangerButton:disabled {
   cursor: not-allowed;
+}
+
+.tableActionButton {
+  padding: 7px 9px;
+  white-space: nowrap;
+  font-size: 10px;
 }
 
 .organizationSettingsGrid {

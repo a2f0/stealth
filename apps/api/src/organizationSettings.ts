@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { markOrganizationForDeletion } from "./organizationDeletion";
 import {
   canManageOrganization,
   isOrganizationOwner,
@@ -55,6 +56,7 @@ organizationSettings.get("/people", async (context) => {
 
 organizationSettings.delete("/current", async (context) => {
   const organizationId = context.get("organizationId");
+  const userId = context.get("authSession").user.id;
   if (!isOrganizationOwner(context.get("organizationRole"))) {
     return context.json(
       { error: "Only an organization owner can delete this organization." },
@@ -62,55 +64,15 @@ organizationSettings.delete("/current", async (context) => {
     );
   }
 
-  const deletedAt = new Date().toISOString();
-  const results = await context.env.DB.batch([
-    context.env.DB.prepare(
-      `UPDATE organization
-       SET deletedAt = ?
-       WHERE id = ? AND deletedAt IS NULL`,
-    ).bind(deletedAt, organizationId),
-    context.env.DB.prepare(
-      `UPDATE invitation
-       SET status = 'canceled'
-       WHERE organizationId = ? AND status = 'pending'`,
-    ).bind(organizationId),
-    context.env.DB.prepare(
-      `UPDATE user
-       SET defaultOrganizationId = (
-         SELECT member.organizationId
-         FROM member
-         JOIN organization
-           ON organization.id = member.organizationId
-         WHERE member.userId = user.id
-           AND member.organizationId != ?
-           AND organization.deletedAt IS NULL
-         ORDER BY member.createdAt ASC, member.id ASC
-         LIMIT 1
-       )
-       WHERE defaultOrganizationId = ?`,
-    ).bind(organizationId, organizationId),
-    context.env.DB.prepare(
-      `UPDATE session
-       SET activeOrganizationId = CASE
-             WHEN activeOrganizationId = ? THEN (
-               SELECT defaultOrganizationId
-               FROM user
-               WHERE user.id = session.userId
-             )
-             ELSE activeOrganizationId
-           END,
-           activeTeamId = NULL
-       WHERE activeOrganizationId = ?
-          OR activeTeamId IN (
-            SELECT id FROM team WHERE organizationId = ?
-          )`,
-    ).bind(organizationId, organizationId, organizationId),
-  ]);
-
-  if (results[0]?.meta.changes !== 1) {
+  const deletion = await markOrganizationForDeletion(
+    context.env.DB,
+    organizationId,
+    userId,
+  );
+  if (!deletion) {
     return context.json({ error: "Organization was already deleted." }, 409);
   }
-  return context.json({ deletedAt, organizationId });
+  return context.json(deletion);
 });
 
 async function listPendingInvitations(
