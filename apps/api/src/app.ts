@@ -70,6 +70,7 @@ app.get("/api/admin", requireAuth, requireRole("admin"), (context) =>
 );
 
 app.use("/api/admin/organizations", requireAuth, requireRole("admin"));
+app.use("/api/admin/organizations/*", requireAuth, requireRole("admin"));
 app.route("/api/admin/organizations", adminOrganizations);
 
 app.use("/api/audits", requireAuth, requireOrganization);

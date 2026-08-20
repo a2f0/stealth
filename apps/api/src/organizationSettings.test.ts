@@ -43,9 +43,15 @@ describe("organization deletion", () => {
     expect(new Date(body.deletedAt).toISOString()).toBe(body.deletedAt);
     expect(
       fixture.database
-        .query("SELECT deletedAt FROM organization WHERE id = ?")
+        .query(
+          `SELECT deletedAt, deletedByUserId
+           FROM organization WHERE id = ?`,
+        )
         .get(targetOrganizationId),
-    ).toEqual({ deletedAt: body.deletedAt });
+    ).toEqual({
+      deletedAt: body.deletedAt,
+      deletedByUserId: "owner-user",
+    });
     expect(
       fixture.database
         .query("SELECT COUNT(*) AS count FROM member WHERE organizationId = ?")
@@ -150,6 +156,7 @@ async function createFixture() {
     );
   await applyMigration(database, "0010_create_organization_groups.sql");
   await applyMigration(database, "0011_soft_delete_organizations.sql");
+  await applyMigration(database, "0013_track_organization_deletion_actor.sql");
   insertSession(database, "owner-user", targetOrganizationId);
   insertSession(database, "member-user", targetOrganizationId);
   const bindings = { DB: toD1(database) } as Bindings;
