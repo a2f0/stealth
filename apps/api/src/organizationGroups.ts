@@ -1,6 +1,11 @@
 import { type Context, Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { AuthVariables } from "./authMiddleware";
+import {
+  canManageOrganization,
+  countOrganizationOwners,
+  listOrganizationMembers,
+} from "./organizationMembers";
 import type { Bindings } from "./types";
 
 const supportedCapabilities = ["finance"] as const;
@@ -44,21 +49,30 @@ type OrganizationContext = Context<OrganizationEnv>;
 const organizationGroups = new Hono<OrganizationEnv>();
 
 organizationGroups.get("/access", async (context) => {
-  const capabilities = await listUserCapabilities(
-    context.env.DB,
-    context.get("organizationId"),
-    context.get("authSession").user.id,
-  );
-  return context.json({ capabilities });
+  const organizationId = context.get("organizationId");
+  const [capabilities, ownerCount] = await Promise.all([
+    listUserCapabilities(
+      context.env.DB,
+      organizationId,
+      context.get("authSession").user.id,
+    ),
+    countOrganizationOwners(context.env.DB, organizationId),
+  ]);
+  return context.json({
+    capabilities,
+    memberRole: context.get("organizationRole"),
+    ownerCount,
+  });
 });
 
 organizationGroups.get("/", async (context) => {
-  if (!(await canManageGroups(context))) return managerRequired(context);
+  if (!canManageGroups(context)) return managerRequired(context);
   const organizationId = context.get("organizationId");
-  const [groups, capabilities, members] = await Promise.all([
+  const [groups, capabilities, groupMembers, members] = await Promise.all([
     listGroups(context.env.DB, organizationId),
     listGroupCapabilities(context.env.DB, organizationId),
     listGroupMembers(context.env.DB, organizationId),
+    listOrganizationMembers(context.env.DB, organizationId),
   ]);
   return context.json({
     groups: groups.map((group) => ({
@@ -67,17 +81,18 @@ organizationGroups.get("/", async (context) => {
         .map(({ capability }) => capability),
       createdAt: group.created_at,
       id: group.id,
-      memberUserIds: members
+      memberUserIds: groupMembers
         .filter(({ team_id: teamId }) => teamId === group.id)
         .map(({ user_id: userId }) => userId),
       name: group.name,
       updatedAt: group.updated_at,
     })),
+    members,
   });
 });
 
 organizationGroups.post("/", async (context) => {
-  if (!(await canManageGroups(context))) return managerRequired(context);
+  if (!canManageGroups(context)) return managerRequired(context);
   const input = await groupInput(context);
   if (!input) return invalidGroup(context);
   const organizationId = context.get("organizationId");
@@ -105,7 +120,7 @@ organizationGroups.post("/", async (context) => {
 });
 
 organizationGroups.patch("/:id", async (context) => {
-  if (!(await canManageGroups(context))) return managerRequired(context);
+  if (!canManageGroups(context)) return managerRequired(context);
   const groupId = context.req.param("id");
   const input = await groupInput(context);
   if (!groupId || !input) return invalidGroup(context);
@@ -138,7 +153,7 @@ organizationGroups.patch("/:id", async (context) => {
 });
 
 organizationGroups.delete("/:id", async (context) => {
-  if (!(await canManageGroups(context))) return managerRequired(context);
+  if (!canManageGroups(context)) return managerRequired(context);
   const groupId = context.req.param("id");
   const organizationId = context.get("organizationId");
   if (
@@ -180,16 +195,8 @@ export function requireCapability(capability: OrganizationCapability) {
   });
 }
 
-async function canManageGroups(context: OrganizationContext) {
-  const membership = await context.env.DB.prepare(
-    `SELECT "role" FROM "member"
-       WHERE "organizationId" = ? AND "userId" = ?`,
-  )
-    .bind(context.get("organizationId"), context.get("authSession").user.id)
-    .first<{ role: string }>();
-  return membership?.role
-    .split(",")
-    .some((role) => ["owner", "admin"].includes(role.trim()));
+function canManageGroups(context: OrganizationContext) {
+  return canManageOrganization(context.get("organizationRole"));
 }
 
 async function listUserCapabilities(

@@ -17,6 +17,7 @@ import { OrganizationInvitation } from "./OrganizationInvitation";
 import { OrganizationSettings } from "./OrganizationSettings";
 import {
   createOrganizationSlug,
+  isOrganizationPath,
   resolveActiveOrganizationId,
   type WorkspaceOrganization,
 } from "./organizationState";
@@ -229,9 +230,9 @@ function AuthenticatedWorkspace({
         pathname,
         library,
         navigate,
-        workspace.refresh,
+        workspace,
         addAccount,
-        access.refresh,
+        access,
       )}
     </WorkspaceShell>
   );
@@ -325,9 +326,9 @@ function contentForPath(
   pathname: string,
   library: ReactNode,
   navigate: (pathname: string) => void,
-  refreshWorkspace: () => Promise<void>,
+  workspace: ReturnType<typeof useWorkspaceOrganizations>,
   addAccount: () => void,
-  refreshAccess: () => Promise<void>,
+  access: ReturnType<typeof useOrganizationAccess>,
 ) {
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return <Audits onNavigate={navigate} pathname={pathname} />;
@@ -335,11 +336,18 @@ function contentForPath(
   if (pathname === "/finance") return <Finance />;
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
-  if (pathname === "/organization") {
+  if (isOrganizationPath(pathname)) {
     return (
       <OrganizationSettings
-        onAccessChanged={refreshAccess}
-        onLeft={refreshWorkspace}
+        activeOrganizationId={workspace.activeOrganizationId}
+        accessError={access.loadError}
+        memberRole={access.memberRole}
+        onAccessChanged={access.refresh}
+        onNavigate={navigate}
+        onWorkspaceChanged={workspace.refresh}
+        organizations={workspace.organizations}
+        ownerCount={access.ownerCount}
+        pathname={pathname}
       />
     );
   }
@@ -347,7 +355,7 @@ function contentForPath(
     return (
       <OrganizationInvitation
         invitationId={new URLSearchParams(window.location.search).get("id")}
-        onAccepted={refreshWorkspace}
+        onAccepted={workspace.refresh}
         onNavigate={() => navigate("/organization")}
         onUseAnotherAccount={addAccount}
       />
@@ -367,7 +375,7 @@ function activePageFor(pathname: string) {
   if (pathname === "/finance") return "finance" as const;
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
-  if (pathname === "/organization") return "organization" as const;
+  if (isOrganizationPath(pathname)) return "organization" as const;
   if (pathname === "/invite") return "organization" as const;
   return "library" as const;
 }

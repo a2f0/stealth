@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import { organizationGroups, requireCapability } from "./organizationGroups";
+import { organizationSettings } from "./organizationSettings";
 import type { Bindings } from "./types";
 
 const organizationId = "org_owner-user";
@@ -23,6 +24,10 @@ describe("organization groups", () => {
         name: "Finance",
       },
     ]);
+    expect(listed.body.members.map(({ user }) => user.id)).toEqual([
+      "member-user",
+      "owner-user",
+    ]);
     const groupId = listed.body.groups[0]?.id;
     expect(groupId).toBeString();
 
@@ -32,6 +37,8 @@ describe("organization groups", () => {
       "GET",
     );
     expect(memberAccess.body.capabilities).toEqual([]);
+    expect(memberAccess.body.memberRole).toBe("member");
+    expect(memberAccess.body.ownerCount).toBe(1);
     expect((await jsonRequest(member, "/", "GET")).response.status).toBe(403);
     expect((await financeRequest(fixture.bindings, "member-user")).status).toBe(
       403,
@@ -44,8 +51,9 @@ describe("organization groups", () => {
     });
     expect(granted.response.status).toBe(200);
     expect(
-      (await jsonRequest<AccessListing>(member, "/access", "GET")).body,
-    ).toEqual({ capabilities: ["finance"] });
+      (await jsonRequest<AccessListing>(member, "/access", "GET")).body
+        .capabilities,
+    ).toEqual(["finance"]);
     expect((await financeRequest(fixture.bindings, "member-user")).status).toBe(
       200,
     );
@@ -66,6 +74,37 @@ describe("organization groups", () => {
     expect((await financeRequest(fixture.bindings, "member-user")).status).toBe(
       403,
     );
+  });
+
+  it("aggregates members and manager-only pending invitations", async () => {
+    const fixture = await createFixture();
+    const owner = settingsApp(fixture.bindings, "owner-user");
+    const member = settingsApp(fixture.bindings, "member-user");
+
+    const ownerListing = await jsonRequest<PeopleListing>(
+      owner,
+      "/people",
+      "GET",
+    );
+    expect(ownerListing.response.status).toBe(200);
+    expect(ownerListing.body.memberRole).toBe("owner");
+    expect(ownerListing.body.members.map(({ user }) => user.id)).toEqual([
+      "member-user",
+      "owner-user",
+    ]);
+    expect(ownerListing.body.invitations).toMatchObject([
+      { email: "invited@example.com", role: "admin", status: "pending" },
+    ]);
+
+    const memberListing = await jsonRequest<PeopleListing>(
+      member,
+      "/people",
+      "GET",
+    );
+    expect(memberListing.response.status).toBe(200);
+    expect(memberListing.body.memberRole).toBe("member");
+    expect(memberListing.body.members).toHaveLength(2);
+    expect(memberListing.body.invitations).toEqual([]);
   });
 
   it("creates and deletes arbitrary organization groups", async () => {
@@ -102,10 +141,31 @@ interface GroupListing {
     memberUserIds: string[];
     name: string;
   }[];
+  members: MemberListing[];
 }
 
 interface AccessListing {
   capabilities: string[];
+  memberRole: string;
+  ownerCount: number;
+}
+
+interface MemberListing {
+  id: string;
+  role: string;
+  user: { email: string; id: string; name: string };
+}
+
+interface PeopleListing {
+  invitations: {
+    email: string;
+    expiresAt: string;
+    id: string;
+    role: string;
+    status: string;
+  }[];
+  memberRole: string;
+  members: MemberListing[];
 }
 
 async function createFixture() {
@@ -122,6 +182,20 @@ async function createFixture() {
        VALUES (?, ?, ?, 'member', ?)`,
     )
     .run("member-record", organizationId, "member-user", now());
+  database
+    .query(
+      `INSERT INTO invitation
+       (id, organizationId, email, role, status, expiresAt, createdAt, inviterId)
+       VALUES (?, ?, ?, 'admin', 'pending', ?, ?, ?)`,
+    )
+    .run(
+      "pending-invitation",
+      organizationId,
+      "invited@example.com",
+      "2026-08-21T12:00:00.000Z",
+      now(),
+      "owner-user",
+    );
   await applyMigration(database, "0010_create_organization_groups.sql");
   return { bindings: bindingsFor(database), database };
 }
@@ -140,6 +214,16 @@ function testApp(bindings: Bindings, userId: string) {
   const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>();
   app.use("*", sessionMiddleware(userId));
   app.route("/", organizationGroups);
+  return {
+    request: (path: string, init?: RequestInit) =>
+      app.request(path, init, bindings),
+  };
+}
+
+function settingsApp(bindings: Bindings, userId: string) {
+  const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>();
+  app.use("*", sessionMiddleware(userId));
+  app.route("/", organizationSettings);
   return {
     request: (path: string, init?: RequestInit) =>
       app.request(path, init, bindings),
@@ -165,6 +249,10 @@ function sessionMiddleware(userId: string) {
     next: () => Promise<void>,
   ) => {
     context.set("organizationId", organizationId);
+    context.set(
+      "organizationRole",
+      userId === "owner-user" ? "owner" : "member",
+    );
     context.set("authSession", {
       user: { defaultOrganizationId: organizationId, id: userId, role: "user" },
     } as AuthSession);

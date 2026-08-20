@@ -1,75 +1,248 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, type MouseEvent, useEffect, useState } from "react";
 import { authClient } from "./authClient";
+import { OrganizationAccessSettings } from "./OrganizationGroups";
+import { OrganizationPeople } from "./OrganizationPeople";
 import {
-  type OrganizationGroupMember,
-  OrganizationGroups,
-} from "./OrganizationGroups";
-import {
-  getOrganizationGroups,
-  type OrganizationGroup,
-} from "./organizationGroupsApi";
-import {
-  assignableOrganizationRoles,
-  canLeaveOrganization,
+  canLeaveOrganizationWithOwnerCount,
   canManageOrganization,
-  editableOrganizationRoles,
-  type OrganizationInvitationRole,
-  organizationRoleValue,
+  organizationSettingsPage,
+  type WorkspaceOrganization,
 } from "./organizationState";
 
-interface OrganizationRecord {
-  createdAt: Date;
-  id: string;
-  name: string;
-  slug: string;
-}
-
-interface OrganizationMemberRecord extends OrganizationGroupMember {
-  id: string;
-  role: string;
-  user: { email: string; id: string; name: string };
-}
-
-interface OrganizationInvitationRecord {
-  email: string;
-  expiresAt: Date;
-  id: string;
-  role: string;
-  status: string;
-}
-
-interface OrganizationSettingsData {
-  fallbackOrganization?: OrganizationRecord | undefined;
-  groups: OrganizationGroup[];
-  invitations: OrganizationInvitationRecord[];
-  memberRole: string;
-  members: OrganizationMemberRecord[];
-  organization: OrganizationRecord;
-}
-
 export function OrganizationSettings({
+  accessError,
+  activeOrganizationId,
+  memberRole,
   onAccessChanged,
-  onLeft,
+  onNavigate,
+  onWorkspaceChanged,
+  organizations,
+  ownerCount,
+  pathname,
 }: {
+  accessError: string | undefined;
+  activeOrganizationId: string | undefined;
+  memberRole: string | undefined;
   onAccessChanged: () => Promise<void>;
-  onLeft: () => Promise<void>;
+  onNavigate: (pathname: string) => void;
+  onWorkspaceChanged: () => Promise<void>;
+  organizations: WorkspaceOrganization[];
+  ownerCount: number;
+  pathname: string;
 }) {
-  const { data: session } = authClient.useSession();
-  const state = useOrganizationSettingsData(
-    session?.session.activeOrganizationId,
+  const organization = organizations.find(
+    ({ id }) => id === activeOrganizationId,
   );
-  const organization = state.data?.organization;
-  const canManage = canManageOrganization(state.data?.memberRole);
+  const page = organizationSettingsPage(pathname);
+  const canManage = canManageOrganization(memberRole);
+  return (
+    <>
+      <header className="topbar organizationSettingsHeader">
+        <div>
+          <p className="eyebrow">Workspace settings</p>
+          <h1>Organization</h1>
+        </div>
+        <OrganizationSettingsNavigation
+          canManage={canManage}
+          onNavigate={onNavigate}
+          page={page}
+        />
+      </header>
+      <section className="content organizationSettingsContent">
+        <OrganizationSettingsPageContent
+          accessError={accessError}
+          canManage={canManage}
+          memberRole={memberRole}
+          onAccessChanged={onAccessChanged}
+          onNavigate={onNavigate}
+          onWorkspaceChanged={onWorkspaceChanged}
+          organization={organization}
+          organizations={organizations}
+          ownerCount={ownerCount}
+          page={page}
+        />
+      </section>
+    </>
+  );
+}
 
-  async function groupsChanged() {
-    await Promise.all([state.load(), onAccessChanged()]);
+function OrganizationSettingsPageContent({
+  accessError,
+  canManage,
+  memberRole,
+  onAccessChanged,
+  onNavigate,
+  onWorkspaceChanged,
+  organization,
+  organizations,
+  ownerCount,
+  page,
+}: {
+  accessError: string | undefined;
+  canManage: boolean;
+  memberRole: string | undefined;
+  onAccessChanged: () => Promise<void>;
+  onNavigate: (pathname: string) => void;
+  onWorkspaceChanged: () => Promise<void>;
+  organization: WorkspaceOrganization | undefined;
+  organizations: WorkspaceOrganization[];
+  ownerCount: number;
+  page: ReturnType<typeof organizationSettingsPage>;
+}) {
+  if (!organization) return <SettingsLoading label="Loading organization…" />;
+  if (page === "people") {
+    return (
+      <OrganizationPeople
+        organization={organization}
+        onAccessChanged={onAccessChanged}
+      />
+    );
   }
+  if (page === "access") {
+    if (memberRole !== undefined && !canManage) {
+      return <SettingsAccessDenied onNavigate={onNavigate} />;
+    }
+    return (
+      <OrganizationAccessSettings
+        onAccessChanged={onAccessChanged}
+        organizationId={organization.id}
+      />
+    );
+  }
+  return (
+    <OrganizationGeneral
+      accessError={accessError}
+      memberRole={memberRole}
+      onWorkspaceChanged={onWorkspaceChanged}
+      organization={organization}
+      organizations={organizations}
+      ownerCount={ownerCount}
+    />
+  );
+}
 
-  async function save(event: FormEvent) {
+function OrganizationSettingsNavigation({
+  canManage,
+  onNavigate,
+  page,
+}: {
+  canManage: boolean;
+  onNavigate: (pathname: string) => void;
+  page: ReturnType<typeof organizationSettingsPage>;
+}) {
+  const items = [
+    { label: "General", page: "general", path: "/organization" },
+    { label: "People", page: "people", path: "/organization/people" },
+    ...(canManage
+      ? [
+          {
+            label: "Access",
+            page: "access",
+            path: "/organization/access",
+          },
+        ]
+      : []),
+  ] as const;
+  return (
+    <nav aria-label="Organization settings" className="settingsSubnav">
+      {items.map((item) => (
+        <a
+          aria-current={page === item.page ? "page" : undefined}
+          className={page === item.page ? "active" : undefined}
+          href={item.path}
+          key={item.path}
+          onClick={(event) => handleNavigation(event, item.path, onNavigate)}
+        >
+          {item.label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+function OrganizationGeneral({
+  accessError,
+  memberRole,
+  onWorkspaceChanged,
+  organization,
+  organizations,
+  ownerCount,
+}: {
+  accessError: string | undefined;
+  memberRole: string | undefined;
+  onWorkspaceChanged: () => Promise<void>;
+  organization: WorkspaceOrganization;
+  organizations: WorkspaceOrganization[];
+  ownerCount: number;
+}) {
+  const hasAnotherOrganization = organizations.some(
+    ({ id }) => id !== organization.id,
+  );
+  const canLeave = Boolean(
+    memberRole &&
+      canLeaveOrganizationWithOwnerCount(
+        memberRole,
+        ownerCount,
+        hasAnotherOrganization,
+      ),
+  );
+  const actions = useOrganizationGeneralActions(
+    organization,
+    canLeave,
+    onWorkspaceChanged,
+  );
+
+  return (
+    <>
+      {accessError && <div className="errorBanner">{accessError}</div>}
+      {actions.error && <div className="errorBanner">{actions.error}</div>}
+      {actions.notice && (
+        <div aria-live="polite" className="successBanner pageBanner">
+          {actions.notice}
+        </div>
+      )}
+      <div className="organizationSettingsGrid">
+        <OrganizationDetailsCard
+          busy={actions.action !== undefined}
+          loadError={accessError}
+          memberRole={memberRole}
+          name={actions.name}
+          onName={actions.setName}
+          onSave={actions.save}
+          organization={organization}
+        />
+        <LeaveOrganizationCard
+          action={actions.action}
+          canLeave={canLeave}
+          hasAnotherOrganization={hasAnotherOrganization}
+          memberRole={memberRole}
+          onLeave={actions.leave}
+        />
+      </div>
+    </>
+  );
+}
+
+function useOrganizationGeneralActions(
+  organization: WorkspaceOrganization,
+  canLeave: boolean,
+  onWorkspaceChanged: () => Promise<void>,
+) {
+  const [name, setName] = useState(organization.name);
+  const [action, setAction] = useState<"leave" | "save">();
+  const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+  useEffect(() => setName(organization.name), [organization.name]);
+  const start = (nextAction: "leave" | "save") => {
+    setAction(nextAction);
+    setError(undefined);
+    setNotice(undefined);
+  };
+  const save = async (event: FormEvent) => {
     event.preventDefault();
-    const nextName = state.name.trim();
-    if (!organization || !nextName) return;
-    state.startAction();
+    const nextName = name.trim();
+    if (!nextName || nextName === organization.name) return;
+    start("save");
     try {
       const result = await authClient.organization.update({
         data: { name: nextName },
@@ -80,365 +253,72 @@ export function OrganizationSettings({
           result.error.message ?? "Could not update your organization.",
         );
       }
-      state.setNotice("Organization name updated.");
-      await state.load();
-    } catch (cause) {
-      state.setError(messageFrom(cause));
-    } finally {
-      state.setBusy(false);
-    }
-  }
-
-  async function cancelInvitation(invitationId: string) {
-    state.startAction();
-    try {
-      const result = await authClient.organization.cancelInvitation({
-        invitationId,
-      });
-      if (result.error) {
-        throw new Error(
-          result.error.message ?? "Could not cancel this invitation.",
-        );
-      }
-      state.setNotice("Invitation canceled.");
-      await state.load();
-    } catch (cause) {
-      state.setError(messageFrom(cause));
-    } finally {
-      state.setBusy(false);
-    }
-  }
-
-  async function updateMemberRole(
-    member: OrganizationMemberRecord,
-    role: OrganizationInvitationRole,
-  ) {
-    if (!organization || organizationRoleValue(member.role) === role) return;
-    state.startAction();
-    try {
-      const result = await authClient.organization.updateMemberRole({
-        memberId: member.id,
-        organizationId: organization.id,
-        role,
-      });
-      if (result.error) {
-        throw new Error(
-          result.error.message ?? "Could not update this member’s role.",
-        );
-      }
-      state.setNotice(`${member.user.name} is now an organization ${role}.`);
-      await Promise.all([state.load(), onAccessChanged()]);
-    } catch (cause) {
-      state.setError(messageFrom(cause));
-    } finally {
-      state.setBusy(false);
-    }
-  }
-
-  return (
-    <OrganizationSettingsView
-      busy={state.busy}
-      canManage={canManage}
-      data={state.data}
-      error={state.error}
-      name={state.name}
-      notice={state.notice}
-      onCancel={cancelInvitation}
-      onGroupsChanged={groupsChanged}
-      onLeave={() => leaveOrganization(state, onLeft)}
-      onMemberRole={updateMemberRole}
-      onName={state.setName}
-      onReload={state.load}
-      onSave={save}
-    />
-  );
-}
-
-async function leaveOrganization(
-  state: ReturnType<typeof useOrganizationSettingsData>,
-  onLeft: () => Promise<void>,
-) {
-  const data = state.data;
-  const organization = data?.organization;
-  const canLeave = canLeaveOrganization(
-    data?.memberRole,
-    data?.members.map(({ role }) => role) ?? [],
-    Boolean(data?.fallbackOrganization),
-  );
-  if (!organization || !canLeave) return;
-  if (
-    !window.confirm(
-      `Leave ${organization.name}? You’ll lose access to its files and workspace data.`,
-    )
-  ) {
-    return;
-  }
-  state.startAction();
-  try {
-    const result = await authClient.organization.leave({
-      organizationId: organization.id,
-    });
-    if (result.error) {
-      throw new Error(
-        result.error.message ?? "Could not leave this organization.",
-      );
-    }
-    await onLeft();
-  } catch (cause) {
-    state.setError(messageFrom(cause));
-  } finally {
-    state.setBusy(false);
-  }
-}
-
-function useOrganizationSettingsData(activeOrganizationId?: string | null) {
-  const [data, setData] = useState<OrganizationSettingsData>();
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
-  const load = useCallback(async () => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      const nextData = await fetchOrganizationSettings(activeOrganizationId);
-      setData(nextData);
-      setName(nextData.organization.name);
+      setNotice("Organization name updated.");
+      await onWorkspaceChanged();
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
-      setBusy(false);
+      setAction(undefined);
     }
-  }, [activeOrganizationId]);
-  useEffect(() => void load(), [load]);
-  const startAction = () => {
-    setBusy(true);
-    setError(undefined);
-    setNotice(undefined);
   };
-  return {
-    busy,
-    data,
-    error,
-    load,
-    name,
-    notice,
-    setBusy,
-    setError,
-    setName,
-    setNotice,
-    startAction,
+  const leave = async () => {
+    if (!canLeave) return;
+    if (
+      !window.confirm(
+        `Leave ${organization.name}? You’ll lose access to its files and workspace data.`,
+      )
+    ) {
+      return;
+    }
+    start("leave");
+    try {
+      const result = await authClient.organization.leave({
+        organizationId: organization.id,
+      });
+      if (result.error) {
+        throw new Error(
+          result.error.message ?? "Could not leave this organization.",
+        );
+      }
+      await onWorkspaceChanged();
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setAction(undefined);
+    }
   };
-}
-
-async function fetchOrganizationSettings(activeOrganizationId?: string | null) {
-  const organizationResult = await authClient.organization.list();
-  if (organizationResult.error) {
-    throw new Error(
-      organizationResult.error.message ?? "Could not load your organization.",
-    );
-  }
-  const organization =
-    organizationResult.data?.find(({ id }) => id === activeOrganizationId) ??
-    organizationResult.data?.[0];
-  if (!organization) throw new Error("Your active organization was not found.");
-  const [roleResult, membersResult, invitationsResult] = await Promise.all([
-    authClient.organization.getActiveMemberRole({
-      query: { organizationId: organization.id },
-    }),
-    authClient.organization.listMembers({
-      query: { limit: 100, organizationId: organization.id },
-    }),
-    authClient.organization.listInvitations({
-      query: { organizationId: organization.id },
-    }),
-  ]);
-  const requestError =
-    roleResult.error ?? membersResult.error ?? invitationsResult.error;
-  if (requestError) {
-    throw new Error(
-      requestError.message ?? "Could not load organization members.",
-    );
-  }
-  const memberRole = roleResult.data?.role ?? "member";
-  const groups = canManageOrganization(memberRole)
-    ? (await getOrganizationGroups()).groups
-    : [];
-  return {
-    fallbackOrganization: organizationResult.data?.find(
-      ({ id }) => id !== organization.id,
-    ),
-    groups,
-    invitations: (
-      (invitationsResult.data ?? []) as OrganizationInvitationRecord[]
-    ).filter(({ status }) => status === "pending"),
-    memberRole,
-    members: (membersResult.data?.members ?? []) as OrganizationMemberRecord[],
-    organization,
-  };
-}
-
-function OrganizationSettingsView({
-  busy,
-  canManage,
-  data,
-  error,
-  name,
-  notice,
-  onCancel,
-  onGroupsChanged,
-  onLeave,
-  onMemberRole,
-  onName,
-  onReload,
-  onSave,
-}: {
-  busy: boolean;
-  canManage: boolean;
-  data: OrganizationSettingsData | undefined;
-  error: string | undefined;
-  name: string;
-  notice: string | undefined;
-  onCancel: (invitationId: string) => Promise<void>;
-  onGroupsChanged: () => Promise<void>;
-  onLeave: () => Promise<void>;
-  onMemberRole: (
-    member: OrganizationMemberRecord,
-    role: OrganizationInvitationRole,
-  ) => Promise<void>;
-  onName: (name: string) => void;
-  onReload: () => Promise<void>;
-  onSave: (event: FormEvent) => Promise<void>;
-}) {
-  return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Workspace settings</p>
-          <h1>Organization</h1>
-        </div>
-      </header>
-      <section className="content">
-        {error && <div className="errorBanner">{error}</div>}
-        {notice && (
-          <div aria-live="polite" className="successBanner pageBanner">
-            {notice}
-          </div>
-        )}
-        {data ? (
-          <div className="organizationSettingsGrid">
-            <OrganizationDetailsCard
-              busy={busy}
-              canManage={canManage}
-              data={data}
-              name={name}
-              onName={onName}
-              onSave={onSave}
-            />
-            {canManage && (
-              <InviteMemberForm
-                key={data.organization.id}
-                memberRole={data.memberRole}
-                onSent={onReload}
-                organizationId={data.organization.id}
-              />
-            )}
-            {canManage && (
-              <OrganizationGroups
-                groups={data.groups}
-                members={data.members}
-                onChanged={onGroupsChanged}
-              />
-            )}
-            <OrganizationMembers
-              busy={busy}
-              managerRole={data.memberRole}
-              members={data.members}
-              onRoleChange={onMemberRole}
-            />
-            {canManage && data.invitations.length > 0 && (
-              <PendingInvitations
-                busy={busy}
-                invitations={data.invitations}
-                onCancel={onCancel}
-              />
-            )}
-            <LeaveOrganizationCard
-              busy={busy}
-              canLeave={canLeaveOrganization(
-                data.memberRole,
-                data.members.map(({ role }) => role),
-                Boolean(data.fallbackOrganization),
-              )}
-              data={data}
-              onLeave={onLeave}
-            />
-          </div>
-        ) : !error ? (
-          <div className="emptyState compactEmptyState">
-            <div className="emptyGlyph">◇</div>
-            <h3>{busy ? "Loading organization…" : "No organization found."}</h3>
-          </div>
-        ) : null}
-      </section>
-    </>
-  );
-}
-
-function LeaveOrganizationCard({
-  busy,
-  canLeave,
-  data,
-  onLeave,
-}: {
-  busy: boolean;
-  canLeave: boolean;
-  data: OrganizationSettingsData;
-  onLeave: () => Promise<void>;
-}) {
-  const restriction = !data.fallbackOrganization
-    ? "Join another organization before leaving this one."
-    : !canLeave
-      ? "Assign another owner before leaving this organization."
-      : "Your account and your other organizations will remain available.";
-  return (
-    <section className="settingsCard leaveOrganizationCard">
-      <div>
-        <h2>Leave organization</h2>
-        <p>{restriction}</p>
-      </div>
-      <button
-        className="dangerButton settingsSubmit"
-        disabled={busy || !canLeave}
-        onClick={() => void onLeave()}
-        type="button"
-      >
-        {busy ? "Leaving…" : "Leave organization"}
-      </button>
-    </section>
-  );
+  return { action, error, leave, name, notice, save, setName };
 }
 
 function OrganizationDetailsCard({
   busy,
-  canManage,
-  data,
+  loadError,
+  memberRole,
   name,
   onName,
   onSave,
+  organization,
 }: {
   busy: boolean;
-  canManage: boolean;
-  data: OrganizationSettingsData;
+  loadError: string | undefined;
+  memberRole: string | undefined;
   name: string;
   onName: (name: string) => void;
   onSave: (event: FormEvent) => Promise<void>;
+  organization: WorkspaceOrganization;
 }) {
+  const canManage = canManageOrganization(memberRole);
   return (
     <form className="settingsCard" onSubmit={(event) => void onSave(event)}>
       <div>
         <h2>Organization details</h2>
-        <p>Active workspace · your role is {data.memberRole}.</p>
+        <p>
+          {memberRole
+            ? `Active workspace · your role is ${formatRole(memberRole)}.`
+            : loadError
+              ? "Your organization role could not be loaded."
+              : "Loading your organization role…"}
+        </p>
       </div>
       <label className="field">
         <span>Organization name</span>
@@ -456,9 +336,7 @@ function OrganizationDetailsCard({
       {canManage && (
         <button
           className="primaryButton settingsSubmit"
-          disabled={
-            busy || !name.trim() || name.trim() === data.organization.name
-          }
+          disabled={busy || !name.trim() || name.trim() === organization.name}
           type="submit"
         >
           {busy ? "Saving…" : "Save changes"}
@@ -468,223 +346,94 @@ function OrganizationDetailsCard({
   );
 }
 
-function InviteMemberForm({
+function LeaveOrganizationCard({
+  action,
+  canLeave,
+  hasAnotherOrganization,
   memberRole,
-  onSent,
-  organizationId,
+  onLeave,
 }: {
-  memberRole: string;
-  onSent: () => Promise<void>;
-  organizationId: string;
+  action: "leave" | "save" | undefined;
+  canLeave: boolean;
+  hasAnotherOrganization: boolean;
+  memberRole: string | undefined;
+  onLeave: () => Promise<void>;
 }) {
-  const assignableRoles = assignableOrganizationRoles(memberRole);
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState<OrganizationInvitationRole>("member");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
-
-  async function invite(event: FormEvent) {
-    event.preventDefault();
-    const invitedEmail = email.trim().toLowerCase();
-    if (!invitedEmail) return;
-    setBusy(true);
-    setError(undefined);
-    setNotice(undefined);
-    try {
-      const result = await authClient.organization.inviteMember({
-        email: invitedEmail,
-        organizationId,
-        role,
-      });
-      if (result.error) {
-        throw new Error(
-          result.error.message ?? "Could not send this invitation.",
-        );
-      }
-      const assignedRole = result.data?.role ?? role;
-      setEmail("");
-      setNotice(
-        `Invitation sent to ${invitedEmail} with the ${assignedRole} role.`,
-      );
-      await onSent();
-    } catch (cause) {
-      setError(messageFrom(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  const restriction = !memberRole
+    ? "Loading membership controls…"
+    : !hasAnotherOrganization
+      ? "Join another organization before leaving this one."
+      : !canLeave
+        ? "Assign another owner before leaving this organization."
+        : "Your account and your other organizations will remain available.";
   return (
-    <form className="settingsCard" onSubmit={(event) => void invite(event)}>
+    <section className="settingsCard leaveOrganizationCard">
       <div>
-        <h2>Invite a member</h2>
-        <p>They’ll receive a single-use invitation that expires in 48 hours.</p>
+        <h2>Leave organization</h2>
+        <p>{restriction}</p>
       </div>
-      <label className="field">
-        <span>Email address</span>
-        <input
-          autoCapitalize="none"
-          autoComplete="email"
-          disabled={busy}
-          inputMode="email"
-          name="invite-email"
-          onChange={(event) => setEmail(event.target.value)}
-          required
-          spellCheck={false}
-          type="email"
-          value={email}
-        />
-      </label>
-      <label className="field">
-        <span>Organization role</span>
-        <select
-          disabled={busy}
-          name="invite-role"
-          onChange={(event) =>
-            setRole(event.target.value as OrganizationInvitationRole)
-          }
-          value={role}
-        >
-          {assignableRoles.map((assignableRole) => (
-            <option key={assignableRole} value={assignableRole}>
-              {formatRole(assignableRole)}
-            </option>
-          ))}
-        </select>
-        <small>{roleDescription(role)}</small>
-      </label>
-      {error && <div className="errorBanner compactBanner">{error}</div>}
-      {notice && <div className="successBanner compactBanner">{notice}</div>}
       <button
-        className="primaryButton settingsSubmit"
-        disabled={busy || !email.trim()}
-        type="submit"
+        className="dangerButton settingsSubmit"
+        disabled={action !== undefined || !canLeave}
+        onClick={() => void onLeave()}
+        type="button"
       >
-        {busy ? "Sending…" : "Send invitation"}
+        {action === "leave" ? "Leaving…" : "Leave organization"}
       </button>
-    </form>
-  );
-}
-
-function OrganizationMembers({
-  busy,
-  managerRole,
-  members,
-  onRoleChange,
-}: {
-  busy: boolean;
-  managerRole: string;
-  members: OrganizationMemberRecord[];
-  onRoleChange: (
-    member: OrganizationMemberRecord,
-    role: OrganizationInvitationRole,
-  ) => Promise<void>;
-}) {
-  const memberRoles = members.map(({ role }) => role);
-  return (
-    <section className="settingsCard organizationPeople">
-      <div>
-        <h2>Members</h2>
-        <p>{members.length} people have access to this organization.</p>
-      </div>
-      <div className="organizationPeopleList">
-        {members.map((member) => {
-          const roles = editableOrganizationRoles(
-            managerRole,
-            member.role,
-            memberRoles,
-          );
-          const role = organizationRoleValue(member.role);
-          return (
-            <div key={member.id}>
-              <span>
-                <strong>{member.user.name}</strong>
-                <small>{member.user.email}</small>
-              </span>
-              {roles.length > 0 ? (
-                <select
-                  aria-label={`Role for ${member.user.name}`}
-                  className="memberRoleSelect"
-                  disabled={busy || roles.length === 1}
-                  onChange={(event) =>
-                    void onRoleChange(
-                      member,
-                      event.target.value as OrganizationInvitationRole,
-                    )
-                  }
-                  value={role}
-                >
-                  {roles.map((assignableRole) => (
-                    <option key={assignableRole} value={assignableRole}>
-                      {formatRole(assignableRole)}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <b>{role}</b>
-              )}
-            </div>
-          );
-        })}
-      </div>
     </section>
   );
 }
 
-function PendingInvitations({
-  busy,
-  invitations,
-  onCancel,
-}: {
-  busy: boolean;
-  invitations: OrganizationInvitationRecord[];
-  onCancel: (invitationId: string) => Promise<void>;
-}) {
+function SettingsLoading({ label }: { label: string }) {
   return (
-    <section className="settingsCard organizationPeople">
-      <div>
-        <h2>Pending invitations</h2>
-        <p>Invitations that have not been accepted yet.</p>
-      </div>
-      <div className="organizationPeopleList">
-        {invitations.map((invitation) => (
-          <div key={invitation.id}>
-            <span>
-              <strong>{invitation.email}</strong>
-              <small>
-                {formatRole(invitation.role)} · Expires{" "}
-                {formatDate(invitation.expiresAt)}
-              </small>
-            </span>
-            <button
-              disabled={busy}
-              onClick={() => void onCancel(invitation.id)}
-              type="button"
-            >
-              Cancel
-            </button>
-          </div>
-        ))}
-      </div>
-    </section>
+    <div className="emptyState compactEmptyState">
+      <div className="emptyGlyph">◇</div>
+      <h3>{label}</h3>
+    </div>
   );
 }
 
-function formatDate(value: Date) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
-    new Date(value),
+function SettingsAccessDenied({
+  onNavigate,
+}: {
+  onNavigate: (pathname: string) => void;
+}) {
+  return (
+    <div className="emptyState compactEmptyState">
+      <div className="emptyGlyph">◇</div>
+      <h3>Organization manager access is required.</h3>
+      <button onClick={() => onNavigate("/organization")} type="button">
+        Return to general settings
+      </button>
+    </div>
   );
+}
+
+function handleNavigation(
+  event: MouseEvent<HTMLAnchorElement>,
+  pathname: string,
+  onNavigate: (pathname: string) => void,
+) {
+  if (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return;
+  }
+  event.preventDefault();
+  onNavigate(pathname);
 }
 
 function formatRole(role: string) {
-  return role.charAt(0).toUpperCase() + role.slice(1);
-}
-
-function roleDescription(role: OrganizationInvitationRole) {
-  if (role === "owner") return "Full access, including ownership controls.";
-  if (role === "admin") return "Can manage people, groups, and settings.";
-  return "Standard access to the organization workspace.";
+  return role
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => value.charAt(0).toUpperCase() + value.slice(1))
+    .join(", ");
 }
 
 function messageFrom(cause: unknown) {
