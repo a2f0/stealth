@@ -682,7 +682,7 @@ async function createFixture() {
         return { messageId: "test-message" };
       },
     } as unknown as SendEmail,
-    INBOUND_EMAIL_ADDRESS: "upload@inbox.tearleads.com",
+    INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: {} as R2Bucket,
   } satisfies Bindings;
   const auth = createAuth(bindings, (promise) => pending.push(promise));

@@ -186,10 +186,7 @@ function AuthenticatedWorkspace({
   workspace: ReturnType<typeof useWorkspaceOrganizations>;
 }) {
   if (workspace.isPending) return <LoadingScreen />;
-  if (
-    ["/admin", "/inbox"].includes(pathname) &&
-    !hasRole(session.user.role, "admin")
-  ) {
+  if (pathname === "/admin" && !hasRole(session.user.role, "admin")) {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
   if (pathname === "/finance" && access.isPending) return <LoadingScreen />;

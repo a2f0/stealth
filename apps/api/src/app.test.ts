@@ -77,7 +77,7 @@ function authBindings(): Bindings {
     CORS_ORIGIN: "https://app.test",
     DB: new Database(":memory:") as unknown as D1Database,
     EMAIL: {} as SendEmail,
-    INBOUND_EMAIL_ADDRESS: "upload@inbox.tearleads.com",
+    INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: {} as R2Bucket,
   };
 }

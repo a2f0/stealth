@@ -161,12 +161,14 @@ bun run terraform:plan
 bun run terraform:apply
 ```
 
-Inbound mail to `upload@inbox.tearleads.com` is handled by the API Worker. It
-stores the full `.eml` and each attachment in the private R2 bucket, with
-delivery and attachment metadata in D1. Admins can inspect the mailbox in the
+Inbound mail to `upload+<organization-id>@inbox.tearleads.com` is handled by
+the API Worker. It stores the full `.eml` and each attachment in the private R2
+bucket, with organization-scoped delivery and attachment metadata in D1.
+Organization members can inspect their active organization's mailbox in the
 client at `/inbox`. The ignored `.secrets/root.env` also needs
-`CLOUDFLARE_EMAIL_API_TOKEN`; it is used only to verify the subdomain's Email
-Routing setup. The Terraform token needs Email Routing Rules Write.
+`CLOUDFLARE_EMAIL_API_TOKEN`; it configures subaddressing and verifies the
+subdomain's Email Routing setup. The Terraform token needs Email Routing Rules
+Write.
 
 ## Deploy production
 

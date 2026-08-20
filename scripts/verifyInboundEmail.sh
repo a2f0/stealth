@@ -66,5 +66,13 @@ if [[ "$matching_rules" -ne 1 ]]; then
   exit 1
 fi
 
+settings_response="$(cloudflare_get "$API_BASE/zones/$zone_id/email/routing")"
+if ! jq -e \
+  '(.success == true) and (.result.support_subaddress == true)' \
+  >/dev/null <<<"$settings_response"; then
+  echo "ERROR: Email Routing subaddressing is not enabled." >&2
+  exit 1
+fi
+
 echo "PASS: $INBOUND_DOMAIN has its three Cloudflare Email Routing MX records."
-echo "PASS: $INBOUND_ADDRESS routes to the $WORKER_NAME email handler."
+echo "PASS: $INBOUND_ADDRESS routes organization subaddresses to $WORKER_NAME."

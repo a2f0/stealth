@@ -32,6 +32,11 @@ export interface InboundEmailDetail extends InboundEmailSummary {
   text: string | null;
 }
 
+interface OrganizationInbox {
+  address: string;
+  emails: InboundEmailSummary[];
+}
+
 export interface AdminOrganization {
   createdAt: number | string;
   deletedAt: number | string | null;
@@ -57,8 +62,7 @@ export async function listInboundEmails() {
   const response = await fetch(`${apiUrl}/api/inbox`, {
     credentials: "include",
   });
-  const body = await parseResponse<{ emails: InboundEmailSummary[] }>(response);
-  return body.emails;
+  return parseResponse<OrganizationInbox>(response);
 }
 
 export async function getInboundEmail(id: string) {

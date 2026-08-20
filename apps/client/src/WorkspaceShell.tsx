@@ -123,31 +123,21 @@ export function WorkspaceShell({
           >
             <span className="navIcon">◇</span> Organization
           </a>
+          <a
+            className={activePage === "inbox" ? "navItem active" : "navItem"}
+            href="/inbox"
+            onClick={(event) => handleNavigation(event, "/inbox", onNavigate)}
+          >
+            <span className="navIcon">✉</span> Inbox
+          </a>
           {hasRole(user.role, "admin") && (
-            <>
-              <a
-                className={
-                  activePage === "inbox" ? "navItem active" : "navItem"
-                }
-                href="/inbox"
-                onClick={(event) =>
-                  handleNavigation(event, "/inbox", onNavigate)
-                }
-              >
-                <span className="navIcon">✉</span> Inbox
-              </a>
-              <a
-                className={
-                  activePage === "admin" ? "navItem active" : "navItem"
-                }
-                href="/admin"
-                onClick={(event) =>
-                  handleNavigation(event, "/admin", onNavigate)
-                }
-              >
-                <span className="navIcon">◎</span> Users
-              </a>
-            </>
+            <a
+              className={activePage === "admin" ? "navItem active" : "navItem"}
+              href="/admin"
+              onClick={(event) => handleNavigation(event, "/admin", onNavigate)}
+            >
+              <span className="navIcon">◎</span> Users
+            </a>
           )}
         </nav>
         <div className="sidebarFoot">

@@ -5,7 +5,7 @@ export interface Bindings {
   CORS_ORIGIN: string;
   DB: D1Database;
   EMAIL: SendEmail;
-  INBOUND_EMAIL_ADDRESS: string;
+  INBOUND_EMAIL_DOMAIN: string;
   PLAID_CLIENT_ID?: string;
   PLAID_ENV?: "development" | "production" | "sandbox";
   PLAID_REDIRECT_URI?: string;
