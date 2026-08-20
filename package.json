@@ -31,6 +31,7 @@
     "lint:scripts": "shellcheck scripts/*.sh scripts/checks/*.sh scripts/git/hooks/* terraform/scripts/*.sh",
     "lint:staged": "lint-staged",
     "lint:terraform": "bash scripts/checks/checkTerraform.sh",
+    "organizations:objects:reorganize": "bash scripts/reorganizeOrganizationObjects.sh",
     "organizations:purge": "bash scripts/purgeOrganizations.sh",
     "terraform:apply": "bash terraform/scripts/run.sh apply",
     "terraform:plan": "bash terraform/scripts/run.sh plan",
