@@ -63,6 +63,35 @@ export function assignableOrganizationRoles(
   return [];
 }
 
+export function editableOrganizationRoles(
+  managerRole: string | null | undefined,
+  memberRole: string,
+  memberRoles: string[],
+): OrganizationInvitationRole[] {
+  const assignableRoles = assignableOrganizationRoles(managerRole);
+  if (
+    hasOrganizationRole(memberRole, "owner") &&
+    !assignableRoles.includes("owner")
+  ) {
+    return [];
+  }
+  const ownerCount = memberRoles.filter((role) =>
+    hasOrganizationRole(role, "owner"),
+  ).length;
+  if (hasOrganizationRole(memberRole, "owner") && ownerCount <= 1) {
+    return ["owner"];
+  }
+  return assignableRoles;
+}
+
+export function organizationRoleValue(
+  role: string,
+): OrganizationInvitationRole {
+  if (hasOrganizationRole(role, "owner")) return "owner";
+  if (hasOrganizationRole(role, "admin")) return "admin";
+  return "member";
+}
+
 export function canLeaveOrganization(
   role: string | null | undefined,
   memberRoles: string[],

@@ -415,16 +415,50 @@ describe("password authentication", () => {
         )
         .get(invitedEmail),
     ).toEqual({ count: 2 });
+    const invitedMember = fixture.database
+      .query(
+        `SELECT member.id, member.role
+         FROM member
+         JOIN user ON user.id = member.userId
+         WHERE user.email = ? AND member.organizationId = ?`,
+      )
+      .get(invitedEmail, organization.id) as { id: string; role: string };
+    expect(invitedMember.role).toBe("admin");
+    const ownerMember = fixture.database
+      .query(
+        `SELECT member.id
+         FROM member
+         JOIN user ON user.id = member.userId
+         WHERE user.email = ? AND member.organizationId = ?`,
+      )
+      .get(email, organization.id) as { id: string };
+    const adminUpdatingOwner = await post(
+      fixture.auth,
+      "/organization/update-member-role",
+      {
+        memberId: ownerMember.id,
+        organizationId: organization.id,
+        role: "member",
+      },
+      inviteeCookie,
+    );
+    expect(adminUpdatingOwner.status).toBe(403);
+    const ownerUpdatingAdmin = await post(
+      fixture.auth,
+      "/organization/update-member-role",
+      {
+        memberId: invitedMember.id,
+        organizationId: organization.id,
+        role: "member",
+      },
+      ownerCookie,
+    );
+    expect(ownerUpdatingAdmin.status).toBe(200);
     expect(
       fixture.database
-        .query(
-          `SELECT member.role
-           FROM member
-           JOIN user ON user.id = member.userId
-           WHERE user.email = ? AND member.organizationId = ?`,
-        )
-        .get(invitedEmail, organization.id),
-    ).toEqual({ role: "admin" });
+        .query("SELECT role FROM member WHERE id = ?")
+        .get(invitedMember.id),
+    ).toEqual({ role: "member" });
     expect(
       fixture.database
         .query(

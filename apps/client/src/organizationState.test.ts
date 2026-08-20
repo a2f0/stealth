@@ -4,6 +4,8 @@ import {
   canLeaveOrganization,
   canManageOrganization,
   createOrganizationSlug,
+  editableOrganizationRoles,
+  organizationRoleValue,
   resolveActiveOrganizationId,
 } from "./organizationState";
 
@@ -48,6 +50,30 @@ describe("organization state", () => {
     ]);
     expect(assignableOrganizationRoles("admin")).toEqual(["member", "admin"]);
     expect(assignableOrganizationRoles("member")).toEqual([]);
+  });
+
+  it("offers safe role changes for existing organization members", () => {
+    expect(
+      editableOrganizationRoles("admin", "member", ["owner", "admin"]),
+    ).toEqual(["member", "admin"]);
+    expect(
+      editableOrganizationRoles("admin", "owner", ["owner", "admin"]),
+    ).toEqual([]);
+    expect(
+      editableOrganizationRoles("owner", "member", ["owner", "member"]),
+    ).toEqual(["member", "admin", "owner"]);
+    expect(
+      editableOrganizationRoles("owner", "owner", ["owner", "member"]),
+    ).toEqual(["owner"]);
+    expect(
+      editableOrganizationRoles("owner", "owner", ["owner", "owner"]),
+    ).toEqual(["member", "admin", "owner"]);
+  });
+
+  it("normalizes combined organization roles for the role control", () => {
+    expect(organizationRoleValue("member")).toBe("member");
+    expect(organizationRoleValue("member,admin")).toBe("admin");
+    expect(organizationRoleValue("admin,owner")).toBe("owner");
   });
 
   it("lets members leave while preserving an owner and fallback workspace", () => {

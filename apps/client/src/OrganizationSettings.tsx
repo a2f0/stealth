@@ -12,7 +12,9 @@ import {
   assignableOrganizationRoles,
   canLeaveOrganization,
   canManageOrganization,
+  editableOrganizationRoles,
   type OrganizationInvitationRole,
+  organizationRoleValue,
 } from "./organizationState";
 
 interface OrganizationRecord {
@@ -107,6 +109,32 @@ export function OrganizationSettings({
     }
   }
 
+  async function updateMemberRole(
+    member: OrganizationMemberRecord,
+    role: OrganizationInvitationRole,
+  ) {
+    if (!organization || organizationRoleValue(member.role) === role) return;
+    state.startAction();
+    try {
+      const result = await authClient.organization.updateMemberRole({
+        memberId: member.id,
+        organizationId: organization.id,
+        role,
+      });
+      if (result.error) {
+        throw new Error(
+          result.error.message ?? "Could not update this member’s role.",
+        );
+      }
+      state.setNotice(`${member.user.name} is now an organization ${role}.`);
+      await Promise.all([state.load(), onAccessChanged()]);
+    } catch (cause) {
+      state.setError(messageFrom(cause));
+    } finally {
+      state.setBusy(false);
+    }
+  }
+
   return (
     <OrganizationSettingsView
       busy={state.busy}
@@ -118,6 +146,7 @@ export function OrganizationSettings({
       onCancel={cancelInvitation}
       onGroupsChanged={groupsChanged}
       onLeave={() => leaveOrganization(state, onLeft)}
+      onMemberRole={updateMemberRole}
       onName={state.setName}
       onReload={state.load}
       onSave={save}
@@ -259,6 +288,7 @@ function OrganizationSettingsView({
   onCancel,
   onGroupsChanged,
   onLeave,
+  onMemberRole,
   onName,
   onReload,
   onSave,
@@ -272,6 +302,10 @@ function OrganizationSettingsView({
   onCancel: (invitationId: string) => Promise<void>;
   onGroupsChanged: () => Promise<void>;
   onLeave: () => Promise<void>;
+  onMemberRole: (
+    member: OrganizationMemberRecord,
+    role: OrganizationInvitationRole,
+  ) => Promise<void>;
   onName: (name: string) => void;
   onReload: () => Promise<void>;
   onSave: (event: FormEvent) => Promise<void>;
@@ -316,7 +350,12 @@ function OrganizationSettingsView({
                 onChanged={onGroupsChanged}
               />
             )}
-            <OrganizationMembers members={data.members} />
+            <OrganizationMembers
+              busy={busy}
+              managerRole={data.memberRole}
+              members={data.members}
+              onRoleChange={onMemberRole}
+            />
             {canManage && data.invitations.length > 0 && (
               <PendingInvitations
                 busy={busy}
@@ -529,10 +568,20 @@ function InviteMemberForm({
 }
 
 function OrganizationMembers({
+  busy,
+  managerRole,
   members,
+  onRoleChange,
 }: {
+  busy: boolean;
+  managerRole: string;
   members: OrganizationMemberRecord[];
+  onRoleChange: (
+    member: OrganizationMemberRecord,
+    role: OrganizationInvitationRole,
+  ) => Promise<void>;
 }) {
+  const memberRoles = members.map(({ role }) => role);
   return (
     <section className="settingsCard organizationPeople">
       <div>
@@ -540,15 +589,44 @@ function OrganizationMembers({
         <p>{members.length} people have access to this organization.</p>
       </div>
       <div className="organizationPeopleList">
-        {members.map((member) => (
-          <div key={member.id}>
-            <span>
-              <strong>{member.user.name}</strong>
-              <small>{member.user.email}</small>
-            </span>
-            <b>{member.role}</b>
-          </div>
-        ))}
+        {members.map((member) => {
+          const roles = editableOrganizationRoles(
+            managerRole,
+            member.role,
+            memberRoles,
+          );
+          const role = organizationRoleValue(member.role);
+          return (
+            <div key={member.id}>
+              <span>
+                <strong>{member.user.name}</strong>
+                <small>{member.user.email}</small>
+              </span>
+              {roles.length > 0 ? (
+                <select
+                  aria-label={`Role for ${member.user.name}`}
+                  className="memberRoleSelect"
+                  disabled={busy || roles.length === 1}
+                  onChange={(event) =>
+                    void onRoleChange(
+                      member,
+                      event.target.value as OrganizationInvitationRole,
+                    )
+                  }
+                  value={role}
+                >
+                  {roles.map((assignableRole) => (
+                    <option key={assignableRole} value={assignableRole}>
+                      {formatRole(assignableRole)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <b>{role}</b>
+              )}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
