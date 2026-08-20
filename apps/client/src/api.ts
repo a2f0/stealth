@@ -34,6 +34,7 @@ export interface InboundEmailDetail extends InboundEmailSummary {
 
 export interface AdminOrganization {
   createdAt: number | string;
+  deletedAt: number | string | null;
   id: string;
   memberCount: number;
   name: string;

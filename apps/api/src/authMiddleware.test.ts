@@ -40,6 +40,20 @@ describe("organization middleware", () => {
     });
   });
 
+  it("rejects membership in a deleted organization", async () => {
+    const response = await requestOrganization(
+      "deleted-org",
+      null,
+      [],
+      ["deleted-org"],
+    );
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      error: "Organization membership required.",
+    });
+  });
+
   it("rejects an organization pointer without a membership", async () => {
     const response = await requestOrganization("private-org", null, []);
     expect(response.status).toBe(403);
@@ -88,24 +102,31 @@ function requestOrganization(
   activeOrganizationId: string | null,
   defaultOrganizationId: string | null,
   memberships: string[],
+  deletedMemberships: string[] = [],
 ) {
   return testApp(activeOrganizationId, defaultOrganizationId).request(
     "/",
     undefined,
-    { DB: membershipDatabase(memberships) } as Bindings,
+    { DB: membershipDatabase(memberships, deletedMemberships) } as Bindings,
   );
 }
 
-function membershipDatabase(memberships: string[]) {
+function membershipDatabase(
+  memberships: string[],
+  deletedMemberships: string[],
+) {
   return {
-    prepare: () => ({
+    prepare: (query: string) => ({
       bind: (userId: string, ...organizationIds: string[]) => ({
         all: async () => ({
           results:
             userId === "user-id"
-              ? memberships
-                  .filter((organizationId) =>
-                    organizationIds.includes(organizationId),
+              ? [...memberships, ...deletedMemberships]
+                  .filter(
+                    (organizationId) =>
+                      organizationIds.includes(organizationId) &&
+                      (!deletedMemberships.includes(organizationId) ||
+                        !query.includes('organization."deletedAt" IS NULL')),
                   )
                   .map((organizationId) => ({
                     organizationId,

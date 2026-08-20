@@ -2,12 +2,16 @@ import { type FormEvent, type MouseEvent, useEffect, useState } from "react";
 import { authClient } from "./authClient";
 import { OrganizationAccessSettings } from "./OrganizationGroups";
 import { OrganizationPeople } from "./OrganizationPeople";
+import { deleteCurrentOrganization } from "./organizationSettingsApi";
 import {
+  canDeleteOrganization,
   canLeaveOrganizationWithOwnerCount,
   canManageOrganization,
   organizationSettingsPage,
   type WorkspaceOrganization,
 } from "./organizationState";
+
+type OrganizationGeneralAction = "delete" | "leave" | "save";
 
 export function OrganizationSettings({
   accessError,
@@ -114,6 +118,7 @@ function OrganizationSettingsPageContent({
       accessError={accessError}
       memberRole={memberRole}
       onWorkspaceChanged={onWorkspaceChanged}
+      onNavigate={onNavigate}
       organization={organization}
       organizations={organizations}
       ownerCount={ownerCount}
@@ -164,6 +169,7 @@ function OrganizationGeneral({
   accessError,
   memberRole,
   onWorkspaceChanged,
+  onNavigate,
   organization,
   organizations,
   ownerCount,
@@ -171,6 +177,7 @@ function OrganizationGeneral({
   accessError: string | undefined;
   memberRole: string | undefined;
   onWorkspaceChanged: () => Promise<void>;
+  onNavigate: (pathname: string) => void;
   organization: WorkspaceOrganization;
   organizations: WorkspaceOrganization[];
   ownerCount: number;
@@ -186,10 +193,12 @@ function OrganizationGeneral({
         hasAnotherOrganization,
       ),
   );
+  const canDelete = canDeleteOrganization(memberRole);
   const actions = useOrganizationGeneralActions(
     organization,
     canLeave,
     onWorkspaceChanged,
+    onNavigate,
   );
 
   return (
@@ -218,6 +227,13 @@ function OrganizationGeneral({
           memberRole={memberRole}
           onLeave={actions.leave}
         />
+        {canDelete && (
+          <DeleteOrganizationCard
+            action={actions.action}
+            onDelete={actions.remove}
+            organizationName={organization.name}
+          />
+        )}
       </div>
     </>
   );
@@ -227,13 +243,14 @@ function useOrganizationGeneralActions(
   organization: WorkspaceOrganization,
   canLeave: boolean,
   onWorkspaceChanged: () => Promise<void>,
+  onNavigate: (pathname: string) => void,
 ) {
   const [name, setName] = useState(organization.name);
-  const [action, setAction] = useState<"leave" | "save">();
+  const [action, setAction] = useState<OrganizationGeneralAction>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   useEffect(() => setName(organization.name), [organization.name]);
-  const start = (nextAction: "leave" | "save") => {
+  const start = (nextAction: OrganizationGeneralAction) => {
     setAction(nextAction);
     setError(undefined);
     setNotice(undefined);
@@ -287,7 +304,23 @@ function useOrganizationGeneralActions(
       setAction(undefined);
     }
   };
-  return { action, error, leave, name, notice, save, setName };
+  const remove = async () => {
+    const confirmation = window.prompt(
+      `Type ${organization.name} to delete this organization and schedule all of its data for permanent deletion in 30 days.`,
+    );
+    if (confirmation !== organization.name) return;
+    start("delete");
+    try {
+      await deleteCurrentOrganization();
+      await onWorkspaceChanged();
+      onNavigate("/");
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setAction(undefined);
+    }
+  };
+  return { action, error, leave, name, notice, remove, save, setName };
 }
 
 function OrganizationDetailsCard({
@@ -353,7 +386,7 @@ function LeaveOrganizationCard({
   memberRole,
   onLeave,
 }: {
-  action: "leave" | "save" | undefined;
+  action: OrganizationGeneralAction | undefined;
   canLeave: boolean;
   hasAnotherOrganization: boolean;
   memberRole: string | undefined;
@@ -379,6 +412,36 @@ function LeaveOrganizationCard({
         type="button"
       >
         {action === "leave" ? "Leaving…" : "Leave organization"}
+      </button>
+    </section>
+  );
+}
+
+function DeleteOrganizationCard({
+  action,
+  onDelete,
+  organizationName,
+}: {
+  action: OrganizationGeneralAction | undefined;
+  onDelete: () => Promise<void>;
+  organizationName: string;
+}) {
+  return (
+    <section className="settingsCard deleteOrganizationCard">
+      <div>
+        <h2>Delete organization</h2>
+        <p>
+          {organizationName} and all of its workspace data will become
+          unavailable immediately. Permanent deletion occurs after 30 days.
+        </p>
+      </div>
+      <button
+        className="dangerButton settingsSubmit"
+        disabled={action !== undefined}
+        onClick={() => void onDelete()}
+        type="button"
+      >
+        {action === "delete" ? "Deleting…" : "Delete organization"}
       </button>
     </section>
   );

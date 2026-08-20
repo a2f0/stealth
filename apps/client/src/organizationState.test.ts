@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   assignableOrganizationRoles,
+  canDeleteOrganization,
   canLeaveOrganizationWithOwnerCount,
   canManageOrganization,
   createOrganizationSlug,
@@ -37,6 +38,12 @@ describe("organization state", () => {
     ).toBe("personal");
   });
 
+  it("does not retain a stale organization pointer when no memberships remain", () => {
+    expect(resolveActiveOrganizationId("removed", "removed", [])).toBe(
+      undefined,
+    );
+  });
+
   it("routes organization settings to focused sub-pages", () => {
     expect(organizationSettingsPage("/organization")).toBe("general");
     expect(organizationSettingsPage("/organization/people")).toBe("people");
@@ -48,6 +55,12 @@ describe("organization state", () => {
     expect(canManageOrganization("owner")).toBe(true);
     expect(canManageOrganization("admin,member")).toBe(true);
     expect(canManageOrganization("member")).toBe(false);
+  });
+
+  it("only lets an owner delete an organization", () => {
+    expect(canDeleteOrganization("owner")).toBe(true);
+    expect(canDeleteOrganization("admin")).toBe(false);
+    expect(canDeleteOrganization("member,admin")).toBe(false);
   });
 
   it("only lets owners assign the owner role in an invitation", () => {

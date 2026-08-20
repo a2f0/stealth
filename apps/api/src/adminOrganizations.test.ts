@@ -32,6 +32,22 @@ describe("admin organizations", () => {
         new URL("../migrations/0004_create_organizations.sql", import.meta.url),
       ).text(),
     );
+    database.exec(
+      await Bun.file(
+        new URL(
+          "../migrations/0010_create_organization_groups.sql",
+          import.meta.url,
+        ),
+      ).text(),
+    );
+    database.exec(
+      await Bun.file(
+        new URL(
+          "../migrations/0011_soft_delete_organizations.sql",
+          import.meta.url,
+        ),
+      ).text(),
+    );
 
     const response = await adminOrganizations.request(
       "/",
@@ -45,6 +61,7 @@ describe("admin organizations", () => {
       organizations: [
         {
           createdAt: "2026-08-18T12:00:00.000Z",
+          deletedAt: null,
           id: "org_user-1",
           memberCount: 1,
           name: "Example Person's Organization",

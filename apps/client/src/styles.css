@@ -393,7 +393,8 @@ body.sidebarResizing {
   gap: 6px;
 }
 
-.organizationSwitcher label > span {
+.organizationSwitcher label > span,
+.organizationSwitcher > span {
   color: #66675f;
   font-family: "DM Mono", monospace;
   font-size: 8px;
@@ -401,7 +402,8 @@ body.sidebarResizing {
   text-transform: uppercase;
 }
 
-.organizationSwitcher select {
+.organizationSwitcher select,
+.organizationCreateButton {
   width: 100%;
   min-width: 0;
   padding: 9px 29px 9px 10px;
@@ -413,6 +415,10 @@ body.sidebarResizing {
   font-size: 11px;
   font-weight: 600;
   text-overflow: ellipsis;
+}
+
+.organizationCreateButton {
+  text-align: left;
 }
 
 .organizationSwitcher small {

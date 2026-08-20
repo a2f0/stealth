@@ -45,9 +45,13 @@ export const requireOrganization = createMiddleware<AuthEnv>(
     }
     const placeholders = candidates.map(() => "?").join(", ");
     const memberships = await context.env.DB.prepare(
-      `SELECT "organizationId", "role"
+      `SELECT member."organizationId", member."role"
        FROM "member"
-       WHERE "userId" = ? AND "organizationId" IN (${placeholders})`,
+       JOIN "organization"
+         ON organization.id = member."organizationId"
+       WHERE member."userId" = ?
+         AND member."organizationId" IN (${placeholders})
+         AND organization."deletedAt" IS NULL`,
     )
       .bind(session.user.id, ...candidates)
       .all<{ organizationId: string; role: string }>();

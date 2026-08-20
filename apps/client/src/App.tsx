@@ -15,6 +15,7 @@ import { Inbox } from "./Inbox";
 import { Library } from "./Library";
 import { OrganizationInvitation } from "./OrganizationInvitation";
 import { OrganizationSettings } from "./OrganizationSettings";
+import { getWorkspaceOrganizations } from "./organizationSettingsApi";
 import {
   createOrganizationSlug,
   isOrganizationPath,
@@ -184,6 +185,7 @@ function AuthenticatedWorkspace({
   verificationNotice: string | undefined;
   workspace: ReturnType<typeof useWorkspaceOrganizations>;
 }) {
+  if (workspace.isPending) return <LoadingScreen />;
   if (
     ["/admin", "/inbox"].includes(pathname) &&
     !hasRole(session.user.role, "admin")
@@ -207,6 +209,7 @@ function AuthenticatedWorkspace({
     workspace.activeOrganizationId,
   );
   const addAccount = () => navigate(addAccountPath(currentLocation()));
+  const hasWorkspace = workspace.organizations.length > 0;
   return (
     <WorkspaceShell
       accountLoadError={accounts.loadError}
@@ -226,15 +229,39 @@ function AuthenticatedWorkspace({
       organizations={workspace.organizations}
       user={session.user}
     >
-      {contentForPath(
-        pathname,
-        library,
-        navigate,
-        workspace,
-        addAccount,
-        access,
+      {hasWorkspace || ["/admin", "/inbox", "/invite"].includes(pathname) ? (
+        contentForPath(
+          pathname,
+          library,
+          navigate,
+          workspace,
+          addAccount,
+          access,
+        )
+      ) : (
+        <NoOrganization />
       )}
     </WorkspaceShell>
+  );
+}
+
+function NoOrganization() {
+  return (
+    <>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Workspace</p>
+          <h1>Create an organization</h1>
+        </div>
+      </header>
+      <section className="content">
+        <div className="emptyState compactEmptyState">
+          <div className="emptyGlyph">◇</div>
+          <h3>You don’t have an active organization.</h3>
+          <p>Use the organization control in the sidebar to create one.</p>
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -262,31 +289,29 @@ function useWorkspaceOrganizations(
   session: OrganizationSession | null | undefined,
   refetchSession: () => Promise<unknown>,
 ) {
-  const [organizations, setOrganizations] = useState<WorkspaceOrganization[]>(
-    [],
-  );
+  const [organizations, setOrganizations] = useState<
+    WorkspaceOrganization[] | undefined
+  >();
   const loadOrganizations = useCallback(async () => {
-    const result = await authClient.organization.list();
-    if (result.error) {
-      throw new Error(
-        result.error.message ?? "Could not load your organizations.",
-      );
-    }
-    setOrganizations((result.data ?? []).map(({ id, name }) => ({ id, name })));
+    setOrganizations(await getWorkspaceOrganizations());
   }, []);
   const signedInUserId = session?.user.id;
   useEffect(() => {
     if (!signedInUserId) {
-      setOrganizations([]);
+      setOrganizations(undefined);
       return;
     }
     void loadOrganizations().catch(() => setOrganizations([]));
   }, [loadOrganizations, signedInUserId]);
-  const activeOrganizationId = resolveActiveOrganizationId(
-    session?.session.activeOrganizationId,
-    session?.user.defaultOrganizationId,
-    organizations,
-  );
+  const activeOrganizationId = organizations
+    ? resolveActiveOrganizationId(
+        session?.session.activeOrganizationId,
+        session?.user.defaultOrganizationId,
+        organizations,
+      )
+    : (session?.session.activeOrganizationId ??
+      session?.user.defaultOrganizationId ??
+      undefined);
   const createOrganization = async (name: string) => {
     const result = await authClient.organization.create({
       name,
@@ -316,7 +341,8 @@ function useWorkspaceOrganizations(
   return {
     activeOrganizationId,
     createOrganization,
-    organizations,
+    isPending: organizations === undefined,
+    organizations: organizations ?? [],
     refresh,
     switchOrganization,
   };

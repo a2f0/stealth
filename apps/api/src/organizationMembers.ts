@@ -60,3 +60,7 @@ export function canManageOrganization(role: string) {
     .split(",")
     .some((value) => ["owner", "admin"].includes(value.trim()));
 }
+
+export function isOrganizationOwner(role: string) {
+  return role.split(",").some((value) => value.trim() === "owner");
+}

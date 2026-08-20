@@ -163,6 +163,7 @@ function OrganizationTable({
             <th>Organization</th>
             <th>Owner</th>
             <th>Members</th>
+            <th>Status</th>
             <th>Created</th>
           </tr>
         </thead>
@@ -178,6 +179,15 @@ function OrganizationTable({
                 <span>{organization.ownerEmail ?? "No default owner"}</span>
               </td>
               <td>{organization.memberCount}</td>
+              <td>
+                <span
+                  className={`userStatus ${organization.deletedAt ? "banned" : "verified"}`}
+                >
+                  {organization.deletedAt
+                    ? `Deleted ${formatDate(organization.deletedAt)}`
+                    : "Active"}
+                </span>
+              </td>
               <td>{formatDate(organization.createdAt)}</td>
             </tr>
           ))}
