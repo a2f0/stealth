@@ -14,6 +14,7 @@
     "deploy:verify": "bash scripts/verifyProduction.sh",
     "deploy:website": "bash scripts/deployWebsite.sh",
     "dev": "turbo run dev",
+    "emails:purge": "bash scripts/purgeEmails.sh",
     "format": "bun run lint:biome:fix && bun run lint:markdown:fix",
     "hooks:install": "sh scripts/git/install-hooks.sh",
     "lint": "bun run lint:biome && bun run lint:markdown && bun run lint:files && bun run lint:knip:all && bun run lint:knip:production && bun run lint:scripts && bun run lint:terraform",
