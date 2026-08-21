@@ -10,6 +10,7 @@ import {
 } from "./accountNavigation";
 import { useAccountSessions } from "./accountSessions";
 import { authClient } from "./authClient";
+import { Businesses } from "./Businesses";
 import { Finance } from "./Finance";
 import { Inbox } from "./Inbox";
 import { Library } from "./Library";
@@ -357,6 +358,7 @@ function contentForPath(
     return <Audits onNavigate={navigate} pathname={pathname} />;
   }
   if (pathname === "/finance") return <Finance />;
+  if (pathname === "/businesses") return <Businesses />;
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
   if (isOrganizationPath(pathname)) {
@@ -396,6 +398,7 @@ function activePageFor(pathname: string) {
     return "audits" as const;
   }
   if (pathname === "/finance") return "finance" as const;
+  if (pathname === "/businesses") return "businesses" as const;
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
   if (isOrganizationPath(pathname)) return "organization" as const;

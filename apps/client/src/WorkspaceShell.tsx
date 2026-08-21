@@ -23,6 +23,7 @@ interface WorkspaceShellProps {
   activePage:
     | "admin"
     | "audits"
+    | "businesses"
     | "finance"
     | "inbox"
     | "library"
@@ -112,6 +113,17 @@ export function WorkspaceShell({
               <span className="navIcon">$</span> Finance
             </a>
           )}
+          <a
+            className={
+              activePage === "businesses" ? "navItem active" : "navItem"
+            }
+            href="/businesses"
+            onClick={(event) =>
+              handleNavigation(event, "/businesses", onNavigate)
+            }
+          >
+            <span className="navIcon">▦</span> Businesses
+          </a>
           <a
             className={
               activePage === "organization" ? "navItem active" : "navItem"

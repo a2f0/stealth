@@ -9,6 +9,7 @@ import {
   requireOrganization,
   requireRole,
 } from "./authMiddleware";
+import { businesses } from "./businesses";
 import { finance } from "./finance";
 import { inbox } from "./inbox";
 import { objects } from "./objects";
@@ -50,6 +51,7 @@ app.get("/api", (context) =>
     endpoints: {
       adminOrganizations: "/api/admin/organizations",
       audits: "/api/audits",
+      businesses: "/api/businesses",
       finance: "/api/finance",
       inbox: "/api/inbox",
       objects: "/api/objects",
@@ -76,6 +78,10 @@ app.route("/api/admin/organizations", adminOrganizations);
 app.use("/api/audits", requireAuth, requireOrganization);
 app.use("/api/audits/*", requireAuth, requireOrganization);
 app.route("/api/audits", audits);
+
+app.use("/api/businesses", requireAuth, requireOrganization);
+app.use("/api/businesses/*", requireAuth, requireOrganization);
+app.route("/api/businesses", businesses);
 
 app.use("/api/inbox", requireAuth, requireOrganization);
 app.use("/api/inbox/*", requireAuth, requireOrganization);

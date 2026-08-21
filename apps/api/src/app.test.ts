@@ -78,6 +78,16 @@ describe("api", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication for businesses", async () => {
+    const response = await app.request(
+      "/api/businesses",
+      undefined,
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
   it("requires authentication for organization settings", async () => {
     const response = await app.request(
       "/api/organization-settings/people",

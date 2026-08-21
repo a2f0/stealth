@@ -1382,6 +1382,91 @@ button:disabled {
   max-width: none;
 }
 
+.businessesContent {
+  max-width: 980px;
+}
+
+.businessesLayout {
+  display: grid;
+  gap: 22px;
+}
+
+.businessCreateCard {
+  max-width: 760px;
+}
+
+.businessFields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr);
+  gap: 16px;
+}
+
+.businessListCard {
+  overflow: hidden;
+  max-width: 760px;
+  border: 1px solid #ddddd5;
+  border-radius: 14px;
+  background: #faf9f5;
+}
+
+.businessListHeading {
+  padding: 20px 22px;
+  border-bottom: 1px solid #e1e0d9;
+}
+
+.businessListHeading h2 {
+  margin: 0 0 5px;
+  font-size: 16px;
+}
+
+.businessListHeading p {
+  margin: 0;
+  color: #85857c;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.businessRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 22px;
+  border-bottom: 1px solid #e7e6df;
+}
+
+.businessRow:last-child {
+  border-bottom: 0;
+}
+
+.businessRow strong,
+.businessRow span {
+  display: block;
+}
+
+.businessRow strong {
+  margin-bottom: 5px;
+  color: #262621;
+  font-size: 13px;
+}
+
+.businessRow span {
+  color: #7e7e75;
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+}
+
+.businessEmptyState {
+  max-width: 760px;
+}
+
+@media (max-width: 680px) {
+  .businessFields {
+    grid-template-columns: 1fr;
+  }
+}
+
 .compactBanner {
   margin-bottom: 0;
   padding: 10px 12px;
