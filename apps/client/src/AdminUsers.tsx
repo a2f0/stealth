@@ -9,6 +9,7 @@ import {
   type AdminOrganization,
   listAdminOrganizations,
   markAdminOrganizationForDeletion,
+  restoreAdminOrganization,
 } from "./api";
 import { authClient } from "./authClient";
 
@@ -29,13 +30,18 @@ interface UserListing {
   users: ListedUser[];
 }
 
+interface AdminOrganizationAction {
+  organizationId: string;
+  type: "delete" | "restore";
+}
+
 export function AdminUsers() {
   const [listing, setListing] = useState<UserListing>();
   const [organizations, setOrganizations] = useState<AdminOrganization[]>();
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string>();
-  const deletion = useAdminOrganizationDeletion(setOrganizations);
+  const lifecycle = useAdminOrganizationLifecycle(setOrganizations);
 
   const loadUsers = useCallback(async () => {
     setBusy(true);
@@ -90,10 +96,12 @@ export function AdminUsers() {
 
       <section className="content">
         {error && <div className="errorBanner">{error}</div>}
-        {deletion.error && <div className="errorBanner">{deletion.error}</div>}
-        {deletion.notice && (
+        {lifecycle.error && (
+          <div className="errorBanner">{lifecycle.error}</div>
+        )}
+        {lifecycle.notice && (
           <div aria-live="polite" className="successBanner pageBanner">
-            {deletion.notice}
+            {lifecycle.notice}
           </div>
         )}
         <UserSection
@@ -104,8 +112,9 @@ export function AdminUsers() {
           page={page}
         />
         <OrganizationSection
-          deletingOrganizationId={deletion.deletingOrganizationId}
-          onMarkForDeletion={deletion.markForDeletion}
+          action={lifecycle.action}
+          onMarkForDeletion={lifecycle.markForDeletion}
+          onRestore={lifecycle.restore}
           organizations={organizations}
         />
       </section>
@@ -113,11 +122,10 @@ export function AdminUsers() {
   );
 }
 
-function useAdminOrganizationDeletion(
+function useAdminOrganizationLifecycle(
   setOrganizations: Dispatch<SetStateAction<AdminOrganization[] | undefined>>,
 ) {
-  const [deletingOrganizationId, setDeletingOrganizationId] =
-    useState<string>();
+  const [action, setAction] = useState<AdminOrganizationAction>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
 
@@ -127,7 +135,7 @@ function useAdminOrganizationDeletion(
     );
     if (confirmation !== organization.name) return;
 
-    setDeletingOrganizationId(organization.id);
+    setAction({ organizationId: organization.id, type: "delete" });
     setError(undefined);
     setNotice(undefined);
     try {
@@ -149,11 +157,46 @@ function useAdminOrganizationDeletion(
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
-      setDeletingOrganizationId(undefined);
+      setAction(undefined);
     }
   };
 
-  return { deletingOrganizationId, error, markForDeletion, notice };
+  const restore = async (organization: AdminOrganization) => {
+    if (
+      !window.confirm(
+        `Undelete ${organization.name}? Existing members who do not have another default organization will regain access.`,
+      )
+    ) {
+      return;
+    }
+
+    setAction({ organizationId: organization.id, type: "restore" });
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await restoreAdminOrganization(organization.id);
+      setOrganizations((current) =>
+        current?.map((item) =>
+          item.id === organization.id
+            ? {
+                ...item,
+                deletedAt: null,
+                deletedByEmail: null,
+                deletedByName: null,
+                deletedByUserId: null,
+              }
+            : item,
+        ),
+      );
+      setNotice(`${organization.name} was restored.`);
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setAction(undefined);
+    }
+  };
+
+  return { action, error, markForDeletion, notice, restore };
 }
 
 function UserSection({
@@ -192,12 +235,14 @@ function UserSection({
 }
 
 function OrganizationSection({
-  deletingOrganizationId,
+  action,
   onMarkForDeletion,
+  onRestore,
   organizations,
 }: {
-  deletingOrganizationId: string | undefined;
+  action: AdminOrganizationAction | undefined;
   onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
+  onRestore: (organization: AdminOrganization) => Promise<void>;
   organizations?: AdminOrganization[] | undefined;
 }) {
   return (
@@ -208,8 +253,9 @@ function OrganizationSection({
       </div>
       {organizations && organizations.length > 0 ? (
         <OrganizationTable
-          deletingOrganizationId={deletingOrganizationId}
+          action={action}
           onMarkForDeletion={onMarkForDeletion}
+          onRestore={onRestore}
           organizations={organizations}
         />
       ) : organizations ? (
@@ -223,12 +269,14 @@ function OrganizationSection({
 }
 
 function OrganizationTable({
-  deletingOrganizationId,
+  action,
   onMarkForDeletion,
+  onRestore,
   organizations,
 }: {
-  deletingOrganizationId: string | undefined;
+  action: AdminOrganizationAction | undefined;
   onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
+  onRestore: (organization: AdminOrganization) => Promise<void>;
   organizations: AdminOrganization[];
 }) {
   return (
@@ -247,61 +295,114 @@ function OrganizationTable({
         </thead>
         <tbody>
           {organizations.map((organization) => (
-            <tr key={organization.id}>
-              <td>
-                <strong>{organization.name}</strong>
-                <span>{organization.slug}</span>
-              </td>
-              <td className="tableIdentity">
-                <strong>{organization.ownerName ?? "—"}</strong>
-                <span>{organization.ownerEmail ?? "No default owner"}</span>
-              </td>
-              <td>{organization.memberCount}</td>
-              <td>
-                <span
-                  className={`userStatus ${organization.deletedAt ? "banned" : "verified"}`}
-                >
-                  {organization.deletedAt
-                    ? `Pending deletion · ${formatDate(organization.deletedAt)}`
-                    : "Active"}
-                </span>
-              </td>
-              <td className="tableIdentity">
-                {organization.deletedAt ? (
-                  <>
-                    <strong>{organization.deletedByName ?? "Unknown"}</strong>
-                    <span>
-                      {organization.deletedByEmail ??
-                        organization.deletedByUserId ??
-                        "Not recorded"}
-                    </span>
-                  </>
-                ) : (
-                  "—"
-                )}
-              </td>
-              <td>{formatDate(organization.createdAt)}</td>
-              <td>
-                {organization.deletedAt ? (
-                  "—"
-                ) : (
-                  <button
-                    className="dangerButton tableActionButton"
-                    disabled={deletingOrganizationId !== undefined}
-                    onClick={() => void onMarkForDeletion(organization)}
-                    type="button"
-                  >
-                    {deletingOrganizationId === organization.id
-                      ? "Marking…"
-                      : "Mark for deletion"}
-                  </button>
-                )}
-              </td>
-            </tr>
+            <OrganizationTableRow
+              action={action}
+              key={organization.id}
+              onMarkForDeletion={onMarkForDeletion}
+              onRestore={onRestore}
+              organization={organization}
+            />
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function OrganizationTableRow({
+  action,
+  onMarkForDeletion,
+  onRestore,
+  organization,
+}: {
+  action: AdminOrganizationAction | undefined;
+  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
+  onRestore: (organization: AdminOrganization) => Promise<void>;
+  organization: AdminOrganization;
+}) {
+  return (
+    <tr>
+      <td>
+        <strong>{organization.name}</strong>
+        <span>{organization.slug}</span>
+      </td>
+      <td className="tableIdentity">
+        <strong>{organization.ownerName ?? "—"}</strong>
+        <span>{organization.ownerEmail ?? "No default owner"}</span>
+      </td>
+      <td>{organization.memberCount}</td>
+      <td>
+        <span
+          className={`userStatus ${organization.deletedAt ? "banned" : "verified"}`}
+        >
+          {organization.deletedAt
+            ? `Pending deletion · ${formatDate(organization.deletedAt)}`
+            : "Active"}
+        </span>
+      </td>
+      <td className="tableIdentity">
+        {organization.deletedAt ? (
+          <>
+            <strong>{organization.deletedByName ?? "Unknown"}</strong>
+            <span>
+              {organization.deletedByEmail ??
+                organization.deletedByUserId ??
+                "Not recorded"}
+            </span>
+          </>
+        ) : (
+          "—"
+        )}
+      </td>
+      <td>{formatDate(organization.createdAt)}</td>
+      <td>
+        <OrganizationActionButton
+          action={action}
+          onMarkForDeletion={onMarkForDeletion}
+          onRestore={onRestore}
+          organization={organization}
+        />
+      </td>
+    </tr>
+  );
+}
+
+function OrganizationActionButton({
+  action,
+  onMarkForDeletion,
+  onRestore,
+  organization,
+}: {
+  action: AdminOrganizationAction | undefined;
+  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
+  onRestore: (organization: AdminOrganization) => Promise<void>;
+  organization: AdminOrganization;
+}) {
+  if (organization.deletedAt) {
+    const restoring =
+      action?.organizationId === organization.id && action.type === "restore";
+    return (
+      <button
+        className="primaryButton tableActionButton"
+        disabled={action !== undefined}
+        onClick={() => void onRestore(organization)}
+        type="button"
+      >
+        {restoring ? "Restoring…" : "Undelete"}
+      </button>
+    );
+  }
+  const deleting =
+    action?.organizationId === organization.id && action.type === "delete";
+  return (
+    <button
+      className="dangerButton tableActionButton"
+      disabled={action !== undefined}
+      onClick={() => void onMarkForDeletion(organization)}
+      type="button"
+    >
+      {deleting ? "Marking…" : "Mark for deletion"}
+    </button>
   );
 }
 

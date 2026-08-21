@@ -78,6 +78,17 @@ export async function markAdminOrganizationForDeletion(id: string) {
   }>(response);
 }
 
+export async function restoreAdminOrganization(id: string) {
+  const response = await fetch(
+    `${apiUrl}/api/admin/organizations/${encodeURIComponent(id)}/restore`,
+    {
+      credentials: "include",
+      method: "POST",
+    },
+  );
+  return parseResponse<{ organizationId: string }>(response);
+}
+
 export async function listInboundEmails() {
   const response = await fetch(`${apiUrl}/api/inbox`, {
     credentials: "include",
