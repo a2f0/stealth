@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
+import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import { inbox } from "./inbox";
 import type { Bindings } from "./types";
@@ -48,6 +49,10 @@ describe("inbox", () => {
       emails: [
         {
           attachmentCount: 1,
+          deletedAt: null,
+          deletedByEmail: null,
+          deletedByName: null,
+          deletedByUserId: null,
           from: "sender@example.com",
           id: emailId,
           rawSize: new TextEncoder().encode(rawEmail).byteLength,
@@ -95,6 +100,93 @@ describe("inbox", () => {
         .query("SELECT organization_id FROM inbound_emails WHERE id = ?")
         .get(emailId),
     ).toEqual({ organization_id: organizationId });
+  });
+
+  it("moves messages to trash, records the actor, and restores them", async () => {
+    const fixture = await createFixture();
+
+    const deleted = await fixture.request(`/${emailId}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    const deletedBody = (await deleted.json()) as {
+      deletedAt: string;
+      deletedByUserId: string;
+      emailId: string;
+    };
+    expect(deletedBody).toMatchObject({
+      deletedByUserId: "owner-user",
+      emailId,
+    });
+    expect(new Date(deletedBody.deletedAt).toString()).not.toBe("Invalid Date");
+
+    const activeList = await fixture.request("/");
+    expect((await activeList.json()) as { emails: unknown[] }).toMatchObject({
+      emails: [],
+    });
+    expect((await fixture.request(`/${emailId}`)).status).toBe(404);
+    expect(
+      (await fixture.request(`/${emailId}/attachments/${attachmentId}`)).status,
+    ).toBe(404);
+
+    const trashList = await fixture.request("/?folder=trash");
+    expect(trashList.status).toBe(200);
+    const trashBody = (await trashList.json()) as {
+      emails: Array<{
+        deletedAt: string;
+        deletedByEmail: string;
+        deletedByName: string;
+        deletedByUserId: string;
+        id: string;
+      }>;
+    };
+    expect(trashBody.emails).toEqual([
+      expect.objectContaining({
+        deletedAt: deletedBody.deletedAt,
+        deletedByEmail: "owner-user@example.com",
+        deletedByName: "owner-user",
+        deletedByUserId: "owner-user",
+        id: emailId,
+      }),
+    ]);
+    expect((await fixture.request(`/${emailId}?folder=trash`)).status).toBe(
+      200,
+    );
+    expect(
+      (
+        await fixture.request(
+          `/${emailId}/attachments/${attachmentId}?folder=trash`,
+        )
+      ).status,
+    ).toBe(200);
+
+    expect(
+      (
+        await fixture.request(`/${otherEmailId}`, {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(404);
+    expect((await fixture.request("/?folder=archive")).status).toBe(400);
+
+    const restored = await fixture.request(`/${emailId}/restore`, {
+      method: "POST",
+    });
+    expect(restored.status).toBe(200);
+    const restoredBody: unknown = await restored.json();
+    expect(restoredBody).toEqual({ emailId });
+    expect((await fixture.request(`/${emailId}`)).status).toBe(200);
+    expect(
+      fixture.database
+        .query(
+          `SELECT deleted_at, deleted_by_user_id
+           FROM inbound_emails WHERE id = ?`,
+        )
+        .get(emailId),
+    ).toEqual({ deleted_at: null, deleted_by_user_id: null });
+    expect(
+      (await fixture.request(`/${emailId}/restore`, { method: "POST" })).status,
+    ).toBe(404);
   });
 });
 
@@ -185,6 +277,7 @@ async function createFixture() {
       null,
       "2026-08-19T12:00:00.000Z",
     );
+  await applyMigration(database, "0016_soft_delete_inbound_emails.sql");
 
   const objects = new Map([
     [rawObjectKey, new TextEncoder().encode(rawEmail)],
@@ -205,12 +298,18 @@ async function createFixture() {
   const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>();
   app.use("*", async (context, next) => {
     context.set("organizationId", organizationId);
+    context.set("organizationRole", "member");
+    context.set("authSession", {
+      session: { activeOrganizationId: organizationId },
+      user: { id: "owner-user", role: "user" },
+    } as unknown as AuthSession);
     await next();
   });
   app.route("/", inbox);
   return {
     database,
-    request: (path: string) => app.request(path, undefined, bindings),
+    request: (path: string, init?: RequestInit) =>
+      app.request(path, init, bindings),
   };
 }
 
@@ -247,6 +346,10 @@ function toD1(database: Database) {
           return statement;
         },
         first: async () => database.query(query).get(...values),
+        run: async () => {
+          const result = database.query(query).run(...values);
+          return { meta: { changes: result.changes }, success: true };
+        },
       };
       return statement;
     },

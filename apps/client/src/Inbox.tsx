@@ -1,13 +1,32 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  deleteInboundEmail,
   getInboundEmail,
   type InboundEmailDetail,
   type InboundEmailSummary,
+  type InboxFolder,
   inboundAttachmentUrl,
   listInboundEmails,
+  restoreInboundEmail,
 } from "./api";
 
 export function Inbox() {
+  return <InboxView model={useInboxModel()} />;
+}
+
+function useInboxModel() {
+  const [folder, setFolder] = useState<InboxFolder>("inbox");
+  const messages = useInboxMessages(folder);
+  const actions = useInboxActions(messages);
+  function selectFolder(nextFolder: InboxFolder) {
+    if (nextFolder === folder) return;
+    actions.clear();
+    setFolder(nextFolder);
+  }
+  return { actions, folder, messages, selectFolder };
+}
+
+function useInboxMessages(folder: InboxFolder) {
   const [emails, setEmails] = useState<InboundEmailSummary[]>([]);
   const [inboundAddress, setInboundAddress] = useState<string>();
   const [selectedId, setSelectedId] = useState<string>();
@@ -20,7 +39,7 @@ export function Inbox() {
     setLoadingList(true);
     setError(undefined);
     try {
-      const listing = await listInboundEmails();
+      const listing = await listInboundEmails(folder);
       const nextEmails = listing.emails;
       setEmails(nextEmails);
       setInboundAddress(listing.address);
@@ -34,9 +53,12 @@ export function Inbox() {
     } finally {
       setLoadingList(false);
     }
-  }, []);
+  }, [folder]);
 
   useEffect(() => {
+    setEmails([]);
+    setSelectedId(undefined);
+    setDetail(undefined);
     void refresh();
   }, [refresh]);
 
@@ -49,7 +71,7 @@ export function Inbox() {
     setError(undefined);
     setLoadingMessage(true);
     setDetail(undefined);
-    getInboundEmail(selectedId)
+    getInboundEmail(selectedId, folder)
       .then((email) => {
         if (active) setDetail(email);
       })
@@ -62,43 +84,110 @@ export function Inbox() {
     return () => {
       active = false;
     };
-  }, [selectedId]);
+  }, [folder, selectedId]);
+  return {
+    detail,
+    emails,
+    error,
+    inboundAddress,
+    loadingList,
+    loadingMessage,
+    refresh,
+    selectedId,
+    setDetail,
+    setSelectedId,
+  };
+}
 
+function useInboxActions(messages: ReturnType<typeof useInboxMessages>) {
+  const [workingId, setWorkingId] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+  const clear = () => {
+    setError(undefined);
+    setNotice(undefined);
+  };
+
+  async function moveToTrash(email: InboundEmailDetail) {
+    const subject = email.subject || "(no subject)";
+    if (
+      !window.confirm(
+        `Move “${subject}” to Trash? It can be restored for 30 days.`,
+      )
+    ) {
+      return;
+    }
+    await runAction(email.id, deleteInboundEmail, "Email moved to Trash.");
+  }
+
+  async function restore(email: InboundEmailDetail) {
+    await runAction(email.id, restoreInboundEmail, "Email restored to Inbox.");
+  }
+
+  async function runAction(
+    id: string,
+    action: (emailId: string) => Promise<unknown>,
+    successNotice: string,
+  ) {
+    setWorkingId(id);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await action(id);
+      messages.setSelectedId(undefined);
+      messages.setDetail(undefined);
+      setNotice(successNotice);
+      await messages.refresh();
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setWorkingId(undefined);
+    }
+  }
+  return { clear, error, moveToTrash, notice, restore, workingId };
+}
+
+function InboxView({ model }: { model: ReturnType<typeof useInboxModel> }) {
+  const { actions, folder, messages, selectFolder } = model;
   return (
     <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Organization inbox</p>
-          <h1>Inbox</h1>
-        </div>
-        <button
-          className="primaryButton"
-          disabled={loadingList}
-          onClick={() => void refresh()}
-          type="button"
-        >
-          {loadingList ? "Loading…" : "Refresh"}
-        </button>
-      </header>
+      <InboxHeader
+        folder={folder}
+        loading={messages.loadingList}
+        onRefresh={messages.refresh}
+      />
       <section className="content inboxContent">
-        {error && <div className="errorBanner">{error}</div>}
-        {inboundAddress && (
+        {(actions.error ?? messages.error) && (
+          <div className="errorBanner pageBanner">
+            {actions.error ?? messages.error}
+          </div>
+        )}
+        {actions.notice && (
+          <div className="successBanner pageBanner">{actions.notice}</div>
+        )}
+        <InboxFolderBar folder={folder} onSelect={selectFolder} />
+        {messages.inboundAddress && (
           <div className="inboxAddress">
             <span>Send inbound email to</span>
-            <code>{inboundAddress}</code>
+            <code>{messages.inboundAddress}</code>
           </div>
         )}
         <div className="inboxLayout">
           <MessageList
-            emails={emails}
-            loading={loadingList}
-            onSelect={setSelectedId}
-            selectedId={selectedId}
+            emails={messages.emails}
+            folder={folder}
+            loading={messages.loadingList}
+            onSelect={messages.setSelectedId}
+            selectedId={messages.selectedId}
           />
           <MessageDetail
-            email={detail}
-            hasMessages={emails.length > 0}
-            loading={loadingMessage}
+            email={messages.detail}
+            folder={folder}
+            hasMessages={messages.emails.length > 0}
+            loading={messages.loadingMessage}
+            onDelete={actions.moveToTrash}
+            onRestore={actions.restore}
+            working={messages.detail?.id === actions.workingId}
           />
         </div>
       </section>
@@ -106,13 +195,70 @@ export function Inbox() {
   );
 }
 
+function InboxHeader({
+  folder,
+  loading,
+  onRefresh,
+}: {
+  folder: InboxFolder;
+  loading: boolean;
+  onRefresh: () => Promise<void>;
+}) {
+  return (
+    <header className="topbar">
+      <div>
+        <p className="eyebrow">Organization inbox</p>
+        <h1>{folder === "trash" ? "Trash" : "Inbox"}</h1>
+      </div>
+      <button
+        className="primaryButton"
+        disabled={loading}
+        onClick={() => void onRefresh()}
+        type="button"
+      >
+        {loading ? "Loading…" : "Refresh"}
+      </button>
+    </header>
+  );
+}
+
+function InboxFolderBar({
+  folder,
+  onSelect,
+}: {
+  folder: InboxFolder;
+  onSelect: (folder: InboxFolder) => void;
+}) {
+  return (
+    <div className="inboxFolderBar">
+      <nav aria-label="Email folders" className="inboxFolders">
+        {(["inbox", "trash"] as const).map((availableFolder) => (
+          <button
+            aria-pressed={folder === availableFolder}
+            key={availableFolder}
+            onClick={() => onSelect(availableFolder)}
+            type="button"
+          >
+            {availableFolder === "inbox" ? "Inbox" : "Trash"}
+          </button>
+        ))}
+      </nav>
+      {folder === "trash" && (
+        <span>Deleted messages are permanently removed after 30 days.</span>
+      )}
+    </div>
+  );
+}
+
 function MessageList({
   emails,
+  folder,
   loading,
   onSelect,
   selectedId,
 }: {
   emails: InboundEmailSummary[];
+  folder: InboxFolder;
   loading: boolean;
   onSelect: (id: string) => void;
   selectedId?: string | undefined;
@@ -120,13 +266,17 @@ function MessageList({
   if (emails.length === 0) {
     return (
       <div className="inboxListEmpty">
-        {loading ? "Loading messages…" : "No messages yet."}
+        {loading
+          ? "Loading messages…"
+          : folder === "trash"
+            ? "Trash is empty."
+            : "No messages yet."}
       </div>
     );
   }
 
   return (
-    <section aria-label="Inbound messages" className="inboxList">
+    <section aria-label={`${folder} messages`} className="inboxList">
       {emails.map((email) => (
         <button
           aria-pressed={selectedId === email.id}
@@ -138,7 +288,9 @@ function MessageList({
           <strong>{email.subject || "(no subject)"}</strong>
           <span>{email.from}</span>
           <small>
-            {formatDate(email.receivedAt)}
+            {folder === "trash" && email.deletedAt
+              ? `Deleted ${formatDate(email.deletedAt)}`
+              : formatDate(email.receivedAt)}
             {email.attachmentCount > 0 &&
               ` · ${formatAttachmentCount(email.attachmentCount)}`}
           </small>
@@ -150,17 +302,25 @@ function MessageList({
 
 function MessageDetail({
   email,
+  folder,
   hasMessages,
   loading,
+  onDelete,
+  onRestore,
+  working,
 }: {
   email?: InboundEmailDetail | undefined;
+  folder: InboxFolder;
   hasMessages: boolean;
   loading: boolean;
+  onDelete: (email: InboundEmailDetail) => Promise<void>;
+  onRestore: (email: InboundEmailDetail) => Promise<void>;
+  working: boolean;
 }) {
   if (!email) {
     return (
       <div className="inboxMessageEmpty">
-        {loading ? "Opening message…" : emptyMessage(hasMessages)}
+        {loading ? "Opening message…" : emptyMessage(hasMessages, folder)}
       </div>
     );
   }
@@ -168,8 +328,36 @@ function MessageDetail({
   return (
     <article className="inboxMessage">
       <header className="inboxMessageHeader">
-        <p className="eyebrow">{formatDateTime(email.receivedAt)}</p>
-        <h2>{email.subject || "(no subject)"}</h2>
+        <div className="inboxMessageTitle">
+          <div>
+            <p className="eyebrow">{formatDateTime(email.receivedAt)}</p>
+            <h2>{email.subject || "(no subject)"}</h2>
+          </div>
+          {folder === "trash" ? (
+            <button
+              className="primaryButton inboxMessageAction"
+              disabled={working}
+              onClick={() => void onRestore(email)}
+              type="button"
+            >
+              {working ? "Restoring…" : "Restore"}
+            </button>
+          ) : (
+            <button
+              className="dangerButton inboxMessageAction"
+              disabled={working}
+              onClick={() => void onDelete(email)}
+              type="button"
+            >
+              {working ? "Moving…" : "Move to Trash"}
+            </button>
+          )}
+        </div>
+        {email.deletedAt && (
+          <p className="emailDeletionMeta">
+            Deleted {formatDateTime(email.deletedAt)} by {deletedBy(email)}
+          </p>
+        )}
         <dl className="emailMeta">
           <div>
             <dt>From</dt>
@@ -189,7 +377,7 @@ function MessageDetail({
             {email.attachments.map((attachment) => (
               <a
                 className="attachmentLink"
-                href={inboundAttachmentUrl(email.id, attachment.id)}
+                href={inboundAttachmentUrl(email.id, attachment.id, folder)}
                 key={attachment.id}
               >
                 <strong>{attachment.filename}</strong>
@@ -211,6 +399,15 @@ function readableBody(email: InboundEmailDetail) {
     if (text) return text;
   }
   return "This message has no readable body.";
+}
+
+function deletedBy(email: InboundEmailSummary) {
+  return (
+    email.deletedByName ??
+    email.deletedByEmail ??
+    email.deletedByUserId ??
+    "an unknown user"
+  );
 }
 
 function formatDate(value: string) {
@@ -237,8 +434,11 @@ function formatAttachmentCount(count: number) {
   return `${count} ${count === 1 ? "file" : "files"}`;
 }
 
-function emptyMessage(hasMessages: boolean) {
-  return hasMessages ? "Select a message." : "New messages will appear here.";
+function emptyMessage(hasMessages: boolean, folder: InboxFolder) {
+  if (hasMessages) return "Select a message.";
+  return folder === "trash"
+    ? "Deleted messages will appear here."
+    : "New messages will appear here.";
 }
 
 function messageFrom(cause: unknown) {

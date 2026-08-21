@@ -219,6 +219,21 @@ removed before the corresponding D1 organization is deleted, including uploads,
 raw inbound messages, and email attachments. D1 foreign-key cascades then remove
 the organization's remaining rows.
 
+Inbox messages can be moved to Trash and restored by organization members.
+Deleted messages retain their deletion time and initiating user in D1, while
+their raw message and attachments remain in R2. Preview or permanently purge
+messages that have been in Trash for at least 30 days with:
+
+```sh
+bun run emails:purge --dry-run
+bun run emails:purge
+```
+
+The command targets Cloudflare's remote D1 database and R2 bucket by default.
+Pass `--local` to use local Wrangler storage. It removes the raw message and
+attachment objects before deleting the D1 email; the attachment rows are then
+removed through their foreign-key cascade.
+
 Move legacy R2 keys beneath their owning organization prefix after deploying
 the organization-scoped schema:
 

@@ -11,6 +11,10 @@ export interface StoredObject {
 
 export interface InboundEmailSummary {
   attachmentCount: number;
+  deletedAt: string | null;
+  deletedByEmail: string | null;
+  deletedByName: string | null;
+  deletedByUserId: string | null;
   from: string;
   id: string;
   rawSize: number;
@@ -18,6 +22,8 @@ export interface InboundEmailSummary {
   subject: string | null;
   to: string;
 }
+
+export type InboxFolder = "inbox" | "trash";
 
 export interface InboundEmailAttachment {
   contentType: string;
@@ -89,16 +95,19 @@ export async function restoreAdminOrganization(id: string) {
   return parseResponse<{ organizationId: string }>(response);
 }
 
-export async function listInboundEmails() {
-  const response = await fetch(`${apiUrl}/api/inbox`, {
+export async function listInboundEmails(folder: InboxFolder = "inbox") {
+  const response = await fetch(`${apiUrl}/api/inbox${folderQuery(folder)}`, {
     credentials: "include",
   });
   return parseResponse<OrganizationInbox>(response);
 }
 
-export async function getInboundEmail(id: string) {
+export async function getInboundEmail(
+  id: string,
+  folder: InboxFolder = "inbox",
+) {
   const response = await fetch(
-    `${apiUrl}/api/inbox/${encodeURIComponent(id)}`,
+    `${apiUrl}/api/inbox/${encodeURIComponent(id)}${folderQuery(folder)}`,
     {
       credentials: "include",
     },
@@ -107,8 +116,36 @@ export async function getInboundEmail(id: string) {
   return body.email;
 }
 
-export function inboundAttachmentUrl(emailId: string, attachmentId: string) {
-  return `${apiUrl}/api/inbox/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}`;
+export function inboundAttachmentUrl(
+  emailId: string,
+  attachmentId: string,
+  folder: InboxFolder = "inbox",
+) {
+  return `${apiUrl}/api/inbox/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}${folderQuery(folder)}`;
+}
+
+export async function deleteInboundEmail(id: string) {
+  const response = await fetch(
+    `${apiUrl}/api/inbox/${encodeURIComponent(id)}`,
+    { credentials: "include", method: "DELETE" },
+  );
+  return parseResponse<{
+    deletedAt: string;
+    deletedByUserId: string;
+    emailId: string;
+  }>(response);
+}
+
+export async function restoreInboundEmail(id: string) {
+  const response = await fetch(
+    `${apiUrl}/api/inbox/${encodeURIComponent(id)}/restore`,
+    { credentials: "include", method: "POST" },
+  );
+  return parseResponse<{ emailId: string }>(response);
+}
+
+function folderQuery(folder: InboxFolder) {
+  return folder === "trash" ? "?folder=trash" : "";
 }
 
 export async function listObjects() {

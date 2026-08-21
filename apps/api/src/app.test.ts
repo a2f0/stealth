@@ -28,6 +28,26 @@ describe("api", () => {
     });
   });
 
+  it("requires authentication to delete an inbox message", async () => {
+    const response = await app.request(
+      "/api/inbox/email-id",
+      { method: "DELETE" },
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  it("requires authentication to restore an inbox message", async () => {
+    const response = await app.request(
+      "/api/inbox/email-id/restore",
+      { method: "POST" },
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
   it("requires authentication for the admin organization list", async () => {
     const response = await app.request(
       "/api/admin/organizations",
