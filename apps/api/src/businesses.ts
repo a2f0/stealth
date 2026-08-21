@@ -5,7 +5,7 @@ import type { Bindings } from "./types";
 
 interface BusinessRow {
   created_at: string;
-  ein: string;
+  ein: string | null;
   id: string;
   name: string;
   updated_at: string;
@@ -40,7 +40,10 @@ businesses.post("/", async (context) => {
   const input = businessInput(body);
   if (!input) {
     return context.json(
-      { error: "A business name and valid 9-digit EIN are required." },
+      {
+        error:
+          "A business name is required, and EIN must be 9 digits when provided.",
+      },
       400,
     );
   }
@@ -99,11 +102,18 @@ businesses.delete("/:id", async (context) => {
 function businessInput(body: unknown) {
   if (!body || typeof body !== "object") return null;
   const { ein, name } = body as { ein?: unknown; name?: unknown };
-  if (typeof name !== "string" || typeof ein !== "string") return null;
+  if (typeof name !== "string") return null;
   const normalizedName = name.trim();
-  const normalizedEin = normalizeEin(ein);
-  if (!normalizedName || normalizedName.length > 120 || !normalizedEin) {
+  if (!normalizedName || normalizedName.length > 120) {
     return null;
+  }
+  let normalizedEin: string | null = null;
+  if (ein !== undefined && ein !== null) {
+    if (typeof ein !== "string") return null;
+    if (ein.trim()) {
+      normalizedEin = normalizeEin(ein);
+      if (!normalizedEin) return null;
+    }
   }
   return { ein: normalizedEin, name: normalizedName };
 }

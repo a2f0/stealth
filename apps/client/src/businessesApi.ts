@@ -2,7 +2,7 @@ import { apiUrl } from "./config";
 
 export interface Business {
   createdAt: string;
-  ein: string;
+  ein: string | null;
   id: string;
   name: string;
   updatedAt: string;
@@ -17,7 +17,7 @@ export function getBusinesses() {
   return request<BusinessListing>("");
 }
 
-export function createBusiness(input: { ein: string; name: string }) {
+export function createBusiness(input: { ein?: string | null; name: string }) {
   return request<{ business: Business }>("", {
     body: JSON.stringify(input),
     method: "POST",

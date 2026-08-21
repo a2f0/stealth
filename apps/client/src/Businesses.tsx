@@ -108,7 +108,7 @@ function BusinessCreateForm({
     setBusy(true);
     try {
       const result = await createBusiness({
-        ein: ein.trim(),
+        ein: ein.trim() || null,
         name: name.trim(),
       });
       setName("");
@@ -145,7 +145,7 @@ function BusinessCreateForm({
           />
         </label>
         <label className="field">
-          <span>EIN</span>
+          <span>EIN (optional)</span>
           <input
             disabled={busy}
             inputMode="numeric"
@@ -153,7 +153,6 @@ function BusinessCreateForm({
             onChange={(event) => setEin(event.target.value)}
             pattern="[0-9]{2}-?[0-9]{7}"
             placeholder="12-3456789"
-            required
             type="text"
             value={ein}
           />
@@ -161,7 +160,7 @@ function BusinessCreateForm({
       </div>
       <button
         className="primaryButton settingsSubmit"
-        disabled={busy || !name.trim() || !ein.trim()}
+        disabled={busy || !name.trim()}
         type="submit"
       >
         {busy ? "Adding…" : "Add business"}
@@ -234,7 +233,9 @@ function BusinessRow({
     <div className="businessRow">
       <div>
         <strong>{business.name}</strong>
-        <span>EIN {formatEin(business.ein)}</span>
+        <span>
+          {business.ein ? `EIN ${formatEin(business.ein)}` : "EIN not provided"}
+        </span>
       </div>
       {canManage && (
         <button
