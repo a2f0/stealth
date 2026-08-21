@@ -3,6 +3,10 @@ interface OrganizationDeletion {
   organizationId: string;
 }
 
+interface OrganizationRestoration {
+  organizationId: string;
+}
+
 export async function markOrganizationForDeletion(
   database: D1Database,
   organizationId: string,
@@ -63,4 +67,21 @@ export async function markOrganizationForDeletion(
 
   if (results[0]?.meta.changes !== 1) return undefined;
   return { deletedAt, organizationId };
+}
+
+export async function restoreOrganization(
+  database: D1Database,
+  organizationId: string,
+): Promise<OrganizationRestoration | undefined> {
+  const [result] = await database.batch([
+    database
+      .prepare(
+        `UPDATE organization
+         SET deletedAt = NULL, deletedByUserId = NULL
+         WHERE id = ? AND deletedAt IS NOT NULL`,
+      )
+      .bind(organizationId),
+  ]);
+  if (!result || result.meta.changes < 1) return undefined;
+  return { organizationId };
 }

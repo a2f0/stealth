@@ -59,6 +59,14 @@ describe("admin organizations", () => {
         ),
       ).text(),
     );
+    database.exec(
+      await Bun.file(
+        new URL(
+          "../migrations/0014_restore_organization_defaults.sql",
+          import.meta.url,
+        ),
+      ).text(),
+    );
 
     const response = await testApp(database).request("/");
 
@@ -129,6 +137,81 @@ describe("admin organizations", () => {
       id: "org_member-user",
     });
   });
+
+  it("restores a deleted organization without overriding other defaults", async () => {
+    const database = await createDeletionFixture();
+    const deletion = await testApp(database).request("/org_member-user", {
+      method: "DELETE",
+    });
+    expect(deletion.status).toBe(200);
+    expect(
+      database
+        .query(
+          `SELECT defaultOrganizationId
+           FROM user WHERE id = 'member-user'`,
+        )
+        .get(),
+    ).toEqual({ defaultOrganizationId: null });
+    expect(
+      database
+        .query(
+          `SELECT activeOrganizationId
+           FROM session WHERE userId = 'member-user'`,
+        )
+        .get(),
+    ).toEqual({ activeOrganizationId: null });
+
+    const response = await testApp(database).request(
+      "/org_member-user/restore",
+      { method: "POST" },
+    );
+    expect(response.status).toBe(200);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      organizationId: "org_member-user",
+    });
+    expect(
+      database
+        .query(
+          `SELECT deletedAt, deletedByUserId
+           FROM organization WHERE id = 'org_member-user'`,
+        )
+        .get(),
+    ).toEqual({ deletedAt: null, deletedByUserId: null });
+    expect(
+      database
+        .query(
+          `SELECT defaultOrganizationId
+           FROM user WHERE id = 'member-user'`,
+        )
+        .get(),
+    ).toEqual({ defaultOrganizationId: "org_member-user" });
+    expect(
+      database
+        .query(
+          `SELECT activeOrganizationId, activeTeamId
+           FROM session WHERE userId = 'member-user'`,
+        )
+        .get(),
+    ).toEqual({
+      activeOrganizationId: "org_member-user",
+      activeTeamId: null,
+    });
+    expect(
+      database
+        .query(
+          `SELECT defaultOrganizationId
+           FROM user WHERE id = 'user-1'`,
+        )
+        .get(),
+    ).toEqual({ defaultOrganizationId: "org_user-1" });
+
+    const repeated = await testApp(database).request(
+      "/org_member-user/restore",
+      { method: "POST" },
+    );
+    expect(repeated.status).toBe(409);
+  });
 });
 
 async function createDeletionFixture() {
@@ -158,11 +241,28 @@ async function createDeletionFixture() {
         user[3] ?? "user",
       );
   }
+  database.exec(
+    await Bun.file(
+      new URL("../migrations/0004_create_organizations.sql", import.meta.url),
+    ).text(),
+  );
+  database
+    .query(
+      `INSERT INTO member
+       (id, organizationId, userId, role, createdAt)
+       VALUES (?, ?, ?, 'member', ?)`,
+    )
+    .run(
+      "admin-target-membership",
+      "org_member-user",
+      "user-1",
+      "2026-08-18T12:00:00.000Z",
+    );
   for (const migration of [
-    "0004_create_organizations.sql",
     "0010_create_organization_groups.sql",
     "0011_soft_delete_organizations.sql",
     "0013_track_organization_deletion_actor.sql",
+    "0014_restore_organization_defaults.sql",
   ]) {
     database.exec(
       await Bun.file(
@@ -170,6 +270,23 @@ async function createDeletionFixture() {
       ).text(),
     );
   }
+  database
+    .query(
+      `INSERT INTO session
+       (id, expiresAt, token, createdAt, updatedAt, userId,
+        activeOrganizationId, activeTeamId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "member-session",
+      "2027-08-18T12:00:00.000Z",
+      "member-token",
+      "2026-08-18T12:00:00.000Z",
+      "2026-08-18T12:00:00.000Z",
+      "member-user",
+      "org_member-user",
+      "team_finance_org_member-user",
+    );
   return database;
 }
 

@@ -48,6 +48,16 @@ describe("api", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication to restore an organization", async () => {
+    const response = await app.request(
+      "/api/admin/organizations/organization-id/restore",
+      { method: "POST" },
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
   it("requires authentication for audits", async () => {
     const response = await app.request(
       "/api/audits/templates",

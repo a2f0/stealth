@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
-import { markOrganizationForDeletion } from "./organizationDeletion";
+import {
+  markOrganizationForDeletion,
+  restoreOrganization,
+} from "./organizationDeletion";
 import type { Bindings } from "./types";
 
 const adminOrganizations = new Hono<{
@@ -89,6 +92,26 @@ adminOrganizations.delete("/:organizationId", async (context) => {
     deletedByName: actor.name,
     deletedByUserId: actor.id,
   });
+});
+
+adminOrganizations.post("/:organizationId/restore", async (context) => {
+  const organizationId = context.req.param("organizationId");
+  const restoration = await restoreOrganization(context.env.DB, organizationId);
+  if (!restoration) {
+    const organization = await context.env.DB.prepare(
+      "SELECT deletedAt FROM organization WHERE id = ?",
+    )
+      .bind(organizationId)
+      .first<{ deletedAt: string | null }>();
+    if (!organization) {
+      return context.json({ error: "Organization not found." }, 404);
+    }
+    return context.json(
+      { error: "Organization is not marked for deletion." },
+      409,
+    );
+  }
+  return context.json(restoration);
 });
 
 export { adminOrganizations };
