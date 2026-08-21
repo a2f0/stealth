@@ -12,7 +12,13 @@ interface BusinessListResponse {
 }
 
 interface BusinessResponse {
-  business: { ein: string | null; id: string; name: string };
+  business: {
+    createdAt: string;
+    ein: string | null;
+    id: string;
+    name: string;
+    updatedAt: string;
+  };
 }
 
 describe("business EINs", () => {
@@ -88,6 +94,63 @@ describe("organization businesses", () => {
       "Acme, Inc.",
       "Second Business",
     ]);
+
+    const secondBusiness = body.businesses.find(
+      ({ name }) => name === "Second Business",
+    );
+    if (!secondBusiness) throw new Error("Expected the second business.");
+    const duplicateUpdate = await update(
+      fixture.ownerApp,
+      fixture.bindings,
+      secondBusiness.id,
+      { ein: "12-3456789", name: "Duplicate" },
+    );
+    expect(duplicateUpdate.status).toBe(409);
+    const duplicateUpdateBody: unknown = await duplicateUpdate.json();
+    expect(duplicateUpdateBody).toEqual({
+      error: "A business with that EIN already exists.",
+    });
+  });
+
+  it("lets managers edit business names and optional EINs", async () => {
+    const fixture = await createFixture();
+    const created = await create(fixture.ownerApp, fixture.bindings, {
+      ein: "12-3456789",
+      name: "Acme",
+    });
+    const business = ((await created.json()) as BusinessResponse).business;
+
+    const renamed = await update(
+      fixture.ownerApp,
+      fixture.bindings,
+      business.id,
+      { ein: "98-7654321", name: "  Acme Holdings  " },
+    );
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as BusinessResponse).business).toMatchObject(
+      {
+        createdAt: business.createdAt,
+        ein: "987654321",
+        id: business.id,
+        name: "Acme Holdings",
+      },
+    );
+
+    const cleared = await update(
+      fixture.ownerApp,
+      fixture.bindings,
+      business.id,
+      { ein: null, name: "Acme Holdings" },
+    );
+    expect(cleared.status).toBe(200);
+    expect(
+      ((await cleared.json()) as BusinessResponse).business.ein,
+    ).toBeNull();
+    expect(
+      fixture.database
+        .query("SELECT name, ein FROM businesses WHERE id = ?")
+        .get(business.id),
+    ).toEqual({ ein: null, name: "Acme Holdings" });
   });
 
   it("validates input and limits mutations to organization managers", async () => {
@@ -124,6 +187,25 @@ describe("organization businesses", () => {
       businesses: [],
       canManage: false,
     });
+
+    const created = await create(fixture.ownerApp, fixture.bindings, {
+      name: "Acme",
+    });
+    const business = ((await created.json()) as BusinessResponse).business;
+    const invalidUpdate = await update(
+      fixture.ownerApp,
+      fixture.bindings,
+      business.id,
+      { ein: "invalid", name: "Acme" },
+    );
+    expect(invalidUpdate.status).toBe(400);
+    const forbiddenUpdate = await update(
+      fixture.memberApp,
+      fixture.bindings,
+      business.id,
+      { name: "Renamed" },
+    );
+    expect(forbiddenUpdate.status).toBe(403);
   });
 
   it("isolates organizations, scopes deletes, and cascades purged data", async () => {
@@ -149,6 +231,13 @@ describe("organization businesses", () => {
       fixture.bindings,
     );
     expect(otherDelete.status).toBe(404);
+    const otherUpdate = await update(
+      fixture.otherOwnerApp,
+      fixture.bindings,
+      business.id,
+      { name: "Other organization edit" },
+    );
+    expect(otherUpdate.status).toBe(404);
 
     const memberDelete = await fixture.memberApp.request(
       `/${business.id}`,
@@ -269,6 +358,23 @@ function create(
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
       method: "POST",
+    },
+    bindings,
+  );
+}
+
+function update(
+  app: ReturnType<typeof testApp>,
+  bindings: Bindings,
+  id: string,
+  body: { ein?: string | null; name: string },
+) {
+  return app.request(
+    `/${id}`,
+    {
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
     },
     bindings,
   );

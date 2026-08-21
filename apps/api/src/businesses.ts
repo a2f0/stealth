@@ -85,6 +85,53 @@ businesses.post("/", async (context) => {
   );
 });
 
+businesses.patch("/:id", async (context) => {
+  if (!canManage(context)) return managerRequired(context);
+  const body: unknown = await context.req.json().catch(() => null);
+  const input = businessInput(body);
+  if (!input) {
+    return context.json(
+      {
+        error:
+          "A business name is required, and EIN must be 9 digits when provided.",
+      },
+      400,
+    );
+  }
+
+  const id = context.req.param("id");
+  const timestamp = new Date().toISOString();
+  const result = await context.env.DB.prepare(
+    `UPDATE OR IGNORE businesses
+     SET name = ?, ein = ?, updated_at = ?
+     WHERE id = ? AND organization_id = ?`,
+  )
+    .bind(input.name, input.ein, timestamp, id, context.get("organizationId"))
+    .run();
+  if (result.meta.changes !== 1) {
+    const existing = await context.env.DB.prepare(
+      `SELECT id FROM businesses
+       WHERE id = ? AND organization_id = ?`,
+    )
+      .bind(id, context.get("organizationId"))
+      .first<{ id: string }>();
+    return existing
+      ? context.json({ error: "A business with that EIN already exists." }, 409)
+      : context.json({ error: "Business not found." }, 404);
+  }
+  const updated = await context.env.DB.prepare(
+    `SELECT id, name, ein, created_at, updated_at
+     FROM businesses
+     WHERE id = ? AND organization_id = ?`,
+  )
+    .bind(id, context.get("organizationId"))
+    .first<BusinessRow>();
+  if (!updated) return context.json({ error: "Business not found." }, 404);
+  return context.json({
+    business: businessResponse(updated),
+  });
+});
+
 businesses.delete("/:id", async (context) => {
   if (!canManage(context)) return managerRequired(context);
   const result = await context.env.DB.prepare(
