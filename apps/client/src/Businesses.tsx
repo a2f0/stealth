@@ -5,6 +5,7 @@ import {
   createBusiness,
   deleteBusiness,
   getBusinesses,
+  updateBusiness,
 } from "./businessesApi";
 import { formatEin } from "./businessState";
 
@@ -81,6 +82,22 @@ export function Businesses() {
               onError={(message) => {
                 setNotice(undefined);
                 setError(message);
+              }}
+              onUpdated={(updatedBusiness) => {
+                setData((current) =>
+                  current
+                    ? {
+                        ...current,
+                        businesses: current.businesses.map((business) =>
+                          business.id === updatedBusiness.id
+                            ? updatedBusiness
+                            : business,
+                        ),
+                      }
+                    : current,
+                );
+                setError(undefined);
+                setNotice("Business updated.");
               }}
             />
           </div>
@@ -174,11 +191,13 @@ function BusinessList({
   canManage,
   onDeleted,
   onError,
+  onUpdated,
 }: {
   businesses: Business[];
   canManage: boolean;
   onDeleted: (id: string) => void;
   onError: (message: string) => void;
+  onUpdated: (business: Business) => void;
 }) {
   if (businesses.length === 0) {
     return <BusinessEmptyState title="No businesses yet." />;
@@ -199,6 +218,7 @@ function BusinessList({
             key={business.id}
             onDeleted={onDeleted}
             onError={onError}
+            onUpdated={onUpdated}
           />
         ))}
       </div>
@@ -211,13 +231,17 @@ function BusinessRow({
   canManage,
   onDeleted,
   onError,
+  onUpdated,
 }: {
   business: Business;
   canManage: boolean;
   onDeleted: (id: string) => void;
   onError: (message: string) => void;
+  onUpdated: (business: Business) => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+
   async function remove() {
     if (!window.confirm(`Delete ${business.name}?`)) return;
     setBusy(true);
@@ -229,6 +253,21 @@ function BusinessRow({
       setBusy(false);
     }
   }
+
+  if (editing) {
+    return (
+      <BusinessEditRow
+        business={business}
+        onCancel={() => setEditing(false)}
+        onError={onError}
+        onUpdated={(updatedBusiness) => {
+          onUpdated(updatedBusiness);
+          setEditing(false);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="businessRow">
       <div>
@@ -238,16 +277,109 @@ function BusinessRow({
         </span>
       </div>
       {canManage && (
-        <button
-          className="dangerButton tableActionButton"
-          disabled={busy}
-          onClick={() => void remove()}
-          type="button"
-        >
-          {busy ? "Deleting…" : "Delete"}
-        </button>
+        <div className="businessRowActions">
+          <button
+            className="businessEditButton tableActionButton"
+            disabled={busy}
+            onClick={() => setEditing(true)}
+            type="button"
+          >
+            Edit
+          </button>
+          <button
+            className="dangerButton tableActionButton"
+            disabled={busy}
+            onClick={() => void remove()}
+            type="button"
+          >
+            {busy ? "Deleting…" : "Delete"}
+          </button>
+        </div>
       )}
     </div>
+  );
+}
+
+function BusinessEditRow({
+  business,
+  onCancel,
+  onError,
+  onUpdated,
+}: {
+  business: Business;
+  onCancel: () => void;
+  onError: (message: string) => void;
+  onUpdated: (business: Business) => void;
+}) {
+  const [name, setName] = useState(business.name);
+  const [ein, setEin] = useState(business.ein ?? "");
+  const [busy, setBusy] = useState(false);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const result = await updateBusiness(business.id, {
+        ein: ein.trim() || null,
+        name: name.trim(),
+      });
+      onUpdated(result.business);
+    } catch (cause) {
+      onError(messageFrom(cause));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      className="businessRow businessEditForm"
+      onSubmit={(event) => void save(event)}
+    >
+      <div className="businessEditFields">
+        <label className="field">
+          <span>Business name</span>
+          <input
+            autoComplete="organization"
+            disabled={busy}
+            maxLength={120}
+            onChange={(event) => setName(event.target.value)}
+            required
+            type="text"
+            value={name}
+          />
+        </label>
+        <label className="field">
+          <span>EIN (optional)</span>
+          <input
+            disabled={busy}
+            inputMode="numeric"
+            maxLength={10}
+            onChange={(event) => setEin(event.target.value)}
+            pattern="[0-9]{2}-?[0-9]{7}"
+            placeholder="12-3456789"
+            type="text"
+            value={ein}
+          />
+        </label>
+      </div>
+      <div className="businessRowActions">
+        <button
+          className="businessCancelButton tableActionButton"
+          disabled={busy}
+          onClick={onCancel}
+          type="button"
+        >
+          Cancel
+        </button>
+        <button
+          className="primaryButton tableActionButton"
+          disabled={busy || !name.trim()}
+          type="submit"
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
   );
 }
 

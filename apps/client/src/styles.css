@@ -1522,13 +1522,66 @@ button:disabled {
   font-size: 10px;
 }
 
+.businessRowActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.businessEditButton,
+.businessCancelButton {
+  border: 1px solid #cecec5;
+  border-radius: 9px;
+  color: #4d4e46;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.businessEditButton:hover,
+.businessCancelButton:hover {
+  border-color: #99998f;
+  background: #f0efe9;
+}
+
+.businessEditForm {
+  align-items: end;
+}
+
+.businessEditFields {
+  display: grid;
+  width: min(100%, 520px);
+  grid-template-columns: minmax(0, 2fr) minmax(160px, 1fr);
+  gap: 12px;
+}
+
+.businessEditFields .field > span {
+  margin: 0;
+  font-family: inherit;
+}
+
+.businessEditFields .field input {
+  padding: 9px 10px;
+  font-size: 12px;
+}
+
 .businessEmptyState {
   max-width: 760px;
 }
 
 @media (max-width: 680px) {
-  .businessFields {
+  .businessFields,
+  .businessEditFields {
     grid-template-columns: 1fr;
+  }
+
+  .businessEditForm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .businessRowActions {
+    align-self: flex-end;
   }
 }
 

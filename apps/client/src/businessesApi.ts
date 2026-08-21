@@ -24,6 +24,16 @@ export function createBusiness(input: { ein?: string | null; name: string }) {
   });
 }
 
+export function updateBusiness(
+  id: string,
+  input: { ein?: string | null; name: string },
+) {
+  return request<{ business: Business }>(`/${encodeURIComponent(id)}`, {
+    body: JSON.stringify(input),
+    method: "PATCH",
+  });
+}
+
 export function deleteBusiness(id: string) {
   return request<void>(`/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
