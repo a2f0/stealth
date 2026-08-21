@@ -7,12 +7,12 @@ import { businesses, normalizeEin } from "./businesses";
 import type { Bindings } from "./types";
 
 interface BusinessListResponse {
-  businesses: Array<{ ein: string; id: string; name: string }>;
+  businesses: Array<{ ein: string | null; id: string; name: string }>;
   canManage: boolean;
 }
 
 interface BusinessResponse {
-  business: { ein: string; id: string; name: string };
+  business: { ein: string | null; id: string; name: string };
 }
 
 describe("business EINs", () => {
@@ -26,6 +26,27 @@ describe("business EINs", () => {
 });
 
 describe("organization businesses", () => {
+  it("creates multiple businesses without EINs", async () => {
+    const fixture = await createFixture();
+    const first = await create(fixture.ownerApp, fixture.bindings, {
+      name: "Acme",
+    });
+    const second = await create(fixture.ownerApp, fixture.bindings, {
+      ein: "",
+      name: "Second Business",
+    });
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(((await first.json()) as BusinessResponse).business.ein).toBeNull();
+    expect(((await second.json()) as BusinessResponse).business.ein).toBeNull();
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM businesses WHERE ein IS NULL")
+        .get(),
+    ).toEqual({ count: 2 });
+  });
+
   it("lets managers create multiple businesses and prevents duplicate EINs", async () => {
     const fixture = await createFixture();
     const first = await create(fixture.ownerApp, fixture.bindings, {
@@ -143,6 +164,38 @@ describe("organization businesses", () => {
       fixture.database.query("SELECT COUNT(*) AS count FROM businesses").get(),
     ).toEqual({ count: 0 });
   });
+
+  it("preserves existing businesses when making EIN optional", async () => {
+    const database = new Database(":memory:");
+    database.exec("PRAGMA foreign_keys = ON");
+    await applyMigration(database, "0003_create_auth.sql");
+    insertUser(database, "owner");
+    await applyMigration(database, "0004_create_organizations.sql");
+    await applyMigration(database, "0015_create_businesses.sql");
+    database
+      .query(
+        `INSERT INTO businesses
+         (id, organization_id, name, ein, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-business",
+        "org_owner",
+        "Legacy Business",
+        "123456789",
+        "owner",
+        timestamp,
+        timestamp,
+      );
+
+    await applyMigration(database, "0017_make_business_ein_optional.sql");
+
+    expect(
+      database
+        .query("SELECT name, ein FROM businesses WHERE id = ?")
+        .get("legacy-business"),
+    ).toEqual({ ein: "123456789", name: "Legacy Business" });
+  });
 });
 
 async function createFixture() {
@@ -160,6 +213,7 @@ async function createFixture() {
     )
     .run("member-extra", "org_owner", "member", "member", timestamp);
   await applyMigration(database, "0015_create_businesses.sql");
+  await applyMigration(database, "0017_make_business_ein_optional.sql");
   const bindings = bindingsFor(database);
   return {
     bindings,
@@ -207,7 +261,7 @@ function testApp(organizationId: string, userId: string, role: string) {
 function create(
   app: ReturnType<typeof testApp>,
   bindings: Bindings,
-  body: { ein: string; name: string },
+  body: { ein?: string | null; name: string },
 ) {
   return app.request(
     "/",
