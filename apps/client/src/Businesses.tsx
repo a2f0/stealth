@@ -11,10 +11,13 @@ import {
 import { formatBusinessDate, formatEin } from "./businessState";
 
 interface BusinessFormState {
+  city: string;
   ein: string;
   incorporationDate: string;
   name: string;
+  state: string;
   streetAddress: string;
+  zip: string;
 }
 
 export function Businesses() {
@@ -262,6 +265,9 @@ function BusinessRow({
           </span>
         )}
         {business.streetAddress && <span>{business.streetAddress}</span>}
+        {(business.city || business.state || business.zip) && (
+          <span>{formatBusinessLocation(business)}</span>
+        )}
       </div>
       {canManage && (
         <div className="businessRowActions">
@@ -410,30 +416,91 @@ function BusinessFields({
           value={form.incorporationDate}
         />
       </label>
+      <div className="businessLocationFields">
+        <label className="field">
+          <span>City (optional)</span>
+          <input
+            autoComplete="address-level2"
+            disabled={disabled}
+            maxLength={100}
+            onChange={(event) => set("city", event.target.value)}
+            placeholder="New York"
+            type="text"
+            value={form.city}
+          />
+        </label>
+        <label className="field">
+          <span>State (optional)</span>
+          <input
+            autoCapitalize="characters"
+            autoComplete="address-level1"
+            disabled={disabled}
+            maxLength={2}
+            onChange={(event) => set("state", event.target.value)}
+            pattern="[A-Za-z]{2}"
+            placeholder="NY"
+            type="text"
+            value={form.state}
+          />
+        </label>
+        <label className="field">
+          <span>ZIP (optional)</span>
+          <input
+            autoComplete="postal-code"
+            disabled={disabled}
+            inputMode="numeric"
+            maxLength={10}
+            onChange={(event) => set("zip", event.target.value)}
+            pattern="[0-9]{5}(-[0-9]{4})?"
+            placeholder="10001"
+            type="text"
+            value={form.zip}
+          />
+        </label>
+      </div>
     </div>
   );
 }
 
 function businessForm(business: Business): BusinessFormState {
   return {
+    city: business.city ?? "",
     ein: business.ein ?? "",
     incorporationDate: business.incorporationDate ?? "",
     name: business.name,
+    state: business.state ?? "",
     streetAddress: business.streetAddress ?? "",
+    zip: business.zip ?? "",
   };
 }
 
 function emptyBusinessForm(): BusinessFormState {
-  return { ein: "", incorporationDate: "", name: "", streetAddress: "" };
+  return {
+    city: "",
+    ein: "",
+    incorporationDate: "",
+    name: "",
+    state: "",
+    streetAddress: "",
+    zip: "",
+  };
 }
 
 function businessInput(form: BusinessFormState): BusinessInput {
   return {
+    city: form.city.trim() || null,
     ein: form.ein.trim() || null,
     incorporationDate: form.incorporationDate || null,
     name: form.name.trim(),
+    state: form.state.trim() || null,
     streetAddress: form.streetAddress.trim() || null,
+    zip: form.zip.trim() || null,
   };
+}
+
+function formatBusinessLocation(business: Business) {
+  const region = [business.state, business.zip].filter(Boolean).join(" ");
+  return [business.city, region].filter(Boolean).join(", ");
 }
 
 function BusinessEmptyState({ title }: { title: string }) {

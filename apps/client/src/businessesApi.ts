@@ -1,20 +1,26 @@
 import { apiUrl } from "./config";
 
 export interface Business {
+  city: string | null;
   createdAt: string;
   ein: string | null;
   id: string;
   incorporationDate: string | null;
   name: string;
+  state: string | null;
   streetAddress: string | null;
   updatedAt: string;
+  zip: string | null;
 }
 
 export interface BusinessInput {
+  city?: string | null;
   ein?: string | null;
   incorporationDate?: string | null;
   name: string;
+  state?: string | null;
   streetAddress?: string | null;
+  zip?: string | null;
 }
 
 export interface BusinessListing {
