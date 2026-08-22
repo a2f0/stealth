@@ -10,7 +10,7 @@ interface AuthPageProps {
   initialMode?: AuthMode;
   initialNotice?: string | undefined;
   onAuthenticated: (action: AuthenticationAction) => Promise<void>;
-  onCancel?: (() => void) | undefined;
+  onCancel?: (() => Promise<void> | void) | undefined;
   variant?: AuthVariant;
 }
 
@@ -48,6 +48,54 @@ export function AuthPage({
   onCancel,
   variant = "default",
 }: AuthPageProps) {
+  const auth = useAuthPageState({
+    initialError,
+    initialMode,
+    initialNotice,
+    onAuthenticated,
+    onCancel,
+  });
+
+  if (auth.twoFactorRequired) {
+    return (
+      <TwoFactorChallenge
+        onCancel={
+          onCancel
+            ? auth.cancel
+            : () => {
+                auth.setTwoFactorRequired(false);
+                auth.setPassword("");
+              }
+        }
+        onVerified={() => onAuthenticated("sign-in")}
+        variant={variant}
+      />
+    );
+  }
+
+  return (
+    <CredentialAuthPage
+      {...auth}
+      copy={contentFor(auth.mode, variant)}
+      onCancel={onCancel ? auth.cancel : undefined}
+      onMode={auth.chooseMode}
+      onSubmit={auth.submit}
+      variant={variant}
+    />
+  );
+}
+
+function useAuthPageState({
+  initialError,
+  initialMode,
+  initialNotice,
+  onAuthenticated,
+  onCancel,
+}: Required<Pick<AuthPageProps, "initialMode">> &
+  Pick<
+    AuthPageProps,
+    "initialError" | "initialNotice" | "onAuthenticated" | "onCancel"
+  >) {
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -56,6 +104,7 @@ export function AuthPage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(initialError);
   const [notice, setNotice] = useState<string | undefined>(initialNotice);
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
   const resetToken = new URLSearchParams(window.location.search).get("token");
 
   function chooseMode(nextMode: AuthMode) {
@@ -82,6 +131,10 @@ export function AuthPage({
         password,
         resetToken,
       });
+      if (result.twoFactorRequired) {
+        setTwoFactorRequired(true);
+        return;
+      }
       if (result.nextMode) chooseMode(result.nextMode);
       if (result.clearLocation) window.history.replaceState({}, "", "/");
       setNotice(result.notice);
@@ -92,8 +145,78 @@ export function AuthPage({
     }
   }
 
-  const copy = contentFor(mode, variant);
+  async function cancel() {
+    if (!onCancel) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onCancel();
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
 
+  return {
+    busy,
+    cancel,
+    chooseMode,
+    confirmation,
+    email,
+    error,
+    mode,
+    name,
+    notice,
+    onConfirmation: setConfirmation,
+    onEmail: setEmail,
+    onName: setName,
+    onPassword: setPassword,
+    password,
+    setPassword,
+    setTwoFactorRequired,
+    submit,
+    twoFactorRequired,
+  };
+}
+
+function CredentialAuthPage({
+  busy,
+  confirmation,
+  copy,
+  email,
+  error,
+  mode,
+  name,
+  notice,
+  onCancel,
+  onConfirmation,
+  onEmail,
+  onMode,
+  onName,
+  onPassword,
+  onSubmit,
+  password,
+  variant,
+}: {
+  busy: boolean;
+  confirmation: string;
+  copy: { button: string; eyebrow: string; title: string };
+  email: string;
+  error: string | undefined;
+  mode: AuthMode;
+  name: string;
+  notice: string | undefined;
+  onCancel: (() => Promise<void>) | undefined;
+  onConfirmation: (value: string) => void;
+  onEmail: (value: string) => void;
+  onMode: (mode: AuthMode) => void;
+  onName: (value: string) => void;
+  onPassword: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  password: string;
+  variant: AuthVariant;
+}) {
   return (
     <div className="authShell">
       <AuthAside />
@@ -108,24 +231,24 @@ export function AuthPage({
             autoComplete="on"
             className="authForm"
             method="post"
-            onSubmit={(event) => void submit(event)}
+            onSubmit={(event) => void onSubmit(event)}
           >
             <AuthFields
               confirmation={confirmation}
               email={email}
               mode={mode}
               name={name}
-              onConfirmation={setConfirmation}
-              onEmail={setEmail}
-              onName={setName}
-              onPassword={setPassword}
+              onConfirmation={onConfirmation}
+              onEmail={onEmail}
+              onName={onName}
+              onPassword={onPassword}
               password={password}
             />
 
             {mode === "sign-in" && (
               <button
                 className="forgotButton"
-                onClick={() => chooseMode("forgot")}
+                onClick={() => onMode("forgot")}
                 type="button"
               >
                 Forgot password?
@@ -151,21 +274,25 @@ export function AuthPage({
           {mode === "sign-in" && (
             <p className="authSwitch">
               New here?{" "}
-              <button onClick={() => chooseMode("sign-up")} type="button">
+              <button onClick={() => onMode("sign-up")} type="button">
                 Create an account
               </button>
             </p>
           )}
           {mode !== "sign-in" && (
             <p className="authSwitch">
-              <button onClick={() => chooseMode("sign-in")} type="button">
+              <button onClick={() => onMode("sign-in")} type="button">
                 Back to sign in
               </button>
             </p>
           )}
           {onCancel && (
             <p className="authSwitch authCancel">
-              <button onClick={onCancel} type="button">
+              <button
+                disabled={busy}
+                onClick={() => void onCancel()}
+                type="button"
+              >
                 Cancel and return to your account
               </button>
             </p>
@@ -190,6 +317,7 @@ interface AuthActionResult {
   clearLocation?: boolean;
   nextMode?: AuthMode;
   notice?: string;
+  twoFactorRequired?: boolean;
 }
 
 async function performAuthAction(
@@ -209,6 +337,9 @@ async function performAuthAction(
       password: input.password,
     });
     throwForAuthError(result.error);
+    if (requiresTwoFactor(result.data)) {
+      return { twoFactorRequired: true };
+    }
     await input.onAuthenticated("sign-in");
     return {};
   }
@@ -256,6 +387,132 @@ async function performAuthAction(
     nextMode: "sign-in" as const,
     notice: "Password updated. Sign in with your new password.",
   };
+}
+
+function TwoFactorChallenge({
+  onCancel,
+  onVerified,
+  variant,
+}: {
+  onCancel: () => Promise<void> | void;
+  onVerified: () => Promise<void>;
+  variant: AuthVariant;
+}) {
+  const [backupCode, setBackupCode] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string>();
+  const [trustDevice, setTrustDevice] = useState(false);
+
+  async function verify(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      const result = backupCode
+        ? await authClient.twoFactor.verifyBackupCode({
+            code: code.trim(),
+            trustDevice,
+          })
+        : await authClient.twoFactor.verifyTotp({
+            code: code.replace(/\D/g, ""),
+            trustDevice,
+          });
+      throwForAuthError(result.error);
+      await onVerified();
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function chooseBackupCode(nextBackupCode: boolean) {
+    setBackupCode(nextBackupCode);
+    setCode("");
+    setError(undefined);
+  }
+
+  return (
+    <div className="authShell">
+      <AuthAside />
+      <main className="authMain">
+        <div className="authCard">
+          <p className="eyebrow">Two-step verification</p>
+          <h2>Confirm it’s you</h2>
+          <p className="authIntro">
+            {backupCode
+              ? "Enter one of the recovery codes you saved when you enabled MFA."
+              : "Enter the six-digit code from your authenticator app."}
+          </p>
+          <form
+            autoComplete="on"
+            className="authForm"
+            method="post"
+            onSubmit={(event) => void verify(event)}
+          >
+            <label className="field" htmlFor="two-factor-code">
+              <span>
+                {backupCode ? "Recovery code" : "Authentication code"}
+              </span>
+              <input
+                autoCapitalize="none"
+                autoComplete={backupCode ? "off" : "one-time-code"}
+                id="two-factor-code"
+                inputMode={backupCode ? "text" : "numeric"}
+                maxLength={backupCode ? 32 : 8}
+                onChange={(event) => setCode(event.target.value)}
+                pattern={backupCode ? undefined : "[0-9 ]{6,8}"}
+                required
+                spellCheck={false}
+                value={code}
+              />
+            </label>
+            <label className="authCheckbox">
+              <input
+                checked={trustDevice}
+                onChange={(event) => setTrustDevice(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Trust this device for 30 days</span>
+            </label>
+            {error && (
+              <div aria-live="polite" className="errorBanner">
+                {error}
+              </div>
+            )}
+            <button className="authSubmit" disabled={busy} type="submit">
+              {busy
+                ? "Verifying…"
+                : variant === "add-account"
+                  ? "Verify and add account"
+                  : "Verify and sign in"}
+            </button>
+          </form>
+          <p className="authSwitch">
+            <button
+              disabled={busy}
+              onClick={() => chooseBackupCode(!backupCode)}
+              type="button"
+            >
+              {backupCode ? "Use an authenticator code" : "Use a recovery code"}
+            </button>
+          </p>
+          <p className="authSwitch authCancel">
+            <button
+              disabled={busy}
+              onClick={() => void onCancel()}
+              type="button"
+            >
+              {variant === "add-account"
+                ? "Cancel and return to your account"
+                : "Back to sign in"}
+            </button>
+          </p>
+        </div>
+      </main>
+    </div>
+  );
 }
 
 function AuthAside() {
@@ -422,6 +679,15 @@ function throwForAuthError(error: { message?: string | undefined } | null) {
   if (error) {
     throw new Error(error.message ?? "Authentication failed.");
   }
+}
+
+export function requiresTwoFactor(data: unknown) {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "twoFactorRedirect" in data &&
+    data.twoFactorRedirect === true
+  );
 }
 
 function messageFrom(cause: unknown) {

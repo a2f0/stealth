@@ -237,6 +237,130 @@ describe("password authentication", () => {
     ]);
   });
 
+  it("enrolls in TOTP MFA and requires a second factor at sign-in", async () => {
+    const fixture = await createFixture();
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+    });
+    const enrollmentCookies = new CookieJar();
+    enrollmentCookies.absorb(
+      await post(fixture.auth, "/sign-in/email", {
+        email,
+        password: originalPassword,
+      }),
+    );
+
+    const enabled = await post(
+      fixture.auth,
+      "/two-factor/enable",
+      { method: "totp", password: originalPassword },
+      enrollmentCookies.header(),
+    );
+    expect(enabled.status).toBe(200);
+    const setup = (await enabled.json()) as {
+      backupCodes: string[];
+      method: string;
+      totpURI: string;
+    };
+    expect(setup).toMatchObject({ method: "totp" });
+    expect(setup.backupCodes).toHaveLength(10);
+    expect(setup.totpURI).toStartWith("otpauth://totp/Stealth:");
+    const pendingMfa = fixture.database
+      .query(
+        `SELECT user.twoFactorEnabled, twoFactor.verified,
+                twoFactor.secret, twoFactor.backupCodes
+         FROM user JOIN twoFactor ON twoFactor.userId = user.id
+         WHERE user.email = ?`,
+      )
+      .get(email) as {
+      backupCodes: string;
+      secret: string;
+      twoFactorEnabled: number;
+      verified: number;
+    };
+    expect(pendingMfa).toMatchObject({
+      twoFactorEnabled: 0,
+      verified: 0,
+    });
+    expect(pendingMfa.secret).not.toContain(totpSecret(setup.totpURI));
+    expect(pendingMfa.backupCodes).not.toContain(setup.backupCodes[0] ?? "");
+
+    const enrollmentVerification = await post(
+      fixture.auth,
+      "/two-factor/verify-totp",
+      { code: await totpCode(setup.totpURI) },
+      enrollmentCookies.header(),
+    );
+    expect(enrollmentVerification.status).toBe(200);
+    enrollmentCookies.absorb(enrollmentVerification);
+    expect(
+      fixture.database
+        .query(
+          `SELECT user.twoFactorEnabled, twoFactor.verified
+           FROM user JOIN twoFactor ON twoFactor.userId = user.id
+           WHERE user.email = ?`,
+        )
+        .get(email),
+    ).toEqual({ twoFactorEnabled: 1, verified: 1 });
+
+    const loginCookies = new CookieJar();
+    const passwordStep = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    expect(passwordStep.status).toBe(200);
+    const passwordStepBody: unknown = await passwordStep.json();
+    expect(passwordStepBody).toEqual({
+      twoFactorMethods: ["totp"],
+      twoFactorRedirect: true,
+    });
+    loginCookies.absorb(passwordStep);
+    expect(
+      await (
+        await get(fixture.auth, "/get-session", loginCookies.header())
+      ).json(),
+    ).toBeNull();
+
+    const secondFactor = await post(
+      fixture.auth,
+      "/two-factor/verify-totp",
+      { code: await totpCode(setup.totpURI), trustDevice: true },
+      loginCookies.header(),
+    );
+    expect(secondFactor.status).toBe(200);
+    loginCookies.absorb(secondFactor);
+    expect(
+      await (
+        await get(fixture.auth, "/get-session", loginCookies.header())
+      ).json(),
+    ).toMatchObject({ user: { email, twoFactorEnabled: true } });
+
+    const backupLoginCookies = new CookieJar();
+    const backupPasswordStep = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    backupLoginCookies.absorb(backupPasswordStep);
+    const backupCode = setup.backupCodes[0] ?? "";
+    const recovery = await post(
+      fixture.auth,
+      "/two-factor/verify-backup-code",
+      { code: backupCode },
+      backupLoginCookies.header(),
+    );
+    expect(recovery.status).toBe(200);
+    backupLoginCookies.absorb(recovery);
+    const reusedRecoveryCode = await post(
+      fixture.auth,
+      "/two-factor/verify-backup-code",
+      { code: backupCode },
+      backupLoginCookies.header(),
+    );
+    expect(reusedRecoveryCode.status).toBe(401);
+  });
+
   it("only lets admins list users", async () => {
     const fixture = await createFixture();
     const signUp = await post(fixture.auth, "/sign-up/email", {
@@ -691,6 +815,7 @@ async function createFixture() {
   await applyMigration(database, "0004_create_organizations.sql");
   await applyMigration(database, "0008_keep_organization_defaults_valid.sql");
   await applyMigration(database, "0010_create_organization_groups.sql");
+  await applyMigration(database, "0020_add_two_factor_authentication.sql");
 
   return { auth, database, messages, pending };
 }
@@ -737,6 +862,50 @@ function get(
 interface DeviceSession {
   session: { token: string };
   user: { email: string };
+}
+
+function totpSecret(uri: string) {
+  const secret = new URL(uri).searchParams.get("secret");
+  if (!secret) throw new Error("TOTP URI is missing its secret.");
+  return secret;
+}
+
+async function totpCode(uri: string) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    decodeBase32(totpSecret(uri)),
+    { hash: "SHA-1", name: "HMAC" },
+    false,
+    ["sign"],
+  );
+  const counter = new ArrayBuffer(8);
+  new DataView(counter).setBigUint64(
+    0,
+    BigInt(Math.floor(Date.now() / 30_000)),
+  );
+  const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, counter));
+  const offset = (digest.at(-1) ?? 0) & 0x0f;
+  const value =
+    (((digest[offset] ?? 0) & 0x7f) << 24) |
+    ((digest[offset + 1] ?? 0) << 16) |
+    ((digest[offset + 2] ?? 0) << 8) |
+    (digest[offset + 3] ?? 0);
+  return (value % 1_000_000).toString().padStart(6, "0");
+}
+
+function decodeBase32(encoded: string) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const character of encoded.toUpperCase().replace(/=+$/, "")) {
+    const value = alphabet.indexOf(character);
+    if (value < 0) throw new Error("TOTP secret is not valid base32.");
+    bits += value.toString(2).padStart(5, "0");
+  }
+  const bytes: number[] = [];
+  for (let index = 0; index + 8 <= bits.length; index += 8) {
+    bytes.push(Number.parseInt(bits.slice(index, index + 8), 2));
+  }
+  return Uint8Array.from(bytes);
 }
 
 class CookieJar {

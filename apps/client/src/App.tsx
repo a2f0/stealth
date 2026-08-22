@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { AccountSecurity } from "./AccountSecurity";
 import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
 import { type AuthenticationAction, AuthPage } from "./AuthPage";
@@ -72,6 +73,7 @@ export function App() {
   if (isAddAccountPage || isResetPage || !session) {
     return (
       <AuthenticationRoute
+        activeSessionToken={session?.session.token}
         addingAccount={isAddAccountPage}
         navigate={navigate}
         pathname={pathname}
@@ -89,6 +91,7 @@ export function App() {
       access={access}
       navigate={navigate}
       pathname={pathname}
+      onSessionChanged={() => refetch()}
       session={session}
       verificationNotice={verification.notice}
       workspace={workspace}
@@ -97,6 +100,7 @@ export function App() {
 }
 
 function AuthenticationRoute({
+  activeSessionToken,
   addingAccount,
   navigate,
   pathname,
@@ -105,6 +109,7 @@ function AuthenticationRoute({
   sessionPresent,
   verification,
 }: {
+  activeSessionToken: string | undefined;
   addingAccount: boolean;
   navigate: (pathname: string) => void;
   pathname: string;
@@ -157,7 +162,21 @@ function AuthenticationRoute({
         }
       }}
       onCancel={
-        sessionPresent && addingAccount ? () => navigate(returnTo) : undefined
+        sessionPresent && addingAccount
+          ? async () => {
+              if (!activeSessionToken) return;
+              const result = await authClient.multiSession.setActive({
+                sessionToken: activeSessionToken,
+              });
+              if (result.error) {
+                throw new Error(
+                  result.error.message ?? "Could not return to your account.",
+                );
+              }
+              await refetchSession();
+              navigate(returnTo);
+            }
+          : undefined
       }
       variant={addingAccount ? "add-account" : "default"}
     />
@@ -173,6 +192,7 @@ function AuthenticatedWorkspace({
   access,
   accounts,
   navigate,
+  onSessionChanged,
   pathname,
   session,
   verificationNotice,
@@ -181,6 +201,7 @@ function AuthenticatedWorkspace({
   access: ReturnType<typeof useOrganizationAccess>;
   accounts: ReturnType<typeof useAccountSessions>;
   navigate: (pathname: string) => void;
+  onSessionChanged: () => Promise<unknown>;
   pathname: string;
   session: AuthenticatedSession;
   verificationNotice: string | undefined;
@@ -218,6 +239,7 @@ function AuthenticatedWorkspace({
       canAccessFinance={access.can("finance")}
       contentKey={contentKey}
       onAccountChange={accounts.switchAccount}
+      onAccountSecurity={() => navigate("/account/security")}
       onAddAccount={addAccount}
       onNavigate={navigate}
       onOrganizationCreate={workspace.createOrganization}
@@ -227,7 +249,10 @@ function AuthenticatedWorkspace({
       organizations={workspace.organizations}
       user={session.user}
     >
-      {hasWorkspace || ["/admin", "/inbox", "/invite"].includes(pathname) ? (
+      {hasWorkspace ||
+      ["/account/security", "/admin", "/inbox", "/invite"].includes(
+        pathname,
+      ) ? (
         contentForPath(
           pathname,
           library,
@@ -235,6 +260,8 @@ function AuthenticatedWorkspace({
           workspace,
           addAccount,
           access,
+          Boolean(session.user.twoFactorEnabled),
+          onSessionChanged,
         )
       ) : (
         <NoOrganization />
@@ -353,6 +380,8 @@ function contentForPath(
   workspace: ReturnType<typeof useWorkspaceOrganizations>,
   addAccount: () => void,
   access: ReturnType<typeof useOrganizationAccess>,
+  twoFactorEnabled: boolean,
+  onSecurityChanged: () => Promise<unknown>,
 ) {
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return <Audits onNavigate={navigate} pathname={pathname} />;
@@ -361,6 +390,14 @@ function contentForPath(
   if (pathname === "/businesses") return <Businesses />;
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
+  if (pathname === "/account/security") {
+    return (
+      <AccountSecurity
+        onSecurityChanged={onSecurityChanged}
+        twoFactorEnabled={twoFactorEnabled}
+      />
+    );
+  }
   if (isOrganizationPath(pathname)) {
     return (
       <OrganizationSettings
@@ -401,6 +438,7 @@ function activePageFor(pathname: string) {
   if (pathname === "/businesses") return "businesses" as const;
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
+  if (pathname === "/account/security") return "account" as const;
   if (isOrganizationPath(pathname)) return "organization" as const;
   if (pathname === "/invite") return "organization" as const;
   return "library" as const;

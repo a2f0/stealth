@@ -7,6 +7,7 @@ interface AccountControlProps {
   loadError: string | undefined;
   onAddAccount: () => void;
   onRefreshAccounts: () => Promise<void>;
+  onSecurity: () => void;
   onSignOut: () => Promise<void>;
   onSwitchAccount: (sessionToken: string) => Promise<void>;
   user: { email: string; name: string };
@@ -18,6 +19,7 @@ export function AccountControl({
   loadError,
   onAddAccount,
   onRefreshAccounts,
+  onSecurity,
   onSignOut,
   onSwitchAccount,
   user,
@@ -78,6 +80,10 @@ export function AccountControl({
             busy={busy}
             error={error ?? loadError}
             onAddAccount={onAddAccount}
+            onSecurity={() => {
+              setOpen(false);
+              onSecurity();
+            }}
             onSignOut={() => run(onSignOut, "sign-out")}
             onSwitchAccount={(token) =>
               run(() => onSwitchAccount(token), token)
@@ -96,6 +102,7 @@ function AccountMenu({
   error,
   onAddAccount,
   onSignOut,
+  onSecurity,
   onSwitchAccount,
 }: {
   accounts: AccountSession[];
@@ -104,6 +111,7 @@ function AccountMenu({
   error: string | undefined;
   onAddAccount: () => void;
   onSignOut: () => Promise<void>;
+  onSecurity: () => void;
   onSwitchAccount: (token: string) => Promise<void>;
 }) {
   return (
@@ -142,6 +150,15 @@ function AccountMenu({
         })}
       </div>
       <div className="accountMenuActions">
+        <button
+          className="accountMenuItem"
+          disabled={Boolean(busy)}
+          onClick={onSecurity}
+          role="menuitem"
+          type="button"
+        >
+          <span aria-hidden="true">⌾</span> Account security
+        </button>
         <button
           className="accountMenuItem"
           disabled={Boolean(busy)}
