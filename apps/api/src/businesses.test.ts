@@ -3,36 +3,51 @@ import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
-import { businesses, normalizeBusinessDate, normalizeEin } from "./businesses";
+import {
+  businesses,
+  normalizeBusinessDate,
+  normalizeEin,
+  normalizeState,
+  normalizeZip,
+} from "./businesses";
 import type { Bindings } from "./types";
 
 interface BusinessMutationBody {
+  city?: string | null;
   ein?: string | null;
   incorporationDate?: string | null;
   name: string;
+  state?: string | null;
   streetAddress?: string | null;
+  zip?: string | null;
 }
 
 interface BusinessListResponse {
   businesses: Array<{
+    city: string | null;
     ein: string | null;
     id: string;
     incorporationDate: string | null;
     name: string;
+    state: string | null;
     streetAddress: string | null;
+    zip: string | null;
   }>;
   canManage: boolean;
 }
 
 interface BusinessResponse {
   business: {
+    city: string | null;
     createdAt: string;
     ein: string | null;
     id: string;
     incorporationDate: string | null;
     name: string;
+    state: string | null;
     streetAddress: string | null;
     updatedAt: string;
+    zip: string | null;
   };
 }
 
@@ -55,6 +70,18 @@ describe("business incorporation dates", () => {
   });
 });
 
+describe("business locations", () => {
+  it("normalizes state abbreviations and ZIP codes", () => {
+    expect(normalizeState(" ny ")).toBe("NY");
+    expect(normalizeState("New York")).toBeNull();
+    expect(normalizeState("N1")).toBeNull();
+    expect(normalizeZip(" 10001 ")).toBe("10001");
+    expect(normalizeZip("10001-1234")).toBe("10001-1234");
+    expect(normalizeZip("1000")).toBeNull();
+    expect(normalizeZip("A0001")).toBeNull();
+  });
+});
+
 describe("organization businesses", () => {
   it("creates multiple businesses without EINs", async () => {
     const fixture = await createFixture();
@@ -69,9 +96,12 @@ describe("organization businesses", () => {
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);
     expect(((await first.json()) as BusinessResponse).business).toMatchObject({
+      city: null,
       ein: null,
       incorporationDate: null,
+      state: null,
       streetAddress: null,
+      zip: null,
     });
     expect(((await second.json()) as BusinessResponse).business.ein).toBeNull();
     expect(
@@ -84,17 +114,23 @@ describe("organization businesses", () => {
   it("lets managers create multiple businesses and prevents duplicate EINs", async () => {
     const fixture = await createFixture();
     const first = await create(fixture.ownerApp, fixture.bindings, {
+      city: "  New York  ",
       ein: "12-3456789",
       incorporationDate: "2024-02-29",
       name: "  Acme, Inc.  ",
+      state: "ny",
       streetAddress: "  123 Main Street  ",
+      zip: "10001-1234",
     });
     expect(first.status).toBe(201);
     expect(((await first.json()) as BusinessResponse).business).toMatchObject({
+      city: "New York",
       ein: "123456789",
       incorporationDate: "2024-02-29",
       name: "Acme, Inc.",
+      state: "NY",
       streetAddress: "123 Main Street",
+      zip: "10001-1234",
     });
 
     const second = await create(fixture.ownerApp, fixture.bindings, {
@@ -147,10 +183,13 @@ describe("organization businesses", () => {
   it("lets managers edit optional business details", async () => {
     const fixture = await createFixture();
     const created = await create(fixture.ownerApp, fixture.bindings, {
+      city: "New York",
       ein: "12-3456789",
       incorporationDate: "2020-01-15",
       name: "Acme",
+      state: "NY",
       streetAddress: "123 Main Street",
+      zip: "10001",
     });
     const business = ((await created.json()) as BusinessResponse).business;
 
@@ -163,12 +202,15 @@ describe("organization businesses", () => {
     expect(renamed.status).toBe(200);
     expect(((await renamed.json()) as BusinessResponse).business).toMatchObject(
       {
+        city: "New York",
         createdAt: business.createdAt,
         ein: "987654321",
         id: business.id,
         incorporationDate: "2020-01-15",
         name: "Acme Holdings",
+        state: "NY",
         streetAddress: "123 Main Street",
+        zip: "10001",
       },
     );
 
@@ -177,10 +219,13 @@ describe("organization businesses", () => {
       fixture.bindings,
       business.id,
       {
+        city: null,
         ein: null,
         incorporationDate: null,
         name: "Acme Holdings",
+        state: null,
         streetAddress: null,
+        zip: null,
       },
     );
     expect(cleared.status).toBe(200);
@@ -190,15 +235,19 @@ describe("organization businesses", () => {
     expect(
       fixture.database
         .query(
-          `SELECT name, ein, incorporation_date, street_address
+          `SELECT name, ein, incorporation_date, street_address, city, state,
+                  zip
            FROM businesses WHERE id = ?`,
         )
         .get(business.id),
     ).toEqual({
+      city: null,
       ein: null,
       incorporation_date: null,
       name: "Acme Holdings",
+      state: null,
       street_address: null,
+      zip: null,
     });
   });
 
@@ -227,6 +276,24 @@ describe("organization businesses", () => {
       streetAddress: "A".repeat(241),
     });
     expect(longAddress.status).toBe(400);
+
+    const longCity = await create(fixture.ownerApp, fixture.bindings, {
+      city: "A".repeat(101),
+      name: "Acme",
+    });
+    expect(longCity.status).toBe(400);
+
+    const invalidState = await create(fixture.ownerApp, fixture.bindings, {
+      name: "Acme",
+      state: "New York",
+    });
+    expect(invalidState.status).toBe(400);
+
+    const invalidZip = await create(fixture.ownerApp, fixture.bindings, {
+      name: "Acme",
+      zip: "1000",
+    });
+    expect(invalidZip.status).toBe(400);
 
     const forbidden = await create(fixture.memberApp, fixture.bindings, {
       ein: "123456789",
@@ -340,19 +407,24 @@ describe("organization businesses", () => {
 
     await applyMigration(database, "0017_make_business_ein_optional.sql");
     await applyMigration(database, "0018_add_business_details.sql");
+    await applyMigration(database, "0019_add_business_city_state_zip.sql");
 
     expect(
       database
         .query(
-          `SELECT name, ein, incorporation_date, street_address
+          `SELECT name, ein, incorporation_date, street_address, city, state,
+                  zip
            FROM businesses WHERE id = ?`,
         )
         .get("legacy-business"),
     ).toEqual({
+      city: null,
       ein: "123456789",
       incorporation_date: null,
       name: "Legacy Business",
+      state: null,
       street_address: null,
+      zip: null,
     });
   });
 });
@@ -374,6 +446,7 @@ async function createFixture() {
   await applyMigration(database, "0015_create_businesses.sql");
   await applyMigration(database, "0017_make_business_ein_optional.sql");
   await applyMigration(database, "0018_add_business_details.sql");
+  await applyMigration(database, "0019_add_business_city_state_zip.sql");
   const bindings = bindingsFor(database);
   return {
     bindings,

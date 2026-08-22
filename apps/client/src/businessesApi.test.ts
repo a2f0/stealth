@@ -23,10 +23,13 @@ describe("businesses API", () => {
 
     try {
       const business = {
+        city: "New York",
         ein: null,
         incorporationDate: "2026-08-22",
         name: "Acme",
+        state: "NY",
         streetAddress: "123 Main Street",
+        zip: "10001",
       };
       await updateBusiness("business/id", business);
       expect(request).toEqual({

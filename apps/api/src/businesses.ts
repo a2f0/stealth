@@ -4,13 +4,16 @@ import { canManageOrganization } from "./organizationMembers";
 import type { Bindings } from "./types";
 
 interface BusinessRow {
+  city: string | null;
   created_at: string;
   ein: string | null;
   id: string;
   incorporation_date: string | null;
   name: string;
+  state: string | null;
   street_address: string | null;
   updated_at: string;
+  zip: string | null;
 }
 
 type BusinessEnv = {
@@ -20,14 +23,14 @@ type BusinessEnv = {
 type BusinessContext = Context<BusinessEnv>;
 
 const invalidBusinessMessage =
-  "Business details are invalid. Name is required, EIN must be 9 digits, incorporation date must be a valid date, and street address must be 240 characters or less.";
+  "Business details are invalid. Use a valid name, EIN, incorporation date, street address, city, two-letter state, and ZIP code.";
 
 export const businesses = new Hono<BusinessEnv>();
 
 businesses.get("/", async (context) => {
   const result = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address,
-            created_at, updated_at
+    `SELECT id, name, ein, incorporation_date, street_address, city, state,
+            zip, created_at, updated_at
      FROM businesses
      WHERE organization_id = ?
      ORDER BY created_at DESC, id DESC`,
@@ -53,8 +56,8 @@ businesses.post("/", async (context) => {
   const result = await context.env.DB.prepare(
     `INSERT OR IGNORE INTO businesses
        (id, organization_id, name, ein, incorporation_date, street_address,
-        created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        city, state, zip, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -63,6 +66,9 @@ businesses.post("/", async (context) => {
       input.ein ?? null,
       input.incorporationDate ?? null,
       input.streetAddress ?? null,
+      input.city ?? null,
+      input.state ?? null,
+      input.zip ?? null,
       context.get("authSession").user.id,
       timestamp,
       timestamp,
@@ -77,13 +83,16 @@ businesses.post("/", async (context) => {
   return context.json(
     {
       business: businessResponse({
+        city: input.city ?? null,
         created_at: timestamp,
         ein: input.ein ?? null,
         id,
         incorporation_date: input.incorporationDate ?? null,
         name: input.name,
+        state: input.state ?? null,
         street_address: input.streetAddress ?? null,
         updated_at: timestamp,
+        zip: input.zip ?? null,
       }),
     },
     201,
@@ -100,8 +109,8 @@ businesses.patch("/:id", async (context) => {
 
   const id = context.req.param("id");
   const existing = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address,
-            created_at, updated_at
+    `SELECT id, name, ein, incorporation_date, street_address, city, state,
+            zip, created_at, updated_at
      FROM businesses
      WHERE id = ? AND organization_id = ?`,
   )
@@ -110,6 +119,7 @@ businesses.patch("/:id", async (context) => {
   if (!existing) return context.json({ error: "Business not found." }, 404);
 
   const timestamp = new Date().toISOString();
+  const city = input.city === undefined ? existing.city : input.city;
   const ein = input.ein === undefined ? existing.ein : input.ein;
   const incorporationDate =
     input.incorporationDate === undefined
@@ -119,10 +129,12 @@ businesses.patch("/:id", async (context) => {
     input.streetAddress === undefined
       ? existing.street_address
       : input.streetAddress;
+  const state = input.state === undefined ? existing.state : input.state;
+  const zip = input.zip === undefined ? existing.zip : input.zip;
   const result = await context.env.DB.prepare(
     `UPDATE OR IGNORE businesses
      SET name = ?, ein = ?, incorporation_date = ?, street_address = ?,
-         updated_at = ?
+         city = ?, state = ?, zip = ?, updated_at = ?
      WHERE id = ? AND organization_id = ?`,
   )
     .bind(
@@ -130,6 +142,9 @@ businesses.patch("/:id", async (context) => {
       ein,
       incorporationDate,
       streetAddress,
+      city,
+      state,
+      zip,
       timestamp,
       id,
       context.get("organizationId"),
@@ -142,8 +157,8 @@ businesses.patch("/:id", async (context) => {
     );
   }
   const updated = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address,
-            created_at, updated_at
+    `SELECT id, name, ein, incorporation_date, street_address, city, state,
+            zip, created_at, updated_at
      FROM businesses
      WHERE id = ? AND organization_id = ?`,
   )
@@ -172,15 +187,21 @@ businesses.delete("/:id", async (context) => {
 function businessInput(body: unknown) {
   if (!body || typeof body !== "object") return null;
   const {
+    city: cityValue,
     ein,
     incorporationDate: incorporationDateValue,
     name,
+    state: stateValue,
     streetAddress: streetAddressValue,
+    zip: zipValue,
   } = body as {
+    city?: unknown;
     ein?: unknown;
     incorporationDate?: unknown;
     name?: unknown;
+    state?: unknown;
     streetAddress?: unknown;
+    zip?: unknown;
   };
   if (typeof name !== "string") return null;
   const normalizedName = name.trim();
@@ -188,6 +209,9 @@ function businessInput(body: unknown) {
     return null;
   }
   const normalizedEin = optionalString(ein, normalizeEin);
+  const city = optionalString(cityValue, (value) =>
+    value.length <= 100 ? value : null,
+  );
   const incorporationDate = optionalString(
     incorporationDateValue,
     normalizeBusinessDate,
@@ -195,18 +219,26 @@ function businessInput(body: unknown) {
   const streetAddress = optionalString(streetAddressValue, (value) =>
     value.length <= 240 ? value : null,
   );
+  const state = optionalString(stateValue, normalizeState);
+  const zip = optionalString(zipValue, normalizeZip);
   if (
+    !city.valid ||
     !normalizedEin.valid ||
     !incorporationDate.valid ||
-    !streetAddress.valid
+    !streetAddress.valid ||
+    !state.valid ||
+    !zip.valid
   ) {
     return null;
   }
   return {
+    city: city.value,
     ein: normalizedEin.value,
     incorporationDate: incorporationDate.value,
     name: normalizedName,
+    state: state.value,
     streetAddress: streetAddress.value,
+    zip: zip.value,
   };
 }
 
@@ -239,15 +271,28 @@ export function normalizeBusinessDate(value: string) {
     : null;
 }
 
+export function normalizeState(value: string) {
+  const normalized = value.trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(normalized) ? normalized : null;
+}
+
+export function normalizeZip(value: string) {
+  const trimmed = value.trim();
+  return /^\d{5}(?:-\d{4})?$/.test(trimmed) ? trimmed : null;
+}
+
 function businessResponse(row: BusinessRow) {
   return {
+    city: row.city,
     createdAt: row.created_at,
     ein: row.ein,
     id: row.id,
     incorporationDate: row.incorporation_date,
     name: row.name,
+    state: row.state,
     streetAddress: row.street_address,
     updatedAt: row.updated_at,
+    zip: row.zip,
   };
 }
 

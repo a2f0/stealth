@@ -1565,13 +1565,21 @@ button:disabled {
   font-size: 12px;
 }
 
+.businessLocationFields {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) 90px minmax(120px, 150px);
+  gap: 12px;
+}
+
 .businessEmptyState {
   max-width: 760px;
 }
 
 @media (max-width: 680px) {
   .businessFields,
-  .businessEditFields {
+  .businessEditFields,
+  .businessLocationFields {
     grid-template-columns: 1fr;
   }
 
