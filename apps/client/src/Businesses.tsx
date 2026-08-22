@@ -1,13 +1,21 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   type Business,
+  type BusinessInput,
   type BusinessListing,
   createBusiness,
   deleteBusiness,
   getBusinesses,
   updateBusiness,
 } from "./businessesApi";
-import { formatEin } from "./businessState";
+import { formatBusinessDate, formatEin } from "./businessState";
+
+interface BusinessFormState {
+  ein: string;
+  incorporationDate: string;
+  name: string;
+  streetAddress: string;
+}
 
 export function Businesses() {
   const [data, setData] = useState<BusinessListing>();
@@ -116,20 +124,15 @@ function BusinessCreateForm({
   onCreated: (business: Business) => void;
   onError: (message: string) => void;
 }) {
-  const [name, setName] = useState("");
-  const [ein, setEin] = useState("");
+  const [form, setForm] = useState<BusinessFormState>(emptyBusinessForm);
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
-      const result = await createBusiness({
-        ein: ein.trim() || null,
-        name: name.trim(),
-      });
-      setName("");
-      setEin("");
+      const result = await createBusiness(businessInput(form));
+      setForm(emptyBusinessForm());
       onCreated(result.business);
     } catch (cause) {
       onError(messageFrom(cause));
@@ -147,37 +150,15 @@ function BusinessCreateForm({
         <h2>Add a business</h2>
         <p>Keep the businesses belonging to this organization in one place.</p>
       </div>
-      <div className="businessFields">
-        <label className="field">
-          <span>Business name</span>
-          <input
-            autoComplete="organization"
-            disabled={busy}
-            maxLength={120}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Acme, Inc."
-            required
-            type="text"
-            value={name}
-          />
-        </label>
-        <label className="field">
-          <span>EIN (optional)</span>
-          <input
-            disabled={busy}
-            inputMode="numeric"
-            maxLength={10}
-            onChange={(event) => setEin(event.target.value)}
-            pattern="[0-9]{2}-?[0-9]{7}"
-            placeholder="12-3456789"
-            type="text"
-            value={ein}
-          />
-        </label>
-      </div>
+      <BusinessFields
+        className="businessFields"
+        disabled={busy}
+        form={form}
+        onChange={setForm}
+      />
       <button
         className="primaryButton settingsSubmit"
-        disabled={busy || !name.trim()}
+        disabled={busy || !form.name.trim()}
         type="submit"
       >
         {busy ? "Adding…" : "Add business"}
@@ -275,6 +256,12 @@ function BusinessRow({
         <span>
           {business.ein ? `EIN ${formatEin(business.ein)}` : "EIN not provided"}
         </span>
+        {business.incorporationDate && (
+          <span>
+            Incorporated {formatBusinessDate(business.incorporationDate)}
+          </span>
+        )}
+        {business.streetAddress && <span>{business.streetAddress}</span>}
       </div>
       {canManage && (
         <div className="businessRowActions">
@@ -311,18 +298,16 @@ function BusinessEditRow({
   onError: (message: string) => void;
   onUpdated: (business: Business) => void;
 }) {
-  const [name, setName] = useState(business.name);
-  const [ein, setEin] = useState(business.ein ?? "");
+  const [form, setForm] = useState<BusinessFormState>(() =>
+    businessForm(business),
+  );
   const [busy, setBusy] = useState(false);
 
   async function save(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
-      const result = await updateBusiness(business.id, {
-        ein: ein.trim() || null,
-        name: name.trim(),
-      });
+      const result = await updateBusiness(business.id, businessInput(form));
       onUpdated(result.business);
     } catch (cause) {
       onError(messageFrom(cause));
@@ -335,33 +320,12 @@ function BusinessEditRow({
       className="businessRow businessEditForm"
       onSubmit={(event) => void save(event)}
     >
-      <div className="businessEditFields">
-        <label className="field">
-          <span>Business name</span>
-          <input
-            autoComplete="organization"
-            disabled={busy}
-            maxLength={120}
-            onChange={(event) => setName(event.target.value)}
-            required
-            type="text"
-            value={name}
-          />
-        </label>
-        <label className="field">
-          <span>EIN (optional)</span>
-          <input
-            disabled={busy}
-            inputMode="numeric"
-            maxLength={10}
-            onChange={(event) => setEin(event.target.value)}
-            pattern="[0-9]{2}-?[0-9]{7}"
-            placeholder="12-3456789"
-            type="text"
-            value={ein}
-          />
-        </label>
-      </div>
+      <BusinessFields
+        className="businessEditFields"
+        disabled={busy}
+        form={form}
+        onChange={setForm}
+      />
       <div className="businessRowActions">
         <button
           className="businessCancelButton tableActionButton"
@@ -373,7 +337,7 @@ function BusinessEditRow({
         </button>
         <button
           className="primaryButton tableActionButton"
-          disabled={busy || !name.trim()}
+          disabled={busy || !form.name.trim()}
           type="submit"
         >
           {busy ? "Saving…" : "Save"}
@@ -383,12 +347,101 @@ function BusinessEditRow({
   );
 }
 
+function BusinessFields({
+  className,
+  disabled,
+  form,
+  onChange,
+}: {
+  className: string;
+  disabled: boolean;
+  form: BusinessFormState;
+  onChange: (form: BusinessFormState) => void;
+}) {
+  const set = (field: keyof BusinessFormState, value: string) => {
+    onChange({ ...form, [field]: value });
+  };
+  return (
+    <div className={className}>
+      <label className="field">
+        <span>Business name</span>
+        <input
+          autoComplete="organization"
+          disabled={disabled}
+          maxLength={120}
+          onChange={(event) => set("name", event.target.value)}
+          placeholder="Acme, Inc."
+          required
+          type="text"
+          value={form.name}
+        />
+      </label>
+      <label className="field">
+        <span>EIN (optional)</span>
+        <input
+          disabled={disabled}
+          inputMode="numeric"
+          maxLength={10}
+          onChange={(event) => set("ein", event.target.value)}
+          pattern="[0-9]{2}-?[0-9]{7}"
+          placeholder="12-3456789"
+          type="text"
+          value={form.ein}
+        />
+      </label>
+      <label className="field">
+        <span>Street address (optional)</span>
+        <input
+          autoComplete="street-address"
+          disabled={disabled}
+          maxLength={240}
+          onChange={(event) => set("streetAddress", event.target.value)}
+          placeholder="123 Main Street"
+          type="text"
+          value={form.streetAddress}
+        />
+      </label>
+      <label className="field">
+        <span>Incorporation date (optional)</span>
+        <input
+          disabled={disabled}
+          onChange={(event) => set("incorporationDate", event.target.value)}
+          type="date"
+          value={form.incorporationDate}
+        />
+      </label>
+    </div>
+  );
+}
+
+function businessForm(business: Business): BusinessFormState {
+  return {
+    ein: business.ein ?? "",
+    incorporationDate: business.incorporationDate ?? "",
+    name: business.name,
+    streetAddress: business.streetAddress ?? "",
+  };
+}
+
+function emptyBusinessForm(): BusinessFormState {
+  return { ein: "", incorporationDate: "", name: "", streetAddress: "" };
+}
+
+function businessInput(form: BusinessFormState): BusinessInput {
+  return {
+    ein: form.ein.trim() || null,
+    incorporationDate: form.incorporationDate || null,
+    name: form.name.trim(),
+    streetAddress: form.streetAddress.trim() || null,
+  };
+}
+
 function BusinessEmptyState({ title }: { title: string }) {
   return (
     <div className="emptyState compactEmptyState businessEmptyState">
       <div className="emptyGlyph">▦</div>
       <h3>{title}</h3>
-      <p>Business names and EINs will appear here.</p>
+      <p>Business details will appear here.</p>
     </div>
   );
 }

@@ -3,11 +3,24 @@ import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
-import { businesses, normalizeEin } from "./businesses";
+import { businesses, normalizeBusinessDate, normalizeEin } from "./businesses";
 import type { Bindings } from "./types";
 
+interface BusinessMutationBody {
+  ein?: string | null;
+  incorporationDate?: string | null;
+  name: string;
+  streetAddress?: string | null;
+}
+
 interface BusinessListResponse {
-  businesses: Array<{ ein: string | null; id: string; name: string }>;
+  businesses: Array<{
+    ein: string | null;
+    id: string;
+    incorporationDate: string | null;
+    name: string;
+    streetAddress: string | null;
+  }>;
   canManage: boolean;
 }
 
@@ -16,7 +29,9 @@ interface BusinessResponse {
     createdAt: string;
     ein: string | null;
     id: string;
+    incorporationDate: string | null;
     name: string;
+    streetAddress: string | null;
     updatedAt: string;
   };
 }
@@ -28,6 +43,15 @@ describe("business EINs", () => {
     expect(normalizeEin("12 3456789")).toBeNull();
     expect(normalizeEin("12345678")).toBeNull();
     expect(normalizeEin("12-345678a")).toBeNull();
+  });
+});
+
+describe("business incorporation dates", () => {
+  it("normalizes only real ISO calendar dates", () => {
+    expect(normalizeBusinessDate(" 2024-02-29 ")).toBe("2024-02-29");
+    expect(normalizeBusinessDate("2026-02-29")).toBeNull();
+    expect(normalizeBusinessDate("2026-13-01")).toBeNull();
+    expect(normalizeBusinessDate("08/22/2026")).toBeNull();
   });
 });
 
@@ -44,7 +68,11 @@ describe("organization businesses", () => {
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);
-    expect(((await first.json()) as BusinessResponse).business.ein).toBeNull();
+    expect(((await first.json()) as BusinessResponse).business).toMatchObject({
+      ein: null,
+      incorporationDate: null,
+      streetAddress: null,
+    });
     expect(((await second.json()) as BusinessResponse).business.ein).toBeNull();
     expect(
       fixture.database
@@ -57,12 +85,16 @@ describe("organization businesses", () => {
     const fixture = await createFixture();
     const first = await create(fixture.ownerApp, fixture.bindings, {
       ein: "12-3456789",
+      incorporationDate: "2024-02-29",
       name: "  Acme, Inc.  ",
+      streetAddress: "  123 Main Street  ",
     });
     expect(first.status).toBe(201);
     expect(((await first.json()) as BusinessResponse).business).toMatchObject({
       ein: "123456789",
+      incorporationDate: "2024-02-29",
       name: "Acme, Inc.",
+      streetAddress: "123 Main Street",
     });
 
     const second = await create(fixture.ownerApp, fixture.bindings, {
@@ -112,11 +144,13 @@ describe("organization businesses", () => {
     });
   });
 
-  it("lets managers edit business names and optional EINs", async () => {
+  it("lets managers edit optional business details", async () => {
     const fixture = await createFixture();
     const created = await create(fixture.ownerApp, fixture.bindings, {
       ein: "12-3456789",
+      incorporationDate: "2020-01-15",
       name: "Acme",
+      streetAddress: "123 Main Street",
     });
     const business = ((await created.json()) as BusinessResponse).business;
 
@@ -132,7 +166,9 @@ describe("organization businesses", () => {
         createdAt: business.createdAt,
         ein: "987654321",
         id: business.id,
+        incorporationDate: "2020-01-15",
         name: "Acme Holdings",
+        streetAddress: "123 Main Street",
       },
     );
 
@@ -140,7 +176,12 @@ describe("organization businesses", () => {
       fixture.ownerApp,
       fixture.bindings,
       business.id,
-      { ein: null, name: "Acme Holdings" },
+      {
+        ein: null,
+        incorporationDate: null,
+        name: "Acme Holdings",
+        streetAddress: null,
+      },
     );
     expect(cleared.status).toBe(200);
     expect(
@@ -148,9 +189,17 @@ describe("organization businesses", () => {
     ).toBeNull();
     expect(
       fixture.database
-        .query("SELECT name, ein FROM businesses WHERE id = ?")
+        .query(
+          `SELECT name, ein, incorporation_date, street_address
+           FROM businesses WHERE id = ?`,
+        )
         .get(business.id),
-    ).toEqual({ ein: null, name: "Acme Holdings" });
+    ).toEqual({
+      ein: null,
+      incorporation_date: null,
+      name: "Acme Holdings",
+      street_address: null,
+    });
   });
 
   it("validates input and limits mutations to organization managers", async () => {
@@ -166,6 +215,18 @@ describe("organization businesses", () => {
       name: "A".repeat(121),
     });
     expect(longName.status).toBe(400);
+
+    const invalidDate = await create(fixture.ownerApp, fixture.bindings, {
+      incorporationDate: "2026-02-29",
+      name: "Acme",
+    });
+    expect(invalidDate.status).toBe(400);
+
+    const longAddress = await create(fixture.ownerApp, fixture.bindings, {
+      name: "Acme",
+      streetAddress: "A".repeat(241),
+    });
+    expect(longAddress.status).toBe(400);
 
     const forbidden = await create(fixture.memberApp, fixture.bindings, {
       ein: "123456789",
@@ -254,7 +315,7 @@ describe("organization businesses", () => {
     ).toEqual({ count: 0 });
   });
 
-  it("preserves existing businesses when making EIN optional", async () => {
+  it("preserves existing businesses through business schema extensions", async () => {
     const database = new Database(":memory:");
     database.exec("PRAGMA foreign_keys = ON");
     await applyMigration(database, "0003_create_auth.sql");
@@ -278,12 +339,21 @@ describe("organization businesses", () => {
       );
 
     await applyMigration(database, "0017_make_business_ein_optional.sql");
+    await applyMigration(database, "0018_add_business_details.sql");
 
     expect(
       database
-        .query("SELECT name, ein FROM businesses WHERE id = ?")
+        .query(
+          `SELECT name, ein, incorporation_date, street_address
+           FROM businesses WHERE id = ?`,
+        )
         .get("legacy-business"),
-    ).toEqual({ ein: "123456789", name: "Legacy Business" });
+    ).toEqual({
+      ein: "123456789",
+      incorporation_date: null,
+      name: "Legacy Business",
+      street_address: null,
+    });
   });
 });
 
@@ -303,6 +373,7 @@ async function createFixture() {
     .run("member-extra", "org_owner", "member", "member", timestamp);
   await applyMigration(database, "0015_create_businesses.sql");
   await applyMigration(database, "0017_make_business_ein_optional.sql");
+  await applyMigration(database, "0018_add_business_details.sql");
   const bindings = bindingsFor(database);
   return {
     bindings,
@@ -350,7 +421,7 @@ function testApp(organizationId: string, userId: string, role: string) {
 function create(
   app: ReturnType<typeof testApp>,
   bindings: Bindings,
-  body: { ein?: string | null; name: string },
+  body: BusinessMutationBody,
 ) {
   return app.request(
     "/",
@@ -367,7 +438,7 @@ function update(
   app: ReturnType<typeof testApp>,
   bindings: Bindings,
   id: string,
-  body: { ein?: string | null; name: string },
+  body: BusinessMutationBody,
 ) {
   return app.request(
     `/${id}`,

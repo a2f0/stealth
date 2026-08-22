@@ -4,8 +4,17 @@ export interface Business {
   createdAt: string;
   ein: string | null;
   id: string;
+  incorporationDate: string | null;
   name: string;
+  streetAddress: string | null;
   updatedAt: string;
+}
+
+export interface BusinessInput {
+  ein?: string | null;
+  incorporationDate?: string | null;
+  name: string;
+  streetAddress?: string | null;
 }
 
 export interface BusinessListing {
@@ -17,17 +26,14 @@ export function getBusinesses() {
   return request<BusinessListing>("");
 }
 
-export function createBusiness(input: { ein?: string | null; name: string }) {
+export function createBusiness(input: BusinessInput) {
   return request<{ business: Business }>("", {
     body: JSON.stringify(input),
     method: "POST",
   });
 }
 
-export function updateBusiness(
-  id: string,
-  input: { ein?: string | null; name: string },
-) {
+export function updateBusiness(id: string, input: BusinessInput) {
   return request<{ business: Business }>(`/${encodeURIComponent(id)}`, {
     body: JSON.stringify(input),
     method: "PATCH",

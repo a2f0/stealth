@@ -7,7 +7,9 @@ interface BusinessRow {
   created_at: string;
   ein: string | null;
   id: string;
+  incorporation_date: string | null;
   name: string;
+  street_address: string | null;
   updated_at: string;
 }
 
@@ -17,11 +19,15 @@ type BusinessEnv = {
 };
 type BusinessContext = Context<BusinessEnv>;
 
+const invalidBusinessMessage =
+  "Business details are invalid. Name is required, EIN must be 9 digits, incorporation date must be a valid date, and street address must be 240 characters or less.";
+
 export const businesses = new Hono<BusinessEnv>();
 
 businesses.get("/", async (context) => {
   const result = await context.env.DB.prepare(
-    `SELECT id, name, ein, created_at, updated_at
+    `SELECT id, name, ein, incorporation_date, street_address,
+            created_at, updated_at
      FROM businesses
      WHERE organization_id = ?
      ORDER BY created_at DESC, id DESC`,
@@ -39,27 +45,24 @@ businesses.post("/", async (context) => {
   const body: unknown = await context.req.json().catch(() => null);
   const input = businessInput(body);
   if (!input) {
-    return context.json(
-      {
-        error:
-          "A business name is required, and EIN must be 9 digits when provided.",
-      },
-      400,
-    );
+    return context.json({ error: invalidBusinessMessage }, 400);
   }
 
   const id = crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const result = await context.env.DB.prepare(
     `INSERT OR IGNORE INTO businesses
-       (id, organization_id, name, ein, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, organization_id, name, ein, incorporation_date, street_address,
+        created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       context.get("organizationId"),
       input.name,
-      input.ein,
+      input.ein ?? null,
+      input.incorporationDate ?? null,
+      input.streetAddress ?? null,
       context.get("authSession").user.id,
       timestamp,
       timestamp,
@@ -75,9 +78,11 @@ businesses.post("/", async (context) => {
     {
       business: businessResponse({
         created_at: timestamp,
-        ein: input.ein,
+        ein: input.ein ?? null,
         id,
+        incorporation_date: input.incorporationDate ?? null,
         name: input.name,
+        street_address: input.streetAddress ?? null,
         updated_at: timestamp,
       }),
     },
@@ -90,37 +95,55 @@ businesses.patch("/:id", async (context) => {
   const body: unknown = await context.req.json().catch(() => null);
   const input = businessInput(body);
   if (!input) {
-    return context.json(
-      {
-        error:
-          "A business name is required, and EIN must be 9 digits when provided.",
-      },
-      400,
-    );
+    return context.json({ error: invalidBusinessMessage }, 400);
   }
 
   const id = context.req.param("id");
-  const timestamp = new Date().toISOString();
-  const result = await context.env.DB.prepare(
-    `UPDATE OR IGNORE businesses
-     SET name = ?, ein = ?, updated_at = ?
+  const existing = await context.env.DB.prepare(
+    `SELECT id, name, ein, incorporation_date, street_address,
+            created_at, updated_at
+     FROM businesses
      WHERE id = ? AND organization_id = ?`,
   )
-    .bind(input.name, input.ein, timestamp, id, context.get("organizationId"))
+    .bind(id, context.get("organizationId"))
+    .first<BusinessRow>();
+  if (!existing) return context.json({ error: "Business not found." }, 404);
+
+  const timestamp = new Date().toISOString();
+  const ein = input.ein === undefined ? existing.ein : input.ein;
+  const incorporationDate =
+    input.incorporationDate === undefined
+      ? existing.incorporation_date
+      : input.incorporationDate;
+  const streetAddress =
+    input.streetAddress === undefined
+      ? existing.street_address
+      : input.streetAddress;
+  const result = await context.env.DB.prepare(
+    `UPDATE OR IGNORE businesses
+     SET name = ?, ein = ?, incorporation_date = ?, street_address = ?,
+         updated_at = ?
+     WHERE id = ? AND organization_id = ?`,
+  )
+    .bind(
+      input.name,
+      ein,
+      incorporationDate,
+      streetAddress,
+      timestamp,
+      id,
+      context.get("organizationId"),
+    )
     .run();
   if (result.meta.changes !== 1) {
-    const existing = await context.env.DB.prepare(
-      `SELECT id FROM businesses
-       WHERE id = ? AND organization_id = ?`,
-    )
-      .bind(id, context.get("organizationId"))
-      .first<{ id: string }>();
-    return existing
-      ? context.json({ error: "A business with that EIN already exists." }, 409)
-      : context.json({ error: "Business not found." }, 404);
+    return context.json(
+      { error: "A business with that EIN already exists." },
+      409,
+    );
   }
   const updated = await context.env.DB.prepare(
-    `SELECT id, name, ein, created_at, updated_at
+    `SELECT id, name, ein, incorporation_date, street_address,
+            created_at, updated_at
      FROM businesses
      WHERE id = ? AND organization_id = ?`,
   )
@@ -148,21 +171,56 @@ businesses.delete("/:id", async (context) => {
 
 function businessInput(body: unknown) {
   if (!body || typeof body !== "object") return null;
-  const { ein, name } = body as { ein?: unknown; name?: unknown };
+  const {
+    ein,
+    incorporationDate: incorporationDateValue,
+    name,
+    streetAddress: streetAddressValue,
+  } = body as {
+    ein?: unknown;
+    incorporationDate?: unknown;
+    name?: unknown;
+    streetAddress?: unknown;
+  };
   if (typeof name !== "string") return null;
   const normalizedName = name.trim();
   if (!normalizedName || normalizedName.length > 120) {
     return null;
   }
-  let normalizedEin: string | null = null;
-  if (ein !== undefined && ein !== null) {
-    if (typeof ein !== "string") return null;
-    if (ein.trim()) {
-      normalizedEin = normalizeEin(ein);
-      if (!normalizedEin) return null;
-    }
+  const normalizedEin = optionalString(ein, normalizeEin);
+  const incorporationDate = optionalString(
+    incorporationDateValue,
+    normalizeBusinessDate,
+  );
+  const streetAddress = optionalString(streetAddressValue, (value) =>
+    value.length <= 240 ? value : null,
+  );
+  if (
+    !normalizedEin.valid ||
+    !incorporationDate.valid ||
+    !streetAddress.valid
+  ) {
+    return null;
   }
-  return { ein: normalizedEin, name: normalizedName };
+  return {
+    ein: normalizedEin.value,
+    incorporationDate: incorporationDate.value,
+    name: normalizedName,
+    streetAddress: streetAddress.value,
+  };
+}
+
+function optionalString(
+  value: unknown,
+  normalize: (value: string) => string | null,
+): { valid: false } | { valid: true; value: string | null | undefined } {
+  if (value === undefined) return { valid: true, value: undefined };
+  if (value === null) return { valid: true, value: null };
+  if (typeof value !== "string") return { valid: false };
+  const trimmed = value.trim();
+  if (!trimmed) return { valid: true, value: null };
+  const normalized = normalize(trimmed);
+  return normalized ? { valid: true, value: normalized } : { valid: false };
 }
 
 export function normalizeEin(value: string) {
@@ -171,12 +229,24 @@ export function normalizeEin(value: string) {
   return trimmed.replace("-", "");
 }
 
+export function normalizeBusinessDate(value: string) {
+  const trimmed = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return null;
+  const date = new Date(`${trimmed}T00:00:00.000Z`);
+  return !Number.isNaN(date.valueOf()) &&
+    date.toISOString().slice(0, 10) === trimmed
+    ? trimmed
+    : null;
+}
+
 function businessResponse(row: BusinessRow) {
   return {
     createdAt: row.created_at,
     ein: row.ein,
     id: row.id,
+    incorporationDate: row.incorporation_date,
     name: row.name,
+    streetAddress: row.street_address,
     updatedAt: row.updated_at,
   };
 }

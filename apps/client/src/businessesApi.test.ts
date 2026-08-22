@@ -22,9 +22,15 @@ describe("businesses API", () => {
     }) as typeof fetch;
 
     try {
-      await updateBusiness("business/id", { ein: null, name: "Acme" });
+      const business = {
+        ein: null,
+        incorporationDate: "2026-08-22",
+        name: "Acme",
+        streetAddress: "123 Main Street",
+      };
+      await updateBusiness("business/id", business);
       expect(request).toEqual({
-        body: JSON.stringify({ ein: null, name: "Acme" }),
+        body: JSON.stringify(business),
         method: "PATCH",
         url: `${apiUrl}/api/businesses/business%2Fid`,
       });
