@@ -465,7 +465,7 @@ function BusinessFields({
 function businessForm(business: Business): BusinessFormState {
   return {
     city: business.city ?? "",
-    ein: business.ein ?? "",
+    ein: business.ein ? formatEin(business.ein) : "",
     incorporationDate: business.incorporationDate ?? "",
     name: business.name,
     state: business.state ?? "",
