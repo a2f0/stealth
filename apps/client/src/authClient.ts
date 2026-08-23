@@ -1,5 +1,6 @@
 import {
   adminClient,
+  inferAdditionalFields,
   multiSessionClient,
   organizationClient,
   twoFactorClient,
@@ -10,6 +11,15 @@ import { apiUrl } from "./config";
 export const authClient = createAuthClient({
   baseURL: apiUrl,
   plugins: [
+    inferAdditionalFields({
+      user: {
+        termsAccepted: {
+          required: false,
+          returned: false,
+          type: "boolean",
+        },
+      },
+    }),
     adminClient(),
     multiSessionClient(),
     twoFactorClient(),

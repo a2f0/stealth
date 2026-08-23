@@ -197,6 +197,7 @@ h1 {
 }
 
 .authCheckbox,
+.authAgreement,
 .securityAcknowledgement {
   display: flex;
   align-items: flex-start;
@@ -208,9 +209,20 @@ h1 {
 }
 
 .authCheckbox input,
+.authAgreement input,
 .securityAcknowledgement input {
   margin: 2px 0 0;
   accent-color: #181916;
+}
+
+.authAgreement a {
+  color: inherit;
+  font-weight: 700;
+  text-underline-offset: 3px;
+}
+
+.authAgreement a:hover {
+  color: #181916;
 }
 
 .field {

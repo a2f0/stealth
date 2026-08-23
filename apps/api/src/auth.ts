@@ -1,4 +1,5 @@
 import {
+  APIError,
   betterAuth,
   type GenericEndpointContext,
   type Session,
@@ -13,6 +14,35 @@ import {
 import type { Bindings } from "./types";
 
 type WaitUntil = (promise: Promise<unknown>) => void;
+type AuthUserRecord = User &
+  Record<string, unknown> & { termsAccepted?: unknown };
+
+const termsVersion = "2026-08-23";
+const userAdditionalFields = {
+  defaultOrganizationId: {
+    input: false,
+    references: { field: "id", model: "organization" },
+    required: false,
+    type: "string",
+  },
+  termsAccepted: {
+    required: false,
+    returned: false,
+    type: "boolean",
+  },
+  termsAcceptedAt: {
+    input: false,
+    required: false,
+    returned: false,
+    type: "date",
+  },
+  termsVersion: {
+    input: false,
+    required: false,
+    returned: false,
+    type: "string",
+  },
+} as const;
 
 export function createAuth(env: Bindings, waitUntil: WaitUntil) {
   return betterAuth({
@@ -95,14 +125,7 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: [env.CORS_ORIGIN],
     user: {
-      additionalFields: {
-        defaultOrganizationId: {
-          input: false,
-          references: { field: "id", model: "organization" },
-          required: false,
-          type: "string",
-        },
-      },
+      additionalFields: userAdditionalFields,
     },
   });
 }
@@ -112,11 +135,39 @@ function authDatabaseHooks(env: Bindings) {
     session: { create: { before: activateDefaultOrganization } },
     user: {
       create: {
+        before: recordTermsAcceptance,
         after: (user: User, context: GenericEndpointContext | null) =>
           provisionDefaultOrganization(user, context, env.DB),
       },
+      update: { before: preventTermsAcceptanceChange },
     },
   };
+}
+
+async function recordTermsAcceptance(
+  user: AuthUserRecord,
+  context: GenericEndpointContext | null,
+) {
+  if (context?.path !== "/sign-up/email") return;
+  if (user.termsAccepted !== true) {
+    throw new APIError("BAD_REQUEST", {
+      message: "You must agree to the Terms of Service to create an account.",
+    });
+  }
+  return {
+    data: {
+      termsAccepted: true,
+      termsAcceptedAt: new Date(),
+      termsVersion,
+    },
+  };
+}
+
+async function preventTermsAcceptanceChange(user: Partial<AuthUserRecord>) {
+  if (!Object.hasOwn(user, "termsAccepted")) return;
+  throw new APIError("BAD_REQUEST", {
+    message: "Terms acceptance cannot be changed after account creation.",
+  });
 }
 
 function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {

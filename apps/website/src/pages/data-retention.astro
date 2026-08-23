@@ -1,0 +1,135 @@
+---
+import LegalLayout from "../layouts/LegalLayout.astro";
+---
+
+<LegalLayout
+  description="How Tearleads retains and deletes account, workspace, inbox, and connected financial information."
+  eyebrow="Retention / 03"
+  title="Data Retention Policy"
+  updated="August 23, 2026"
+>
+  <section class="legalPromise" aria-label="Our retention approach">
+    <p class="kicker"><span></span> Our approach</p>
+    <h2>Keep information only while there is a reason to keep it.</h2>
+    <p>
+      We use defined deletion controls and windows so customer information does
+      not remain in the Service without an operational, security, or legal need.
+    </p>
+  </section>
+
+  <section>
+    <h2>1. Scope</h2>
+    <p>
+      This Data Retention Policy explains how Tearleads, LLC (“Tearleads,” “we,”
+      “us,” or “our”) retains and deletes information in the Tearleads websites,
+      applications, and related services (the “Service”). It should be read with
+      our <a href="/privacy">Privacy Policy</a> and
+      {" "}<a href="/terms">Terms of Service</a>.
+    </p>
+  </section>
+
+  <section>
+    <h2>2. General retention</h2>
+    <p>
+      We retain account, security, organization, and workspace information while
+      it is needed to provide and secure the Service. Information generally
+      remains available while the relevant account or organization is active,
+      unless an authorized user deletes it using an available Service control.
+    </p>
+    <p>
+      Retention may also continue for a limited period when reasonably necessary
+      to comply with law, resolve disputes, enforce our agreements, prevent fraud
+      or abuse, or protect the Service and its users.
+    </p>
+  </section>
+
+  <section>
+    <h2>3. Organizations and workspace information</h2>
+    <p>
+      Organization information includes files, inbound messages, business
+      records, audits, financial records, membership records, and other content
+      stored in an organization workspace. We retain this information while the
+      organization is active, subject to feature-specific deletion controls.
+    </p>
+    <p>
+      When an organization owner marks an organization for deletion, the
+      organization and its information become inaccessible through the Service
+      immediately. The organization becomes eligible for permanent deletion
+      after 30 days. An authorized Tearleads administrator may restore it before
+      permanent deletion.
+    </p>
+    <p>
+      Permanent organization deletion removes the organization records stored in
+      our active database and the organization objects stored in our active
+      object storage. Deleting an organization does not delete user accounts;
+      users keep their memberships in any other organizations.
+    </p>
+  </section>
+
+  <section>
+    <h2>4. Inbound email</h2>
+    <p>
+      Moving an inbound email to Trash records when it was deleted and who
+      deleted it. The message and its attachments remain recoverable from Trash
+      and become eligible for permanent deletion after 30 days unless an
+      authorized user restores the message first.
+    </p>
+    <p>
+      Permanent deletion removes the email record and its stored raw message and
+      attachment objects from active storage.
+    </p>
+  </section>
+
+  <section>
+    <h2>5. Plaid-connected financial information</h2>
+    <p>
+      Disconnecting a financial institution revokes Tearleads’ ongoing Plaid
+      access and erases the encrypted access credentials used to refresh that
+      connection. Previously imported accounts, transactions, and annotations
+      remain in the organization so authorized users do not unexpectedly lose
+      their records.
+    </p>
+    <p>
+      After disconnecting, an authorized user can use the separate Delete data
+      control in Finance to permanently delete the imported accounts,
+      transactions, annotations, and connection record from active storage. For
+      more information about the financial information we process, see our
+      {" "}<a href="/privacy">Privacy Policy</a>.
+    </p>
+  </section>
+
+  <section>
+    <h2>6. Security records and recovery copies</h2>
+    <p>
+      We may retain limited authentication, request, diagnostic, audit, and
+      security records for as long as reasonably necessary to operate and secure
+      the Service, investigate abuse, and meet legal obligations.
+    </p>
+    <p>
+      Information already included in a backup or disaster-recovery copy may
+      remain until that copy expires or is overwritten. We restrict access to
+      recovery copies and do not restore deleted information to active use except
+      when needed for recovery, security, or legal compliance.
+    </p>
+  </section>
+
+  <section>
+    <h2>7. Exceptions</h2>
+    <p>
+      We may retain information longer when required by law or lawful process,
+      needed to establish or defend legal claims, necessary to investigate fraud
+      or security incidents, or required to protect the rights and safety of
+      users or others. When practical, we limit retained information to what is
+      needed for that purpose.
+    </p>
+  </section>
+
+  <section>
+    <h2>8. Questions and requests</h2>
+    <p>
+      Use the organization, inbox, and Finance controls in the Service where
+      available. For other retention or deletion requests, email
+      {" "}<a href="mailto:privacy@tearleads.com">privacy@tearleads.com</a>.
+    </p>
+  </section>
+</LegalLayout>

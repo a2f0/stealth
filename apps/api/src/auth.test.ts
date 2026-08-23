@@ -10,6 +10,64 @@ const originalPassword = "correct horse battery staple";
 const replacementPassword = "new correct horse battery staple";
 
 describe("password authentication", () => {
+  it("requires and records Terms of Service acceptance at sign-up", async () => {
+    const fixture = await createFixture();
+    const rejected = await post(fixture.auth, "/sign-up/email", {
+      email: "declined@example.com",
+      name: "Declined Person",
+      password: originalPassword,
+      termsAccepted: false,
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({
+      message: "You must agree to the Terms of Service to create an account.",
+    });
+    expect(
+      fixture.database.query("SELECT COUNT(*) AS count FROM user").get(),
+    ).toEqual({ count: 0 });
+
+    const acceptedAfter = Date.now();
+    const accepted = await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    expect(accepted.status).toBe(200);
+    const record = fixture.database
+      .query(
+        `SELECT termsAccepted, termsAcceptedAt, termsVersion
+         FROM user WHERE email = ?`,
+      )
+      .get(email) as {
+      termsAccepted: number;
+      termsAcceptedAt: string;
+      termsVersion: string;
+    };
+    expect(record.termsAccepted).toBe(1);
+    expect(record.termsVersion).toBe("2026-08-23");
+    expect(new Date(record.termsAcceptedAt).getTime()).toBeGreaterThanOrEqual(
+      acceptedAfter,
+    );
+
+    const signIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const changed = await post(
+      fixture.auth,
+      "/update-user",
+      { termsAccepted: false },
+      signIn.headers.get("set-cookie"),
+    );
+    expect(changed.status).toBe(400);
+    expect(
+      fixture.database
+        .query("SELECT termsAccepted FROM user WHERE email = ?")
+        .get(email),
+    ).toEqual({ termsAccepted: 1 });
+  });
+
   it("supports email verification without blocking login", async () => {
     const fixture = await createFixture();
 
@@ -18,6 +76,7 @@ describe("password authentication", () => {
       email,
       name: "Example Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     expect(signUp.status).toBe(200);
     expect(
@@ -166,11 +225,13 @@ describe("password authentication", () => {
       email,
       name: "Example Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     await post(fixture.auth, "/sign-up/email", {
       email: secondEmail,
       name: "Second Person",
       password: originalPassword,
+      termsAccepted: true,
     });
 
     const cookies = new CookieJar();
@@ -243,6 +304,7 @@ describe("password authentication", () => {
       email,
       name: "Example Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     const enrollmentCookies = new CookieJar();
     enrollmentCookies.absorb(
@@ -389,6 +451,7 @@ describe("password authentication", () => {
       email,
       name: "Example Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     expect(signUp.status).toBe(200);
 
@@ -430,6 +493,7 @@ describe("password authentication", () => {
       email,
       name: "Example Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     const organization = fixture.database
       .query("SELECT id FROM organization")
@@ -438,6 +502,7 @@ describe("password authentication", () => {
       email: "other@example.com",
       name: "Other Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     const signIn = await post(fixture.auth, "/sign-in/email", {
       email: "other@example.com",
@@ -468,6 +533,7 @@ describe("password authentication", () => {
       email,
       name: "Example Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     const ownerSignIn = await post(fixture.auth, "/sign-in/email", {
       email,
@@ -535,6 +601,7 @@ describe("password authentication", () => {
       email: invitedEmail,
       name: "Invited Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     expect(inviteeSignUp.status).toBe(200);
     const inviteeSignIn = await post(fixture.auth, "/sign-in/email", {
@@ -722,6 +789,7 @@ describe("password authentication", () => {
       email,
       name: "Example Person",
       password: originalPassword,
+      termsAccepted: true,
     });
     expect(signUp.status).toBe(200);
     const signIn = await post(fixture.auth, "/sign-in/email", {
@@ -838,6 +906,7 @@ async function createFixture() {
   await applyMigration(database, "0008_keep_organization_defaults_valid.sql");
   await applyMigration(database, "0010_create_organization_groups.sql");
   await applyMigration(database, "0020_add_two_factor_authentication.sql");
+  await applyMigration(database, "0021_track_terms_acceptance.sql");
 
   return { auth, database, messages, pending };
 }
