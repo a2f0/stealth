@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { requiresTwoFactor } from "./AuthPage";
+import { passwordSignInInput, requiresTwoFactor } from "./AuthPage";
 
 describe("MFA sign-in response", () => {
   it("continues to the second factor only for an explicit MFA redirect", () => {
@@ -7,5 +7,13 @@ describe("MFA sign-in response", () => {
     expect(requiresTwoFactor({ twoFactorRedirect: false })).toBe(false);
     expect(requiresTwoFactor({ token: "session-token" })).toBe(false);
     expect(requiresTwoFactor(null)).toBe(false);
+  });
+
+  it("defers the session refresh until every authentication factor passes", () => {
+    expect(passwordSignInInput("person@example.com", "password")).toEqual({
+      email: "person@example.com",
+      fetchOptions: { disableSignal: true },
+      password: "password",
+    });
   });
 });

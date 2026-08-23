@@ -4,6 +4,10 @@ import { authClient } from "./authClient";
 type AuthMode = "forgot" | "reset" | "sign-in" | "sign-up";
 export type AuthenticationAction = "sign-in" | "sign-up";
 type AuthVariant = "add-account" | "default";
+// This flow explicitly refreshes the session only after every required factor.
+// Better Auth's automatic password-sign-in refresh would otherwise unmount the
+// pending MFA challenge when the server correctly returns no session yet.
+const deferredSessionRefresh = { disableSignal: true } as const;
 
 interface AuthPageProps {
   initialError?: string | undefined;
@@ -332,10 +336,9 @@ async function performAuthAction(
   }
 
   if (mode === "sign-in") {
-    const result = await authClient.signIn.email({
-      email: input.email,
-      password: input.password,
-    });
+    const result = await authClient.signIn.email(
+      passwordSignInInput(input.email, input.password),
+    );
     throwForAuthError(result.error);
     if (requiresTwoFactor(result.data)) {
       return { twoFactorRequired: true };
@@ -348,14 +351,14 @@ async function performAuthAction(
     const result = await authClient.signUp.email({
       callbackURL: `${window.location.origin}/?verified=true`,
       email: input.email,
+      fetchOptions: deferredSessionRefresh,
       name: input.name,
       password: input.password,
     });
     throwForAuthError(result.error);
-    const signInResult = await authClient.signIn.email({
-      email: input.email,
-      password: input.password,
-    });
+    const signInResult = await authClient.signIn.email(
+      passwordSignInInput(input.email, input.password),
+    );
     throwForAuthError(signInResult.error);
     await input.onAuthenticated("sign-up");
     return {
@@ -688,6 +691,10 @@ export function requiresTwoFactor(data: unknown) {
     "twoFactorRedirect" in data &&
     data.twoFactorRedirect === true
   );
+}
+
+export function passwordSignInInput(email: string, password: string) {
+  return { email, fetchOptions: deferredSessionRefresh, password };
 }
 
 function messageFrom(cause: unknown) {
