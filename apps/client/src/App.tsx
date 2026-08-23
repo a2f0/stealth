@@ -501,7 +501,7 @@ function LoadingScreen() {
   return (
     <div className="loadingScreen" role="status">
       <span className="srOnly">Loading session</span>
-      <span className="brandMark">S</span>
+      <span className="brandMark">T</span>
       <span className="loadingPulse" />
     </div>
   );

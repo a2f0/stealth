@@ -60,17 +60,17 @@ variable "api_hostname" {
 variable "website_worker_name" {
   description = "Deployed name of the website Worker."
   type        = string
-  default     = "stealth-website"
+  default     = "tearleads-website"
 }
 
 variable "client_worker_name" {
   description = "Deployed name of the client Worker."
   type        = string
-  default     = "stealth-client"
+  default     = "tearleads-client"
 }
 
 variable "api_worker_name" {
   description = "Deployed name of the API Worker."
   type        = string
-  default     = "stealth-api"
+  default     = "tearleads-api"
 }

@@ -34,3 +34,5 @@ verify_url() {
 verify_url "API" "https://api.tearleads.com/health"
 verify_url "app" "https://app.tearleads.com"
 verify_url "website" "https://tearleads.com"
+verify_url "privacy policy" "https://tearleads.com/privacy"
+verify_url "terms of service" "https://tearleads.com/terms"

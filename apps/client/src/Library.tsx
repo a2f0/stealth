@@ -182,8 +182,8 @@ function VerificationStatus({
           <div>
             <strong>Verify your email</strong>
             <p>
-              You can use Stealth now, but confirming {email} helps secure your
-              account.
+              You can use Tearleads now, but confirming {email} helps secure
+              your account.
             </p>
             {error && <span className="verificationError">{error}</span>}
           </div>

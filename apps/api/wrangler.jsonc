@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "stealth-api",
+  "name": "tearleads-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-17",
   "compatibility_flags": ["nodejs_compat"],
@@ -18,6 +18,7 @@
   "d1_databases": [
     {
       "binding": "DB",
+      // Cloudflare D1 names are immutable; retain the original resource name.
       "database_name": "stealth-db",
       "database_id": "d2827a94-7088-4648-9b57-5f915da2b909",
       "migrations_dir": "migrations"
@@ -26,6 +27,7 @@
   "r2_buckets": [
     {
       "binding": "STORAGE",
+      // R2 buckets cannot be renamed; retain the existing data-bearing bucket.
       "bucket_name": "stealth-objects"
     }
   ],

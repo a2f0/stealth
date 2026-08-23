@@ -39,9 +39,9 @@
           "level": "error",
           "options": {
             "paths": {
-              "@stealth/api": "Do not import from the API Worker package",
-              "@stealth/client": "Do not import from the client deployment target",
-              "@stealth/website": "Do not import from the website deployment target"
+              "@tearleads/api": "Do not import from the API Worker package",
+              "@tearleads/client": "Do not import from the client deployment target",
+              "@tearleads/website": "Do not import from the website deployment target"
             }
           }
         }

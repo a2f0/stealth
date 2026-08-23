@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "stealth-client",
+  "name": "tearleads-client",
   "compatibility_date": "2026-08-17",
   "assets": {
     "directory": "./dist",

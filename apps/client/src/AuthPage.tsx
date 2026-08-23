@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from "react";
 import { authClient } from "./authClient";
+import { websiteUrl } from "./config";
 
 type AuthMode = "forgot" | "reset" | "sign-in" | "sign-up";
 export type AuthenticationAction = "sign-in" | "sign-up";
@@ -301,6 +302,7 @@ function CredentialAuthPage({
               </button>
             </p>
           )}
+          <AuthLegalLinks />
         </div>
       </main>
     </div>
@@ -512,18 +514,28 @@ function TwoFactorChallenge({
                 : "Back to sign in"}
             </button>
           </p>
+          <AuthLegalLinks />
         </div>
       </main>
     </div>
   );
 }
 
+function AuthLegalLinks() {
+  return (
+    <nav aria-label="Legal" className="authLegal">
+      <a href={`${websiteUrl}/privacy`}>Privacy</a>
+      <a href={`${websiteUrl}/terms`}>Terms</a>
+    </nav>
+  );
+}
+
 function AuthAside() {
   return (
     <aside className="authAside">
-      <a className="brand" href="/" aria-label="Stealth home">
-        <span className="brandMark">S</span>
-        <span>stealth</span>
+      <a className="brand" href="/" aria-label="Tearleads home">
+        <span className="brandMark">T</span>
+        <span>Tearleads</span>
       </a>
       <div className="authAsideCopy">
         <p className="eyebrow">Private by design</p>

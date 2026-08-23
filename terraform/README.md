@@ -3,9 +3,9 @@
 This stack provisions the Cloudflare resources used by the API and records the
 desired Worker custom domains:
 
-- D1 database: `stealth-db`
-- R2 bucket: `stealth-objects`
-- Inbound email: `upload+<organization-id>@inbox.tearleads.com` → `stealth-api`
+- D1 database: `stealth-db` (immutable legacy resource name)
+- R2 bucket: `stealth-objects` (immutable legacy resource name)
+- Inbound email: `upload+<organization-id>@inbox.tearleads.com` → `tearleads-api`
 - Website: `tearleads.com`
 - Client: `app.tearleads.com`
 - API: `api.tearleads.com`

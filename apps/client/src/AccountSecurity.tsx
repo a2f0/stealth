@@ -604,7 +604,7 @@ function formatSecret(secret: string) {
 }
 
 function recoveryCodesText(codes: string[]) {
-  return ["Stealth MFA recovery codes", "", ...codes].join("\n");
+  return ["Tearleads MFA recovery codes", "", ...codes].join("\n");
 }
 
 function downloadRecoveryCodes(codes: string[]) {
@@ -612,7 +612,7 @@ function downloadRecoveryCodes(codes: string[]) {
     new Blob([recoveryCodesText(codes)], { type: "text/plain" }),
   );
   const link = document.createElement("a");
-  link.download = "stealth-mfa-recovery-codes.txt";
+  link.download = "tearleads-mfa-recovery-codes.txt";
   link.href = url;
   link.click();
   URL.revokeObjectURL(url);

@@ -1,4 +1,4 @@
-# Stealth
+# Tearleads
 
 A small Bun monorepo for a Cloudflare-native product:
 

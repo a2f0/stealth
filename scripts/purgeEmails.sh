@@ -34,15 +34,15 @@ if [[ "$TARGET" == "--remote" ]]; then
 fi
 
 wrangler_storage_args=("$TARGET")
-if [[ "$TARGET" == "--local" && -n "${STEALTH_WRANGLER_PERSIST_TO:-}" ]]; then
-  wrangler_storage_args+=(--persist-to "$STEALTH_WRANGLER_PERSIST_TO")
+if [[ "$TARGET" == "--local" && -n "${TEARLEADS_WRANGLER_PERSIST_TO:-}" ]]; then
+  wrangler_storage_args+=(--persist-to "$TEARLEADS_WRANGLER_PERSIST_TO")
 fi
 
 cd "$REPO_ROOT/apps/api"
 
 eligible_sql='SELECT id, organization_id, deleted_at FROM inbound_emails WHERE deleted_at IS NOT NULL AND datetime(deleted_at) <= datetime('"'"'now'"'"', '"'"'-30 days'"'"') ORDER BY deleted_at ASC, id ASC;'
 eligible_json="$(
-  bunx wrangler d1 execute stealth-db "${wrangler_storage_args[@]}" --json \
+  bunx wrangler d1 execute DB "${wrangler_storage_args[@]}" --json \
     --command "$eligible_sql"
 )"
 eligible_rows="$(
@@ -68,7 +68,7 @@ while IFS=$'\t' read -r email_id organization_id deleted_at; do
   escaped_id="${email_id//\'/\'\'}"
   object_sql="SELECT raw_object_key AS object_key FROM inbound_emails WHERE id = '$escaped_id' AND deleted_at IS NOT NULL AND datetime(deleted_at) <= datetime('now', '-30 days') UNION SELECT attachment.object_key FROM inbound_email_attachments AS attachment JOIN inbound_emails AS email ON email.id = attachment.email_id WHERE email.id = '$escaped_id' AND email.deleted_at IS NOT NULL AND datetime(email.deleted_at) <= datetime('now', '-30 days') ORDER BY object_key ASC;"
   object_json="$(
-    bunx wrangler d1 execute stealth-db "${wrangler_storage_args[@]}" --json \
+    bunx wrangler d1 execute DB "${wrangler_storage_args[@]}" --json \
       --command "$object_sql"
   )"
   object_keys="$(
@@ -95,7 +95,7 @@ while IFS=$'\t' read -r email_id organization_id deleted_at; do
 
   delete_sql="DELETE FROM inbound_emails WHERE id = '$escaped_id' AND deleted_at IS NOT NULL AND datetime(deleted_at) <= datetime('now', '-30 days') RETURNING id, deleted_at;"
   deleted_json="$(
-    bunx wrangler d1 execute stealth-db "${wrangler_storage_args[@]}" --json \
+    bunx wrangler d1 execute DB "${wrangler_storage_args[@]}" --json \
       --command "$delete_sql"
   )"
   if ! jq -e --arg id "$email_id" \

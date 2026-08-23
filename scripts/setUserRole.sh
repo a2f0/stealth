@@ -35,7 +35,7 @@ sql="UPDATE \"user\" SET \"role\" = '$ROLE' WHERE \"email\" = '$escaped_email' R
 
 cd "$REPO_ROOT/apps/api"
 result="$(
-  bunx wrangler d1 execute stealth-db "$TARGET" --json --command "$sql"
+  bunx wrangler d1 execute DB "$TARGET" --json --command "$sql"
 )"
 
 if ! jq -e --arg email "$EMAIL" --arg role "$ROLE" \

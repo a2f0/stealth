@@ -1,12 +1,12 @@
 {
-  "name": "@stealth/api",
+  "name": "@tearleads/api",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
-    "db:migrate:local": "wrangler d1 migrations apply stealth-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply stealth-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "deploy": "wrangler deploy",
     "dev": "bash ../../scripts/devApi.sh",
     "test": "bun test"

@@ -23,7 +23,7 @@ resource "cloudflare_r2_bucket" "objects" {
 
 resource "cloudflare_email_routing_rule" "inbound" {
   zone_id = data.cloudflare_zone.main.id
-  name    = "Store inbound email in stealth-api"
+  name    = "Store inbound email in tearleads-api"
   enabled = true
 
   matchers = [{

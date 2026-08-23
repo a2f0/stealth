@@ -75,13 +75,13 @@ export function WorkspaceShell({
     <div className="shell" style={shellStyle}>
       <aside className="sidebar">
         <a
-          aria-label="Stealth home"
+          aria-label="Tearleads home"
           className="brand"
           href="/"
           onClick={(event) => handleNavigation(event, "/", onNavigate)}
         >
-          <span className="brandMark">S</span>
-          <span>stealth</span>
+          <span className="brandMark">T</span>
+          <span>Tearleads</span>
         </a>
         <OrganizationSwitcher
           activeOrganizationId={activeOrganizationId}
