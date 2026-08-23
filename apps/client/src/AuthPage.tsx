@@ -106,6 +106,7 @@ function useAuthPageState({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(initialError);
   const [notice, setNotice] = useState<string | undefined>(initialNotice);
@@ -118,6 +119,7 @@ function useAuthPageState({
     setNotice(undefined);
     setPassword("");
     setConfirmation("");
+    setTermsAccepted(false);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -135,6 +137,7 @@ function useAuthPageState({
         onAuthenticated,
         password,
         resetToken,
+        termsAccepted,
       });
       if (result.twoFactorRequired) {
         setTwoFactorRequired(true);
@@ -178,9 +181,11 @@ function useAuthPageState({
     onName: setName,
     onPassword: setPassword,
     password,
+    onTermsAccepted: setTermsAccepted,
     setPassword,
     setTwoFactorRequired,
     submit,
+    termsAccepted,
     twoFactorRequired,
   };
 }
@@ -202,6 +207,8 @@ function CredentialAuthPage({
   onPassword,
   onSubmit,
   password,
+  termsAccepted,
+  onTermsAccepted,
   variant,
 }: {
   busy: boolean;
@@ -220,6 +227,8 @@ function CredentialAuthPage({
   onPassword: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   password: string;
+  termsAccepted: boolean;
+  onTermsAccepted: (accepted: boolean) => void;
   variant: AuthVariant;
 }) {
   return (
@@ -249,6 +258,37 @@ function CredentialAuthPage({
               onPassword={onPassword}
               password={password}
             />
+
+            {mode === "sign-up" && (
+              <label className="authAgreement">
+                <input
+                  checked={termsAccepted}
+                  name="terms-accepted"
+                  onChange={(event) => onTermsAccepted(event.target.checked)}
+                  required
+                  type="checkbox"
+                />
+                <span>
+                  I agree to the{" "}
+                  <a
+                    href={`${websiteUrl}/terms`}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Terms of Service
+                  </a>{" "}
+                  and acknowledge the{" "}
+                  <a
+                    href={`${websiteUrl}/privacy`}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Privacy Policy
+                  </a>
+                  .
+                </span>
+              </label>
+            )}
 
             {mode === "sign-in" && (
               <button
@@ -317,6 +357,7 @@ interface AuthActionInput {
   onAuthenticated: (action: AuthenticationAction) => Promise<void>;
   password: string;
   resetToken: string | null;
+  termsAccepted: boolean;
 }
 
 interface AuthActionResult {
@@ -330,6 +371,11 @@ async function performAuthAction(
   input: AuthActionInput,
 ): Promise<AuthActionResult> {
   const { mode } = input;
+  if (mode === "sign-up" && !input.termsAccepted) {
+    throw new Error(
+      "You must agree to the Terms of Service to create an account.",
+    );
+  }
   if (
     (mode === "reset" || mode === "sign-up") &&
     input.password !== input.confirmation
@@ -356,6 +402,7 @@ async function performAuthAction(
       fetchOptions: deferredSessionRefresh,
       name: input.name,
       password: input.password,
+      termsAccepted: true,
     });
     throwForAuthError(result.error);
     const signInResult = await authClient.signIn.email(
@@ -526,6 +573,7 @@ function AuthLegalLinks() {
     <nav aria-label="Legal" className="authLegal">
       <a href={`${websiteUrl}/privacy`}>Privacy</a>
       <a href={`${websiteUrl}/terms`}>Terms</a>
+      <a href={`${websiteUrl}/data-retention`}>Retention</a>
     </nav>
   );
 }
