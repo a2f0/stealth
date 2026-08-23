@@ -81,7 +81,12 @@ export function useAccountSessions(
     const result = await authClient.multiSession.revoke({
       sessionToken,
     });
-    throwForAccountError(result.error, "Could not sign out.");
+    if (isInvalidMultiSessionToken(result.error)) {
+      const fallback = await authClient.signOut();
+      throwForAccountError(fallback.error, "Could not sign out.");
+    } else {
+      throwForAccountError(result.error, "Could not sign out.");
+    }
     await refetchSession();
   }
 
@@ -92,6 +97,15 @@ export function useAccountSessions(
     signOutActiveAccount,
     switchAccount,
   };
+}
+
+export function isInvalidMultiSessionToken(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "INVALID_SESSION_TOKEN"
+  );
 }
 
 function throwForAccountError(

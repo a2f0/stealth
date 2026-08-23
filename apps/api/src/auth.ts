@@ -82,10 +82,10 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
     },
     plugins: [
       admin({ adminRoles: ["admin"], defaultRole: "user" }),
-      multiSession({ maximumSessions: 5 }),
       twoFactor({
         issuer: "Stealth",
       }),
+      multiSession({ maximumSessions: 5 }),
       configuredOrganizationPlugin(env, waitUntil),
     ],
     rateLimit: {

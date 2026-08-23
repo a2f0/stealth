@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { type AccountSession, accountSessionsFor } from "./accountSessions";
+import {
+  type AccountSession,
+  accountSessionsFor,
+  isInvalidMultiSessionToken,
+} from "./accountSessions";
 
 describe("account sessions", () => {
   it("keeps the active account first and one session per user", () => {
@@ -15,6 +19,14 @@ describe("account sessions", () => {
       "one",
       "three",
     ]);
+  });
+
+  it("recognizes a missing multi-session cookie for fallback sign-out", () => {
+    expect(isInvalidMultiSessionToken({ code: "INVALID_SESSION_TOKEN" })).toBe(
+      true,
+    );
+    expect(isInvalidMultiSessionToken({ code: "UNAUTHORIZED" })).toBe(false);
+    expect(isInvalidMultiSessionToken(null)).toBe(false);
   });
 });
 
