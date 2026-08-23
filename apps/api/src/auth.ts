@@ -4,7 +4,12 @@ import {
   type Session,
   type User,
 } from "better-auth";
-import { admin, multiSession, organization } from "better-auth/plugins";
+import {
+  admin,
+  multiSession,
+  organization,
+  twoFactor,
+} from "better-auth/plugins";
 import type { Bindings } from "./types";
 
 type WaitUntil = (promise: Promise<unknown>) => void;
@@ -78,6 +83,9 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
     plugins: [
       admin({ adminRoles: ["admin"], defaultRole: "user" }),
       multiSession({ maximumSessions: 5 }),
+      twoFactor({
+        issuer: "Stealth",
+      }),
       configuredOrganizationPlugin(env, waitUntil),
     ],
     rateLimit: {
@@ -314,5 +322,6 @@ export type AuthSession = Omit<BaseAuthSession, "user"> & {
   user: BaseAuthSession["user"] & {
     role: string;
     defaultOrganizationId?: string | null | undefined;
+    twoFactorEnabled: boolean;
   };
 };

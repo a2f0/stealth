@@ -15,6 +15,7 @@ export interface WorkspaceUser {
   emailVerified: boolean;
   name: string;
   role?: string | null | undefined;
+  twoFactorEnabled?: boolean | null | undefined;
 }
 
 interface WorkspaceShellProps {
@@ -22,6 +23,7 @@ interface WorkspaceShellProps {
   accounts: AccountSession[];
   activePage:
     | "admin"
+    | "account"
     | "audits"
     | "businesses"
     | "finance"
@@ -34,6 +36,7 @@ interface WorkspaceShellProps {
   children: ReactNode;
   contentKey: string | undefined;
   onAccountChange: (sessionToken: string) => Promise<void>;
+  onAccountSecurity: () => void;
   onAddAccount: () => void;
   onNavigate: (pathname: string) => void;
   onOrganizationChange: (organizationId: string) => Promise<void>;
@@ -54,6 +57,7 @@ export function WorkspaceShell({
   children,
   contentKey,
   onAccountChange,
+  onAccountSecurity,
   onAddAccount,
   onNavigate,
   onOrganizationChange,
@@ -160,6 +164,7 @@ export function WorkspaceShell({
           activeSessionToken={activeSessionToken}
           loadError={accountLoadError}
           onAddAccount={onAddAccount}
+          onSecurity={onAccountSecurity}
           onRefreshAccounts={onRefreshAccounts}
           onSignOut={onSignOut}
           onSwitchAccount={onAccountChange}

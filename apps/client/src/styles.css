@@ -196,6 +196,23 @@ h1 {
   gap: 17px;
 }
 
+.authCheckbox,
+.securityAcknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: #5d5d56;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.authCheckbox input,
+.securityAcknowledgement input {
+  margin: 2px 0 0;
+  accent-color: #181916;
+}
+
 .field {
   display: grid;
   gap: 8px;
@@ -1445,6 +1462,134 @@ button:disabled {
 
 .organizationSettingsGrid .settingsCard {
   max-width: none;
+}
+
+.accountSecurityContent {
+  max-width: 760px;
+}
+
+.accountSecurityGrid {
+  display: grid;
+  gap: 18px;
+}
+
+.accountSecurityGrid .settingsCard {
+  max-width: 680px;
+}
+
+.securityStatusCard {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.securityStatus {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid #bdd79b;
+  border-radius: 999px;
+  color: #365c16;
+  background: #effbdd;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.securityStatus .statusDot {
+  box-shadow: none;
+}
+
+.totpSetup {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+}
+
+.totpQrCode {
+  display: grid;
+  padding: 10px;
+  border: 1px solid #ddddd5;
+  border-radius: 12px;
+  background: #fff;
+  place-items: center;
+}
+
+.totpQrCode svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.totpManualCode {
+  display: grid;
+  gap: 7px;
+}
+
+.totpManualCode span {
+  color: #77776f;
+  font-size: 10px;
+}
+
+.totpManualCode code,
+.recoveryCodeGrid code {
+  font-family: "DM Mono", monospace;
+}
+
+.totpManualCode code {
+  max-width: 100%;
+  color: #34342f;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.recoveryCodeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid #d8d7cf;
+  border-radius: 10px;
+  background: #f1f0ea;
+}
+
+.recoveryCodeGrid code {
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: #34342f;
+  background: #faf9f5;
+  font-size: 11px;
+  text-align: center;
+}
+
+.securityButtonRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.securityButtonRow small {
+  color: #77776f;
+  font-size: 10px;
+}
+
+.securitySecondaryButton {
+  padding: 11px 17px;
+  border: 1px solid #aaa99f;
+  border-radius: 9px;
+  color: #34342f;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.securitySecondaryButton:hover {
+  border-color: #181916;
+  background: #f1f0ea;
 }
 
 .businessesContent {
@@ -2816,6 +2961,15 @@ button:disabled {
 
   .content {
     padding: 26px 20px 56px;
+  }
+
+  .securityStatusCard,
+  .recoveryCodeGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .securityStatus {
+    justify-self: start;
   }
 
   .deleteButton {
