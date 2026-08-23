@@ -13,7 +13,7 @@ API_BASE="https://api.cloudflare.com/client/v4"
 ZONE_NAME="tearleads.com"
 INBOUND_DOMAIN="inbox.tearleads.com"
 INBOUND_ADDRESS="upload@inbox.tearleads.com"
-WORKER_NAME="stealth-api"
+WORKER_NAME="tearleads-api"
 
 cloudflare_get() {
   curl -fsS "$1" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"

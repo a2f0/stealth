@@ -34,6 +34,7 @@ domains_response="$(
 check_hostname() {
   local hostname="$1"
   local expected_service="$2"
+  local previous_service="${3:-}"
   local current_service
   local dns_response
   local conflicting_records
@@ -44,7 +45,9 @@ check_hostname() {
       <<<"$domains_response"
   )"
 
-  if [[ -n "$current_service" && "$current_service" != "$expected_service" ]]; then
+  if [[ -n "$current_service" &&
+    "$current_service" != "$expected_service" &&
+    "$current_service" != "$previous_service" ]]; then
     echo "ERROR: $hostname is attached to Worker $current_service." >&2
     return 1
   fi
@@ -59,18 +62,22 @@ check_hostname() {
       <<<"$dns_response"
   )"
 
-  if [[ "$conflicting_records" -gt 0 && "$current_service" != "$expected_service" ]]; then
+  if [[ "$conflicting_records" -gt 0 &&
+    "$current_service" != "$expected_service" &&
+    "$current_service" != "$previous_service" ]]; then
     echo "ERROR: $hostname has an existing A, AAAA, or CNAME record." >&2
     return 1
   fi
 
   if [[ "$current_service" == "$expected_service" ]]; then
     echo "PASS: $hostname is already attached to $expected_service."
+  elif [[ -n "$previous_service" && "$current_service" == "$previous_service" ]]; then
+    echo "PASS: $hostname is ready to move from $previous_service to $expected_service."
   else
     echo "PASS: $hostname is available for $expected_service."
   fi
 }
 
-check_hostname "tearleads.com" "stealth-website"
-check_hostname "app.tearleads.com" "stealth-client"
-check_hostname "api.tearleads.com" "stealth-api"
+check_hostname "tearleads.com" "tearleads-website" "stealth-website"
+check_hostname "app.tearleads.com" "tearleads-client" "stealth-client"
+check_hostname "api.tearleads.com" "tearleads-api" "stealth-api"

@@ -1,0 +1,57 @@
+---
+import SiteFooter from "../components/SiteFooter.astro";
+import "../styles/global.css";
+
+interface Props {
+  description: string;
+  eyebrow: string;
+  title: string;
+  updated: string;
+}
+
+const { description, eyebrow, title, updated } = Astro.props;
+const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="theme-color" content="#e9ffcc" />
+    <meta name="description" content={description} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>{title} — Tearleads</title>
+  </head>
+  <body>
+    <header class="legalHeader">
+      <a class="logo" href="/" aria-label="Tearleads home">
+        <span>T</span> Tearleads
+      </a>
+      <nav class="legalNav" aria-label="Legal navigation">
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+      </nav>
+      <a class="headerCta" href={appUrl}>Open app ↗</a>
+    </header>
+
+    <main class="legalPage">
+      <header class="legalHero">
+        <p class="sectionLabel">{eyebrow}</p>
+        <h1>{title}</h1>
+        <p>{description}</p>
+        <small>Effective {updated}</small>
+      </header>
+      <article class="legalDocument">
+        <slot />
+      </article>
+    </main>
+
+    <SiteFooter />
+  </body>
+</html>

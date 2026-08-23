@@ -39,7 +39,7 @@ app.all("/api/auth/*", (context) =>
 );
 
 app.get("/", (context) =>
-  context.json({ name: "stealth-api", documentation: "/api" }),
+  context.json({ name: "tearleads-api", documentation: "/api" }),
 );
 
 app.get("/health", (context) =>

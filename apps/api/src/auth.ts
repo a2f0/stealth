@@ -44,12 +44,12 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
       sendResetPassword: async ({ user, url }) => {
         waitUntil(
           env.EMAIL.send({
-            from: { email: env.AUTH_EMAIL_FROM, name: "Stealth" },
-            subject: "Reset your Stealth password",
+            from: { email: env.AUTH_EMAIL_FROM, name: "Tearleads" },
+            subject: "Reset your Tearleads password",
             text: [
               `Hi ${user.name},`,
               "",
-              "Use this link to reset your Stealth password:",
+              "Use this link to reset your Tearleads password:",
               url,
               "",
               "The link expires in one hour. If you did not request this, you can ignore this email.",
@@ -65,12 +65,12 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
       sendVerificationEmail: async ({ user, url }) => {
         waitUntil(
           env.EMAIL.send({
-            from: { email: env.AUTH_EMAIL_FROM, name: "Stealth" },
-            subject: "Verify your Stealth email",
+            from: { email: env.AUTH_EMAIL_FROM, name: "Tearleads" },
+            subject: "Verify your Tearleads email",
             text: [
               `Hi ${user.name},`,
               "",
-              "Verify your email address for Stealth:",
+              "Verify your email address for Tearleads:",
               url,
               "",
               "The link expires in one hour. You can still sign in before verifying.",
@@ -83,7 +83,7 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
     plugins: [
       admin({ adminRoles: ["admin"], defaultRole: "user" }),
       twoFactor({
-        issuer: "Stealth",
+        issuer: "Tearleads",
       }),
       multiSession({ maximumSessions: 5 }),
       configuredOrganizationPlugin(env, waitUntil),
@@ -160,12 +160,12 @@ function queueInvitationEmail(
   invitationURL.searchParams.set("id", data.id);
   waitUntil(
     env.EMAIL.send({
-      from: { email: env.AUTH_EMAIL_FROM, name: "Stealth" },
+      from: { email: env.AUTH_EMAIL_FROM, name: "Tearleads" },
       subject: `You're invited to ${data.organization.name}`,
       text: [
         "Hi,",
         "",
-        `${data.inviter.user.name} (${data.inviter.user.email}) invited you to join ${data.organization.name} on Stealth with the ${data.role} role.`,
+        `${data.inviter.user.name} (${data.inviter.user.email}) invited you to join ${data.organization.name} on Tearleads with the ${data.role} role.`,
         "",
         "Accept the invitation:",
         invitationURL.toString(),

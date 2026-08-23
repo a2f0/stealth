@@ -1,4 +1,5 @@
 ---
+import SiteFooter from "../components/SiteFooter.astro";
 import "../styles/global.css";
 
 const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
@@ -12,7 +13,7 @@ const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
     <meta name="theme-color" content="#e9ffcc" />
     <meta
       name="description"
-      content="Stealth is a quiet, durable home for the work and files that matter."
+      content="Tearleads is a quiet, durable home for the work and files that matter."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,12 +21,12 @@ const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
       href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <title>Stealth — Keep what matters</title>
+    <title>Tearleads — Keep what matters</title>
   </head>
   <body>
     <header class="siteHeader">
-      <a class="logo" href="/" aria-label="Stealth home">
-        <span>S</span> stealth
+      <a class="logo" href="/" aria-label="Tearleads home">
+        <span>T</span> Tearleads
       </a>
       <nav aria-label="Main navigation">
         <a href="#principles">Principles</a>
@@ -51,7 +52,7 @@ const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
         <div class="heroVisual" aria-hidden="true">
           <div class="orbit orbitOne"></div>
           <div class="orbit orbitTwo"></div>
-          <div class="signal"><span>S</span></div>
+          <div class="signal"><span>T</span></div>
           <div class="coordinate coordinateOne">40.7128° N</div>
           <div class="coordinate coordinateTwo">EDGE / 001</div>
         </div>
@@ -109,14 +110,10 @@ const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
       <section class="closing">
         <p class="kicker"><span></span> Ready when you are</p>
         <h2>Make some room.</h2>
-        <a class="primaryCta light" href={appUrl}>Open Stealth ↗</a>
+        <a class="primaryCta light" href={appUrl}>Open Tearleads ↗</a>
       </section>
     </main>
 
-    <footer class="siteFooter">
-      <a class="logo" href="/"><span>S</span> stealth</a>
-      <p>Made for less, not more.</p>
-      <p>© {new Date().getFullYear()}</p>
-    </footer>
+    <SiteFooter />
   </body>
 </html>

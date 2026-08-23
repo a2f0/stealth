@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "stealth",
+      "name": "tearleads",
       "devDependencies": {
         "@biomejs/biome": "2.5.8",
         "@commitlint/cli": "20.5.0",
@@ -19,7 +19,7 @@
       },
     },
     "apps/api": {
-      "name": "@stealth/api",
+      "name": "@tearleads/api",
       "version": "0.1.0",
       "dependencies": {
         "better-auth": "1.7.0",
@@ -32,7 +32,7 @@
       },
     },
     "apps/client": {
-      "name": "@stealth/client",
+      "name": "@tearleads/client",
       "version": "0.1.0",
       "dependencies": {
         "better-auth": "1.7.0",
@@ -49,7 +49,7 @@
       },
     },
     "apps/website": {
-      "name": "@stealth/website",
+      "name": "@tearleads/website",
       "version": "0.1.0",
       "dependencies": {
         "astro": "7.2.2",
@@ -516,11 +516,11 @@
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
-    "@stealth/api": ["@stealth/api@workspace:apps/api"],
+    "@tearleads/api": ["@tearleads/api@workspace:apps/api"],
 
-    "@stealth/client": ["@stealth/client@workspace:apps/client"],
+    "@tearleads/client": ["@tearleads/client@workspace:apps/client"],
 
-    "@stealth/website": ["@stealth/website@workspace:apps/website"],
+    "@tearleads/website": ["@tearleads/website@workspace:apps/website"],
 
     "@tsconfig/strictest": ["@tsconfig/strictest@2.0.8", "", {}, "sha512-XnQ7vNz5HRN0r88GYf1J9JJjqtZPiHt2woGJOo2dYqyHGGcd6OLGqSlBB6p1j9mpzja6Oe5BoPqWmeDx6X9rLw=="],
 

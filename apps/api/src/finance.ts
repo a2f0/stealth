@@ -140,7 +140,7 @@ async function createLinkToken(
 ) {
   requireEncryptionKey(context.env);
   const body: LinkTokenRequest = {
-    client_name: "Stealth",
+    client_name: "Tearleads",
     country_codes: ["US"],
     language: "en",
     products: ["transactions"],

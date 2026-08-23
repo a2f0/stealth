@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { websiteUrl } from "./config";
 import {
   createPlaidLinkToken,
   deleteFinanceConnectionData,
@@ -23,7 +24,7 @@ import {
 } from "./financeApi";
 import { filterTransactionsByAccount } from "./financeTransactions";
 
-const linkTokenStorageKey = "stealth.plaid.linkToken";
+const linkTokenStorageKey = "tearleads.plaid.linkToken";
 
 export function Finance() {
   const [data, setData] = useState<FinanceData>();
@@ -169,6 +170,7 @@ function FinanceView({
         {error && <div className="errorBanner">{error}</div>}
         {notice && <div className="successBanner pageBanner">{notice}</div>}
         {data?.configured === false && <FinanceSetupNotice />}
+        <FinanceDataNotice />
         <Connections
           busy={busy}
           connections={data?.connections}
@@ -201,6 +203,22 @@ function FinanceView({
         />
       </section>
     </>
+  );
+}
+
+function FinanceDataNotice() {
+  return (
+    <aside className="financeDataNotice">
+      <strong>Before you add an account</strong>
+      <p>
+        Plaid securely connects your institution. Tearleads imports up to 24
+        months of account balances and transaction details so authorized
+        organization members can review and annotate them. We do not receive
+        your bank credentials, never sell customer information, and let you
+        disconnect later.{" "}
+        <a href={`${websiteUrl}/privacy`}>Privacy details ↗</a>
+      </p>
+    </aside>
   );
 }
 

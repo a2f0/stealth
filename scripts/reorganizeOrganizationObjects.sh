@@ -35,8 +35,8 @@ if [[ "$TARGET" == "--remote" ]]; then
 fi
 
 wrangler_storage_args=("$TARGET")
-if [[ "$TARGET" == "--local" && -n "${STEALTH_WRANGLER_PERSIST_TO:-}" ]]; then
-  wrangler_storage_args+=(--persist-to "$STEALTH_WRANGLER_PERSIST_TO")
+if [[ "$TARGET" == "--local" && -n "${TEARLEADS_WRANGLER_PERSIST_TO:-}" ]]; then
+  wrangler_storage_args+=(--persist-to "$TEARLEADS_WRANGLER_PERSIST_TO")
 fi
 
 cd "$REPO_ROOT/apps/api"
@@ -66,7 +66,7 @@ ORDER BY organization_id, record_type, record_id;
 "
 
 legacy_json="$(
-  bunx wrangler d1 execute stealth-db "${wrangler_storage_args[@]}" --json \
+  bunx wrangler d1 execute DB "${wrangler_storage_args[@]}" --json \
     --command "$legacy_sql"
 )"
 legacy_rows="$(
@@ -170,7 +170,7 @@ while IFS= read -r row; do
   esac
 
   update_json="$(
-    bunx wrangler d1 execute stealth-db "${wrangler_storage_args[@]}" --json \
+    bunx wrangler d1 execute DB "${wrangler_storage_args[@]}" --json \
       --command "$update_sql"
   )"
   if ! jq -e --arg id "$record_id" --arg key "$new_key" \
