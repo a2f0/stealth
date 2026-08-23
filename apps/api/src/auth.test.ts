@@ -311,6 +311,7 @@ describe("password authentication", () => {
       password: originalPassword,
     });
     expect(passwordStep.status).toBe(200);
+    expect(hasMultiSessionCookie(passwordStep)).toBe(false);
     const passwordStepBody: unknown = await passwordStep.json();
     expect(passwordStepBody).toEqual({
       twoFactorMethods: ["totp"],
@@ -330,12 +331,33 @@ describe("password authentication", () => {
       loginCookies.header(),
     );
     expect(secondFactor.status).toBe(200);
+    expect(hasMultiSessionCookie(secondFactor)).toBe(true);
+    const secondFactorBody = (await secondFactor.clone().json()) as {
+      token: string;
+    };
     loginCookies.absorb(secondFactor);
     expect(
       await (
         await get(fixture.auth, "/get-session", loginCookies.header())
       ).json(),
     ).toMatchObject({ user: { email, twoFactorEnabled: true } });
+    const missingCompanionCookie = await post(
+      fixture.auth,
+      "/multi-session/revoke",
+      { sessionToken: secondFactorBody.token },
+      withoutMultiSessionCookies(loginCookies.header()),
+    );
+    expect(missingCompanionCookie.status).toBe(401);
+    expect(await missingCompanionCookie.json()).toMatchObject({
+      code: "INVALID_SESSION_TOKEN",
+    });
+    const signedOut = await post(
+      fixture.auth,
+      "/multi-session/revoke",
+      { sessionToken: secondFactorBody.token },
+      loginCookies.header(),
+    );
+    expect(signedOut.status).toBe(200);
 
     const backupLoginCookies = new CookieJar();
     const backupPasswordStep = await post(fixture.auth, "/sign-in/email", {
@@ -868,6 +890,19 @@ function totpSecret(uri: string) {
   const secret = new URL(uri).searchParams.get("secret");
   if (!secret) throw new Error("TOTP URI is missing its secret.");
   return secret;
+}
+
+function hasMultiSessionCookie(response: Response) {
+  return response.headers
+    .getSetCookie()
+    .some((header) => header.includes("_multi-"));
+}
+
+function withoutMultiSessionCookies(header: string) {
+  return header
+    .split("; ")
+    .filter((cookie) => !cookie.includes("_multi-"))
+    .join("; ");
 }
 
 async function totpCode(uri: string) {
