@@ -325,6 +325,46 @@ describe("audits", () => {
     expect(stale.response.status).toBe(409);
   });
 
+  it("allows every question to be removed from a section", async () => {
+    const fixture = await createFixture();
+    const created = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/templates",
+      "POST",
+      { name: "Empty section form" },
+    );
+    const definition = structuredClone(created.body.template.definition);
+    const section = definition.sections[0];
+    expect(section).toBeDefined();
+    if (section) section.items = [];
+
+    const saved = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/templates/${created.body.template.id}`,
+      "PUT",
+      {
+        definition,
+        expectedCurrentVersion: 1,
+        name: created.body.template.name,
+      },
+    );
+    expect(saved.response.status).toBe(200);
+    expect(saved.body.template.definition.sections[0]?.items).toEqual([]);
+
+    const started = await jsonRequest<RunResponse>(
+      fixture,
+      `/templates/${created.body.template.id}/runs`,
+      "POST",
+    );
+    const completed = await jsonRequest(
+      fixture,
+      `/runs/${started.body.auditId}`,
+      "PATCH",
+      { responses: {}, status: "completed" },
+    );
+    expect(completed.response.status).toBe(200);
+  });
+
   it("shares global templates without exposing organization templates", async () => {
     const fixture = await createFixture();
     const denied = await jsonRequest(fixture, "/templates", "POST", {
@@ -369,17 +409,48 @@ describe("audits", () => {
       otherOrganization.body.templates.map(({ name }) => name),
     ).not.toContain("Private form");
 
-    const userUpdate = await jsonRequest(
+    const deniedUpdate = await jsonRequest(
       fixture,
       `/templates/${global.body.template.id}`,
       "PUT",
       {
         definition: global.body.template.definition,
         expectedCurrentVersion: 1,
-        name: "User edit",
+        name: "Organization safety form",
       },
     );
-    expect(userUpdate.response.status).toBe(403);
+    expect(deniedUpdate.response.status).toBe(403);
+
+    const organizationCopy = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/templates/${global.body.template.id}/copies`,
+      "POST",
+      {
+        definition: global.body.template.definition,
+        expectedCurrentVersion: 1,
+        name: "Organization safety form",
+      },
+    );
+    expect(organizationCopy.response.status).toBe(201);
+    expect(organizationCopy.body.template).toMatchObject({
+      currentVersion: 1,
+      name: "Organization safety form",
+      scope: "organization",
+      version: 1,
+    });
+    expect(organizationCopy.body.template.id).not.toBe(global.body.template.id);
+
+    const unchangedGlobal = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/templates/${global.body.template.id}`,
+      "GET",
+    );
+    expect(unchangedGlobal.body.template).toMatchObject({
+      currentVersion: 1,
+      name: "Shared safety form",
+      scope: "global",
+      version: 1,
+    });
 
     const adminUpdate = await jsonRequest<TemplateResponse>(
       fixture,
@@ -393,6 +464,8 @@ describe("audits", () => {
       { role: "admin" },
     );
     expect(adminUpdate.body.template).toMatchObject({
+      currentVersion: 2,
+      name: "Shared safety form v2",
       scope: "global",
       version: 2,
     });
@@ -405,6 +478,15 @@ describe("audits", () => {
       { organizationId: "org_user-2", userId: "user-2" },
     );
     expect(privateRun.response.status).toBe(404);
+
+    const copiedRun = await jsonRequest(
+      fixture,
+      `/templates/${organizationCopy.body.template.id}/runs`,
+      "POST",
+      undefined,
+      { organizationId: "org_user-2", userId: "user-2" },
+    );
+    expect(copiedRun.response.status).toBe(404);
 
     const globalRun = await jsonRequest<RunResponse>(
       fixture,

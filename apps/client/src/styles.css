@@ -2367,7 +2367,7 @@ button:disabled {
 
 .auditQuestionEditor {
   display: grid;
-  grid-template-columns: 22px minmax(220px, 1fr) minmax(150px, 0.38fr) auto 24px;
+  grid-template-columns: 22px minmax(220px, 1fr) minmax(150px, 0.38fr) auto auto;
   align-items: center;
   gap: 11px;
   padding: 13px 0;
@@ -2378,6 +2378,17 @@ button:disabled {
   color: #8a8a81;
   font-family: "DM Mono", monospace;
   font-size: 9px;
+}
+
+.auditQuestionEditor > .auditDeleteQuestion {
+  color: #8d3c30;
+  font-weight: 700;
+}
+
+.auditQuestionEmpty {
+  margin: 10px 0;
+  color: #85857c;
+  font-size: 11px;
 }
 
 .auditRequired {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   type AuditTemplate,
+  copyAuditTemplate,
   createAuditTemplate,
   getAuditTemplateVersion,
   listAuditTemplateVersions,
@@ -32,6 +33,7 @@ describe("audit template API", () => {
       await getAuditTemplateVersion("template/id", 2);
       await listAuditTemplateVersions("template/id");
       await updateAuditTemplate(template);
+      await copyAuditTemplate(template);
       expect(requests).toEqual([
         {
           body: JSON.stringify({ name: "Shared form", scope: "global" }),
@@ -55,6 +57,16 @@ describe("audit template API", () => {
           }),
           method: "PUT",
           url: `${apiUrl}/api/audits/templates/template%2Fid`,
+        },
+        {
+          body: JSON.stringify({
+            definition: template.definition,
+            description: template.description,
+            expectedCurrentVersion: 2,
+            name: template.name,
+          }),
+          method: "POST",
+          url: `${apiUrl}/api/audits/templates/template%2Fid/copies`,
         },
       ]);
     } finally {

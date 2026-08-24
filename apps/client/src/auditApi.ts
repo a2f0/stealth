@@ -141,13 +141,19 @@ export async function updateAuditTemplate(template: AuditTemplate) {
   const body = await request<{ template: AuditTemplate }>(
     `/templates/${encodeURIComponent(template.id)}`,
     {
-      body: JSON.stringify({
-        definition: template.definition,
-        description: template.description,
-        expectedCurrentVersion: template.currentVersion,
-        name: template.name,
-      }),
+      body: templateSaveBody(template),
       method: "PUT",
+    },
+  );
+  return body.template;
+}
+
+export async function copyAuditTemplate(template: AuditTemplate) {
+  const body = await request<{ template: AuditTemplate }>(
+    `/templates/${encodeURIComponent(template.id)}/copies`,
+    {
+      body: templateSaveBody(template),
+      method: "POST",
     },
   );
   return body.template;
@@ -202,6 +208,15 @@ export function updateAuditIssue(issueId: string, status: "open" | "resolved") {
     `/issues/${encodeURIComponent(issueId)}`,
     { body: JSON.stringify({ status }), method: "PATCH" },
   );
+}
+
+function templateSaveBody(template: AuditTemplate) {
+  return JSON.stringify({
+    definition: template.definition,
+    description: template.description,
+    expectedCurrentVersion: template.currentVersion,
+    name: template.name,
+  });
 }
 
 async function request<T>(path: string, init?: RequestInit) {
