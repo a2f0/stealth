@@ -4,6 +4,7 @@ import {
   type AuditTemplateItem,
   type AuditTemplateSection,
   type AuditTemplateVersion,
+  copyAuditTemplate,
   getAuditTemplate,
   getAuditTemplateVersion,
   listAuditTemplateVersions,
@@ -12,13 +13,13 @@ import {
 
 interface BuilderProps {
   id: string;
-  isPlatformAdmin: boolean;
+  manageGlobal?: boolean;
   onNavigate: (pathname: string) => void;
 }
 
 export function AuditTemplateBuilder({
   id,
-  isPlatformAdmin,
+  manageGlobal = false,
   onNavigate,
 }: BuilderProps) {
   const [template, setTemplate] = useState<AuditTemplate>();
@@ -60,10 +61,20 @@ export function AuditTemplateBuilder({
     setError(undefined);
     setNotice(undefined);
     try {
-      const saved = await updateAuditTemplate(template);
+      const copiedGlobal = template.scope === "global" && !manageGlobal;
+      const saved = copiedGlobal
+        ? await copyAuditTemplate(template)
+        : await updateAuditTemplate(template);
       setTemplate(saved);
-      setVersions(await listAuditTemplateVersions(id));
-      setNotice(`Version ${saved.version} saved.`);
+      setNotice(
+        copiedGlobal
+          ? "Organization form created. The global form is unchanged."
+          : `Version ${saved.version} saved.`,
+      );
+      if (saved.id !== id) {
+        onNavigate(`/audits/templates/${encodeURIComponent(saved.id)}`);
+      }
+      setVersions(await listAuditTemplateVersions(saved.id));
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -77,13 +88,11 @@ export function AuditTemplateBuilder({
     );
   }
 
-  const canEdit = template.scope === "organization" || isPlatformAdmin;
-
   return (
     <>
       <BuilderHeader
         busy={busy}
-        canEdit={canEdit}
+        manageGlobal={manageGlobal}
         onBack={() => onNavigate("/audits")}
         onSave={save}
         onVersionChange={selectVersion}
@@ -91,8 +100,8 @@ export function AuditTemplateBuilder({
         versions={versions ?? []}
       />
       <BuilderBody
-        canEdit={canEdit}
         error={error}
+        manageGlobal={manageGlobal}
         notice={notice}
         onChange={(nextTemplate) => {
           setTemplate(nextTemplate);
@@ -105,14 +114,14 @@ export function AuditTemplateBuilder({
 }
 
 function BuilderBody({
-  canEdit,
   error,
+  manageGlobal,
   notice,
   onChange,
   template,
 }: {
-  canEdit: boolean;
   error: string | undefined;
+  manageGlobal: boolean;
   notice: string | undefined;
   onChange: (template: AuditTemplate) => void;
   template: AuditTemplate;
@@ -126,15 +135,21 @@ function BuilderBody({
     <section className="content auditBuilder">
       {error && <div className="errorBanner">{error}</div>}
       {notice && <div className="successBanner pageBanner">{notice}</div>}
-      {!canEdit && (
+      {template.scope === "global" && !manageGlobal && (
         <div className="auditVersionNotice">
-          Global forms are available to every organization and can only be
-          revised by a Tearleads platform administrator.
+          Changes will be saved as a new form for this organization. The global
+          form and its version history will stay unchanged.
+        </div>
+      )}
+      {template.scope === "global" && manageGlobal && (
+        <div className="auditVersionNotice">
+          You are managing the shared global form. Saving will publish a new
+          version for every organization.
         </div>
       )}
       {template.version < template.currentVersion && (
         <div className="auditVersionNotice">
-          {canEdit ? (
+          {template.scope === "organization" || manageGlobal ? (
             <>
               You are viewing version {template.version}. Saving changes will
               create version {template.currentVersion + 1}; this version will
@@ -142,13 +157,13 @@ function BuilderBody({
             </>
           ) : (
             <>
-              You are viewing version {template.version}. The latest version is{" "}
-              {template.currentVersion}.
+              You are using global version {template.version} as the starting
+              point. The latest global version is {template.currentVersion}.
             </>
           )}
         </div>
       )}
-      <fieldset className="auditBuilderFields" disabled={!canEdit}>
+      <fieldset className="auditBuilderFields">
         <TemplateDetails template={template} update={onChange} />
         <div className="auditBuilderSections">
           {template.definition.sections.map((section, index) => (
@@ -188,7 +203,7 @@ function BuilderBody({
 
 function BuilderHeader({
   busy,
-  canEdit,
+  manageGlobal,
   onBack,
   onSave,
   onVersionChange,
@@ -196,7 +211,7 @@ function BuilderHeader({
   versions,
 }: {
   busy: boolean;
-  canEdit: boolean;
+  manageGlobal: boolean;
   onBack: () => void;
   onSave: () => Promise<void>;
   onVersionChange: (version: number) => Promise<void>;
@@ -213,7 +228,11 @@ function BuilderHeader({
           {template.scope === "global" ? "Global form" : "Organization form"}
           {" · "}Version {template.version} of {template.currentVersion}
         </p>
-        <h1>{canEdit ? "Edit template" : "View template"}</h1>
+        <h1>
+          {template.scope === "global" && !manageGlobal
+            ? "Customize template"
+            : "Edit template"}
+        </h1>
       </div>
       <div className="auditVersionControls">
         <label>
@@ -233,18 +252,18 @@ function BuilderHeader({
             ))}
           </select>
         </label>
-        {canEdit && (
-          <button
-            className="primaryButton"
-            disabled={busy}
-            onClick={() => void onSave()}
-            type="button"
-          >
-            {busy
-              ? "Saving…"
+        <button
+          className="primaryButton"
+          disabled={busy}
+          onClick={() => void onSave()}
+          type="button"
+        >
+          {busy
+            ? "Saving…"
+            : template.scope === "global" && !manageGlobal
+              ? "Save organization copy"
               : `Save as version ${template.currentVersion + 1}`}
-          </button>
-        )}
+        </button>
       </div>
     </header>
   );
@@ -320,7 +339,6 @@ function SectionEditor({
       <div className="auditQuestionList">
         {section.items.map((item, itemIndex) => (
           <QuestionEditor
-            canRemove={section.items.length > 1}
             index={itemIndex}
             item={item}
             key={item.id}
@@ -335,6 +353,9 @@ function SectionEditor({
             }
           />
         ))}
+        {section.items.length === 0 && (
+          <p className="auditQuestionEmpty">No questions in this section.</p>
+        )}
       </div>
       <button
         className="auditAddQuestion"
@@ -350,13 +371,11 @@ function SectionEditor({
 }
 
 function QuestionEditor({
-  canRemove,
   index,
   item,
   onChange,
   onRemove,
 }: {
-  canRemove: boolean;
   index: number;
   item: AuditTemplateItem;
   onChange: (item: AuditTemplateItem) => void;
@@ -395,8 +414,13 @@ function QuestionEditor({
         />
         Required
       </label>
-      <button disabled={!canRemove} onClick={onRemove} type="button">
-        ×
+      <button
+        aria-label={`Delete question ${index + 1}`}
+        className="auditDeleteQuestion"
+        onClick={onRemove}
+        type="button"
+      >
+        Delete
       </button>
     </div>
   );

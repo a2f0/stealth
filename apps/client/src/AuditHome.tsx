@@ -42,7 +42,8 @@ export function AuditHome({
     setError(undefined);
     try {
       const template = await createAuditTemplate("Untitled checklist", scope);
-      onNavigate(`/audits/templates/${template.id}`);
+      const collection = scope === "global" ? "global-templates" : "templates";
+      onNavigate(`/audits/${collection}/${template.id}`);
     } catch (cause) {
       setError(messageFrom(cause));
       setBusy(false);
@@ -95,6 +96,7 @@ export function AuditHome({
           canManageGlobal={canManageGlobal}
           onBegin={beginAudit}
           onEdit={(id) => onNavigate(`/audits/templates/${id}`)}
+          onManage={(id) => onNavigate(`/audits/global-templates/${id}`)}
           templates={templates}
         />
         <AuditHistory
@@ -111,12 +113,14 @@ function TemplateGrid({
   canManageGlobal,
   onBegin,
   onEdit,
+  onManage,
   templates,
 }: {
   busy: boolean;
   canManageGlobal: boolean;
   onBegin: (id: string) => Promise<void>;
   onEdit: (id: string) => void;
+  onManage: (id: string) => void;
   templates: AuditTemplate[] | undefined;
 }) {
   return (
@@ -129,20 +133,22 @@ function TemplateGrid({
         <div className="auditTemplateCollections">
           <TemplateCollection
             busy={busy}
-            canEdit={canManageGlobal}
+            canManageGlobal={canManageGlobal}
             emptyMessage="No global checklists are available yet."
             onBegin={onBegin}
             onEdit={onEdit}
+            onManage={onManage}
             scope="global"
             templates={templates.filter(({ scope }) => scope === "global")}
             title="Global forms"
           />
           <TemplateCollection
             busy={busy}
-            canEdit
+            canManageGlobal={false}
             emptyMessage="No forms have been created for this organization yet."
             onBegin={onBegin}
             onEdit={onEdit}
+            onManage={onManage}
             scope="organization"
             templates={templates.filter(
               ({ scope }) => scope === "organization",
@@ -158,19 +164,21 @@ function TemplateGrid({
 
 function TemplateCollection({
   busy,
-  canEdit,
+  canManageGlobal,
   emptyMessage,
   onBegin,
   onEdit,
+  onManage,
   scope,
   templates,
   title,
 }: {
   busy: boolean;
-  canEdit: boolean;
+  canManageGlobal: boolean;
   emptyMessage: string;
   onBegin: (id: string) => Promise<void>;
   onEdit: (id: string) => void;
+  onManage: (id: string) => void;
   scope: AuditTemplateScope;
   templates: AuditTemplate[];
   title: string;
@@ -208,8 +216,13 @@ function TemplateCollection({
               </span>
               <div className="auditCardActions">
                 <button onClick={() => onEdit(template.id)} type="button">
-                  {canEdit ? "Edit" : "View versions"}
+                  {scope === "global" ? "Customize" : "Edit"}
                 </button>
+                {scope === "global" && canManageGlobal && (
+                  <button onClick={() => onManage(template.id)} type="button">
+                    Manage global
+                  </button>
+                )}
                 <button
                   className="primaryButton"
                   disabled={busy}

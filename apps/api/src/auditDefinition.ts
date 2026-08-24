@@ -65,7 +65,7 @@ function parseSection(value: unknown): AuditTemplateSection | null {
   if (!validText(value.title, 200) || !Array.isArray(value.items)) {
     return null;
   }
-  if (value.items.length === 0 || value.items.length > maxItemsPerSection) {
+  if (value.items.length > maxItemsPerSection) {
     return null;
   }
   const items = value.items.map(parseItem);

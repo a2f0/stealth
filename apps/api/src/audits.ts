@@ -40,6 +40,13 @@ interface TemplateVersionRow {
   version: number;
 }
 
+interface TemplateSaveInput {
+  definition: AuditDefinition;
+  description: string;
+  expectedCurrentVersion: unknown;
+  name: string;
+}
+
 interface AuditRow {
   completed_at: string | null;
   created_at: string;
@@ -175,6 +182,36 @@ audits.post("/templates", async (context) => {
   return context.json({ template: toTemplate(template) }, 201);
 });
 
+audits.post("/templates/:id/copies", async (context) => {
+  const source = await findTemplate(
+    context.env.DB,
+    context.get("organizationId"),
+    context.req.param("id"),
+  );
+  if (source?.scope !== "global") {
+    return context.json({ error: "Global template not found." }, 404);
+  }
+  const input = templateSaveInput(await context.req.json().catch(() => null));
+  if (typeof input === "string") return context.json({ error: input }, 400);
+  if (
+    input.expectedCurrentVersion !== undefined &&
+    input.expectedCurrentVersion !== source.current_version
+  ) {
+    return context.json(
+      { error: "This template has a newer version. Reload it before saving." },
+      409,
+    );
+  }
+  const saved = await copyGlobalTemplate(
+    context.env.DB,
+    context.get("organizationId"),
+    context.get("authSession").user.id,
+    input,
+    new Date().toISOString(),
+  );
+  return context.json({ template: toTemplate(saved) }, 201);
+});
+
 audits.get("/templates/:id/versions", async (context) => {
   const template = await findTemplate(
     context.env.DB,
@@ -239,60 +276,21 @@ audits.put("/templates/:id", async (context) => {
       403,
     );
   }
-  const body: unknown = await context.req.json().catch(() => null);
-  if (!isRecord(body) || !validText(body.name, 200)) {
-    return context.json({ error: "A template name is required." }, 400);
-  }
-  const definition = parseAuditDefinition(body.definition);
-  if (!definition) {
-    return context.json({ error: "The template definition is invalid." }, 400);
-  }
-  const description =
-    typeof body.description === "string" ? body.description.trim() : "";
-  if (description.length > 2_000) {
-    return context.json(
-      { error: "Descriptions are limited to 2,000 characters." },
-      400,
-    );
-  }
+  const input = templateSaveInput(await context.req.json().catch(() => null));
+  if (typeof input === "string") return context.json({ error: input }, 400);
   if (
-    isRecord(body) &&
-    body.expectedCurrentVersion !== undefined &&
-    body.expectedCurrentVersion !== current.current_version
+    input.expectedCurrentVersion !== undefined &&
+    input.expectedCurrentVersion !== current.current_version
   ) {
     return context.json(
       { error: "This template has a newer version. Reload it before saving." },
       409,
     );
   }
-  const version = current.current_version + 1;
-  const versionId = crypto.randomUUID();
   const userId = context.get("authSession").user.id;
   const now = new Date().toISOString();
   try {
-    await context.env.DB.batch([
-      context.env.DB.prepare(
-        `UPDATE audit_template_families
-         SET current_version = ?, updated_at = ?
-         WHERE id = ? AND current_version = ?`,
-      ).bind(version, now, current.id, current.current_version),
-      context.env.DB.prepare(
-        `INSERT INTO audit_template_versions
-         (id, template_id, version, name, description, definition, status,
-          created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        versionId,
-        current.id,
-        version,
-        body.name.trim(),
-        description,
-        JSON.stringify(definition),
-        current.status,
-        userId,
-        now,
-      ),
-    ]);
+    await addTemplateVersion(context.env.DB, current, userId, input, now);
   } catch (cause) {
     const latest = await findTemplate(
       context.env.DB,
@@ -493,6 +491,83 @@ audits.patch("/issues/:id", async (context) => {
     : context.json({ error: "Issue not found." }, 404);
 });
 
+async function copyGlobalTemplate(
+  database: D1Database,
+  organizationId: string,
+  userId: string,
+  input: TemplateSaveInput,
+  now: string,
+) {
+  const id = crypto.randomUUID();
+  const versionId = crypto.randomUUID();
+  await database.batch([
+    database
+      .prepare(
+        `INSERT INTO audit_template_families
+         (id, scope, organization_id, current_version, created_by, created_at,
+          updated_at)
+         VALUES (?, 'organization', ?, 1, ?, ?, ?)`,
+      )
+      .bind(id, organizationId, userId, now, now),
+    database
+      .prepare(
+        `INSERT INTO audit_template_versions
+         (id, template_id, version, name, description, definition, status,
+          created_by, created_at)
+         VALUES (?, ?, 1, ?, ?, ?, 'draft', ?, ?)`,
+      )
+      .bind(
+        versionId,
+        id,
+        input.name,
+        input.description,
+        JSON.stringify(input.definition),
+        userId,
+        now,
+      ),
+  ]);
+  const saved = await findTemplate(database, organizationId, id);
+  if (!saved) throw new Error("Copied template could not be loaded.");
+  return saved;
+}
+
+async function addTemplateVersion(
+  database: D1Database,
+  current: TemplateRow,
+  userId: string,
+  input: TemplateSaveInput,
+  now: string,
+) {
+  const version = current.current_version + 1;
+  await database.batch([
+    database
+      .prepare(
+        `UPDATE audit_template_families
+         SET current_version = ?, updated_at = ?
+         WHERE id = ? AND current_version = ?`,
+      )
+      .bind(version, now, current.id, current.current_version),
+    database
+      .prepare(
+        `INSERT INTO audit_template_versions
+         (id, template_id, version, name, description, definition, status,
+          created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        current.id,
+        version,
+        input.name,
+        input.description,
+        JSON.stringify(input.definition),
+        current.status,
+        userId,
+        now,
+      ),
+  ]);
+}
+
 async function ensureStarterTemplate(database: D1Database, userId: string) {
   const id = "nfpa70e_global";
   const now = new Date().toISOString();
@@ -551,6 +626,25 @@ function parseTemplateScope(value: unknown) {
   if (value === undefined || value === "organization") return "organization";
   if (value === "global") return "global";
   return null;
+}
+
+function templateSaveInput(value: unknown): TemplateSaveInput | string {
+  if (!isRecord(value) || !validText(value.name, 200)) {
+    return "A template name is required.";
+  }
+  const definition = parseAuditDefinition(value.definition);
+  if (!definition) return "The template definition is invalid.";
+  const description =
+    typeof value.description === "string" ? value.description.trim() : "";
+  if (description.length > 2_000) {
+    return "Descriptions are limited to 2,000 characters.";
+  }
+  return {
+    definition,
+    description,
+    expectedCurrentVersion: value.expectedCurrentVersion,
+    name: value.name.trim(),
+  };
 }
 
 function positiveInteger(value: string) {

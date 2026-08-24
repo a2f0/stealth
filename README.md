@@ -95,6 +95,10 @@ Authenticated users can build organization-scoped checklist templates at
 `/audits`, start audits from them, record pass/fail/N/A or text responses, and
 raise issues with priorities and optional organization-member assignees. Audit
 runs snapshot their template so later template edits do not rewrite history.
+Customizing a global template creates a new organization-scoped form instead
+of changing the shared template or its version history. Platform administrators
+use a separate management action when they intentionally publish a new global
+version.
 
 The global NFPA 70E readiness checklist is a shared starting point based on
 broad electrical-safety themes. It is not an official checklist,

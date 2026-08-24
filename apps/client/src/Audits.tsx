@@ -9,15 +9,19 @@ interface AuditsProps {
 }
 
 export function Audits({ isPlatformAdmin, onNavigate, pathname }: AuditsProps) {
-  const templateId = routeId(pathname, "/audits/templates/");
-  if (templateId) {
+  const globalTemplateId = routeId(pathname, "/audits/global-templates/");
+  if (globalTemplateId) {
     return (
       <AuditTemplateBuilder
-        id={templateId}
-        isPlatformAdmin={isPlatformAdmin}
+        id={globalTemplateId}
+        manageGlobal={isPlatformAdmin}
         onNavigate={onNavigate}
       />
     );
+  }
+  const templateId = routeId(pathname, "/audits/templates/");
+  if (templateId) {
+    return <AuditTemplateBuilder id={templateId} onNavigate={onNavigate} />;
   }
   const auditId = routeId(pathname, "/audits/runs/");
   if (auditId) {
