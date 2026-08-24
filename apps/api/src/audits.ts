@@ -106,7 +106,7 @@ const templateSelect = `
 audits.get("/templates", async (context) => {
   const organizationId = context.get("organizationId");
   const userId = context.get("authSession").user.id;
-  await ensureStarterTemplate(context.env.DB, organizationId, userId);
+  await ensureStarterTemplate(context.env.DB, userId);
   const result = await context.env.DB.prepare(
     `${templateSelect}
      WHERE family.scope = 'global' OR family.organization_id = ?
@@ -493,12 +493,8 @@ audits.patch("/issues/:id", async (context) => {
     : context.json({ error: "Issue not found." }, 404);
 });
 
-async function ensureStarterTemplate(
-  database: D1Database,
-  organizationId: string,
-  userId: string,
-) {
-  const id = `nfpa70e_${organizationId}`;
+async function ensureStarterTemplate(database: D1Database, userId: string) {
+  const id = "nfpa70e_global";
   const now = new Date().toISOString();
   await database.batch([
     database
@@ -506,9 +502,9 @@ async function ensureStarterTemplate(
         `INSERT OR IGNORE INTO audit_template_families
          (id, scope, organization_id, current_version, created_by, created_at,
           updated_at)
-         VALUES (?, 'organization', ?, 1, ?, ?, ?)`,
+         VALUES (?, 'global', NULL, 1, ?, ?, ?)`,
       )
-      .bind(id, organizationId, userId, now, now),
+      .bind(id, userId, now, now),
     database
       .prepare(
         `INSERT OR IGNORE INTO audit_template_versions
