@@ -3,26 +3,56 @@ import {
   type AuditTemplate,
   type AuditTemplateItem,
   type AuditTemplateSection,
+  type AuditTemplateVersion,
   getAuditTemplate,
+  getAuditTemplateVersion,
+  listAuditTemplateVersions,
   updateAuditTemplate,
 } from "./auditApi";
 
 interface BuilderProps {
   id: string;
+  isPlatformAdmin: boolean;
   onNavigate: (pathname: string) => void;
 }
 
-export function AuditTemplateBuilder({ id, onNavigate }: BuilderProps) {
+export function AuditTemplateBuilder({
+  id,
+  isPlatformAdmin,
+  onNavigate,
+}: BuilderProps) {
   const [template, setTemplate] = useState<AuditTemplate>();
+  const [versions, setVersions] = useState<AuditTemplateVersion[]>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
 
   useEffect(() => {
-    getAuditTemplate(id)
-      .then(setTemplate)
+    Promise.all([getAuditTemplate(id), listAuditTemplateVersions(id)])
+      .then(([nextTemplate, nextVersions]) => {
+        setTemplate(nextTemplate);
+        setVersions(nextVersions);
+      })
       .catch((cause: unknown) => setError(messageFrom(cause)));
   }, [id]);
+
+  async function selectVersion(version: number) {
+    if (!template || version === template.version) return;
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const selected =
+        version === template.currentVersion
+          ? await getAuditTemplate(id)
+          : await getAuditTemplateVersion(id, version);
+      setTemplate(selected);
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function save() {
     if (!template) return;
@@ -30,9 +60,10 @@ export function AuditTemplateBuilder({ id, onNavigate }: BuilderProps) {
     setError(undefined);
     setNotice(undefined);
     try {
-      const result = await updateAuditTemplate(template);
-      setTemplate({ ...template, updatedAt: result.updatedAt });
-      setNotice("Checklist saved.");
+      const saved = await updateAuditTemplate(template);
+      setTemplate(saved);
+      setVersions(await listAuditTemplateVersions(id));
+      setNotice(`Version ${saved.version} saved.`);
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -46,25 +77,79 @@ export function AuditTemplateBuilder({ id, onNavigate }: BuilderProps) {
     );
   }
 
-  const updateSections = (sections: AuditTemplateSection[]) => {
-    setTemplate({
-      ...template,
-      definition: { ...template.definition, sections },
-    });
-    setNotice(undefined);
-  };
+  const canEdit = template.scope === "organization" || isPlatformAdmin;
 
   return (
     <>
       <BuilderHeader
         busy={busy}
+        canEdit={canEdit}
         onBack={() => onNavigate("/audits")}
         onSave={save}
+        onVersionChange={selectVersion}
+        template={template}
+        versions={versions ?? []}
       />
-      <section className="content auditBuilder">
-        {error && <div className="errorBanner">{error}</div>}
-        {notice && <div className="successBanner pageBanner">{notice}</div>}
-        <TemplateDetails template={template} update={setTemplate} />
+      <BuilderBody
+        canEdit={canEdit}
+        error={error}
+        notice={notice}
+        onChange={(nextTemplate) => {
+          setTemplate(nextTemplate);
+          setNotice(undefined);
+        }}
+        template={template}
+      />
+    </>
+  );
+}
+
+function BuilderBody({
+  canEdit,
+  error,
+  notice,
+  onChange,
+  template,
+}: {
+  canEdit: boolean;
+  error: string | undefined;
+  notice: string | undefined;
+  onChange: (template: AuditTemplate) => void;
+  template: AuditTemplate;
+}) {
+  const updateSections = (sections: AuditTemplateSection[]) =>
+    onChange({
+      ...template,
+      definition: { ...template.definition, sections },
+    });
+  return (
+    <section className="content auditBuilder">
+      {error && <div className="errorBanner">{error}</div>}
+      {notice && <div className="successBanner pageBanner">{notice}</div>}
+      {!canEdit && (
+        <div className="auditVersionNotice">
+          Global forms are available to every organization and can only be
+          revised by a Tearleads platform administrator.
+        </div>
+      )}
+      {template.version < template.currentVersion && (
+        <div className="auditVersionNotice">
+          {canEdit ? (
+            <>
+              You are viewing version {template.version}. Saving changes will
+              create version {template.currentVersion + 1}; this version will
+              stay unchanged.
+            </>
+          ) : (
+            <>
+              You are viewing version {template.version}. The latest version is{" "}
+              {template.currentVersion}.
+            </>
+          )}
+        </div>
+      )}
+      <fieldset className="auditBuilderFields" disabled={!canEdit}>
+        <TemplateDetails template={template} update={onChange} />
         <div className="auditBuilderSections">
           {template.definition.sections.map((section, index) => (
             <SectionEditor
@@ -96,19 +181,27 @@ export function AuditTemplateBuilder({ id, onNavigate }: BuilderProps) {
         >
           + Add section
         </button>
-      </section>
-    </>
+      </fieldset>
+    </section>
   );
 }
 
 function BuilderHeader({
   busy,
+  canEdit,
   onBack,
   onSave,
+  onVersionChange,
+  template,
+  versions,
 }: {
   busy: boolean;
+  canEdit: boolean;
   onBack: () => void;
   onSave: () => Promise<void>;
+  onVersionChange: (version: number) => Promise<void>;
+  template: AuditTemplate;
+  versions: AuditTemplateVersion[];
 }) {
   return (
     <header className="topbar auditEditorTopbar">
@@ -116,17 +209,43 @@ function BuilderHeader({
         <button className="auditBack" onClick={onBack} type="button">
           ← Audits
         </button>
-        <p className="eyebrow">Checklist builder</p>
-        <h1>Edit template</h1>
+        <p className="eyebrow">
+          {template.scope === "global" ? "Global form" : "Organization form"}
+          {" · "}Version {template.version} of {template.currentVersion}
+        </p>
+        <h1>{canEdit ? "Edit template" : "View template"}</h1>
       </div>
-      <button
-        className="primaryButton"
-        disabled={busy}
-        onClick={() => void onSave()}
-        type="button"
-      >
-        {busy ? "Saving…" : "Save checklist"}
-      </button>
+      <div className="auditVersionControls">
+        <label>
+          <span>Version</span>
+          <select
+            disabled={busy || versions.length === 0}
+            onChange={(event) =>
+              void onVersionChange(Number(event.target.value))
+            }
+            value={template.version}
+          >
+            {versions.map((version) => (
+              <option key={version.version} value={version.version}>
+                v{version.version} · {formatVersionDate(version.createdAt)} ·{" "}
+                {version.createdBy.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {canEdit && (
+          <button
+            className="primaryButton"
+            disabled={busy}
+            onClick={() => void onSave()}
+            type="button"
+          >
+            {busy
+              ? "Saving…"
+              : `Save as version ${template.currentVersion + 1}`}
+          </button>
+        )}
+      </div>
     </header>
   );
 }
@@ -315,6 +434,12 @@ function newSection(): AuditTemplateSection {
 
 function replaceById<T extends { id: string }>(items: T[], replacement: T) {
   return items.map((item) => (item.id === replacement.id ? replacement : item));
+}
+
+function formatVersionDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+    new Date(value),
+  );
 }
 
 function messageFrom(cause: unknown) {

@@ -2021,6 +2021,52 @@ button:disabled {
   max-width: 1240px;
 }
 
+.auditTemplateCollections {
+  display: grid;
+  gap: 38px;
+}
+
+.auditTemplateCollection {
+  display: grid;
+  gap: 15px;
+}
+
+.auditCollectionHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.auditCollectionHeading h3,
+.auditCollectionHeading p {
+  margin: 0;
+}
+
+.auditCollectionHeading h3 {
+  font-size: 15px;
+}
+
+.auditCollectionHeading p,
+.auditCollectionEmpty {
+  margin-top: 5px;
+  color: #828279;
+  font-size: 10px;
+}
+
+.auditCollectionHeading > span {
+  color: #8b8b82;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+.auditCollectionEmpty {
+  padding: 20px;
+  border: 1px dashed #d1d1c8;
+  border-radius: 12px;
+  background: #faf9f5;
+}
+
 .auditTemplateGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -2053,6 +2099,7 @@ button:disabled {
 }
 
 .auditStatus,
+.auditScope,
 .auditPriority {
   display: inline-block;
   padding: 5px 8px;
@@ -2063,6 +2110,17 @@ button:disabled {
   font-size: 8px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.auditTemplateBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.auditScope {
+  color: #385d63;
+  background: #dcecef;
 }
 
 .auditStatus.completed {
@@ -2086,6 +2144,7 @@ button:disabled {
 .auditCardActions,
 .auditHeaderActions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
 }
@@ -2156,6 +2215,56 @@ button:disabled {
 .auditEditorTopbar h1 {
   max-width: 760px;
   font-size: clamp(28px, 4vw, 43px);
+}
+
+.auditVersionControls {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.auditVersionControls label {
+  display: grid;
+  gap: 6px;
+}
+
+.auditVersionControls label > span {
+  color: #85857c;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.auditVersionControls select {
+  max-width: 260px;
+  padding: 10px 11px;
+  border: 1px solid #cecec5;
+  border-radius: 8px;
+  color: #3d3d37;
+  background: #f8f7f2;
+  font-size: 10px;
+}
+
+.auditVersionNotice {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #d8d4bd;
+  border-radius: 9px;
+  color: #625b35;
+  background: #f8f3d9;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.auditBuilderFields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.auditBuilderFields:disabled {
+  opacity: 0.78;
 }
 
 .auditBack {
@@ -3070,6 +3179,17 @@ button:disabled {
     align-items: flex-start;
     flex-direction: column;
     gap: 20px;
+  }
+
+  .auditVersionControls {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .auditVersionControls select {
+    width: 100%;
+    max-width: none;
   }
 
   .auditRunList > button,

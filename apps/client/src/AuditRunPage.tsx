@@ -62,6 +62,7 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
         onBack={() => onNavigate("/audits")}
         onSave={save}
         status={detail.audit.status}
+        templateVersion={detail.audit.templateVersion}
       />
       <section className="content auditRunContent">
         {error && <div className="errorBanner">{error}</div>}
@@ -92,12 +93,14 @@ function RunHeader({
   onBack,
   onSave,
   status,
+  templateVersion,
 }: {
   busy: boolean;
   name: string;
   onBack: () => void;
   onSave: (status: "completed" | "in_progress") => Promise<void>;
   status: string;
+  templateVersion: number | null;
 }) {
   return (
     <header className="topbar auditEditorTopbar">
@@ -105,7 +108,10 @@ function RunHeader({
         <button className="auditBack" onClick={onBack} type="button">
           ← Audits
         </button>
-        <p className="eyebrow">Audit · {status.replace("_", " ")}</p>
+        <p className="eyebrow">
+          Audit · {status.replace("_", " ")}
+          {templateVersion ? ` · Template v${templateVersion}` : ""}
+        </p>
         <h1>{name}</h1>
       </div>
       <div className="auditHeaderActions">

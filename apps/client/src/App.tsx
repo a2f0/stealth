@@ -260,6 +260,7 @@ function AuthenticatedWorkspace({
           workspace,
           addAccount,
           access,
+          hasRole(session.user.role, "admin"),
           Boolean(session.user.twoFactorEnabled),
           onSessionChanged,
         )
@@ -380,11 +381,18 @@ function contentForPath(
   workspace: ReturnType<typeof useWorkspaceOrganizations>,
   addAccount: () => void,
   access: ReturnType<typeof useOrganizationAccess>,
+  isPlatformAdmin: boolean,
   twoFactorEnabled: boolean,
   onSecurityChanged: () => Promise<unknown>,
 ) {
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
-    return <Audits onNavigate={navigate} pathname={pathname} />;
+    return (
+      <Audits
+        isPlatformAdmin={isPlatformAdmin}
+        onNavigate={navigate}
+        pathname={pathname}
+      />
+    );
   }
   if (pathname === "/finance") return <Finance />;
   if (pathname === "/businesses") return <Businesses />;

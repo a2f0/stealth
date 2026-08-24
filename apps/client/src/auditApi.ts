@@ -2,6 +2,7 @@ import { apiUrl } from "./config";
 
 export type AuditResponseType = "check" | "text";
 export type AuditStatus = "completed" | "in_progress";
+export type AuditTemplateScope = "global" | "organization";
 
 export interface AuditTemplateItem {
   id: string;
@@ -23,12 +24,29 @@ export interface AuditDefinition {
 
 export interface AuditTemplate {
   createdAt: string;
+  currentVersion: number;
   definition: AuditDefinition;
   description: string;
   id: string;
   name: string;
+  savedAt: string;
+  savedBy: AuditTemplateVersionActor;
+  scope: AuditTemplateScope;
   status: string;
   updatedAt: string;
+  version: number;
+}
+
+export interface AuditTemplateVersionActor {
+  email: string;
+  id: string;
+  name: string;
+}
+
+export interface AuditTemplateVersion {
+  createdAt: string;
+  createdBy: AuditTemplateVersionActor;
+  version: number;
 }
 
 export interface AuditSummary {
@@ -39,6 +57,7 @@ export interface AuditSummary {
   responseCount: number;
   status: AuditStatus;
   templateName: string;
+  templateVersion: number | null;
   updatedAt: string;
 }
 
@@ -51,6 +70,7 @@ export interface AuditRun {
   status: AuditStatus;
   templateId: string | null;
   templateName: string;
+  templateVersion: number | null;
   updatedAt: string;
 }
 
@@ -85,9 +105,12 @@ export async function listAuditTemplates() {
   return body.templates;
 }
 
-export async function createAuditTemplate(name: string) {
+export async function createAuditTemplate(
+  name: string,
+  scope: AuditTemplateScope,
+) {
   const body = await request<{ template: AuditTemplate }>("/templates", {
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, scope }),
     method: "POST",
   });
   return body.template;
@@ -100,18 +123,34 @@ export async function getAuditTemplate(id: string) {
   return body.template;
 }
 
+export async function getAuditTemplateVersion(id: string, version: number) {
+  const body = await request<{ template: AuditTemplate }>(
+    `/templates/${encodeURIComponent(id)}/versions/${version}`,
+  );
+  return body.template;
+}
+
+export async function listAuditTemplateVersions(id: string) {
+  const body = await request<{ versions: AuditTemplateVersion[] }>(
+    `/templates/${encodeURIComponent(id)}/versions`,
+  );
+  return body.versions;
+}
+
 export async function updateAuditTemplate(template: AuditTemplate) {
-  return request<{ updatedAt: string }>(
+  const body = await request<{ template: AuditTemplate }>(
     `/templates/${encodeURIComponent(template.id)}`,
     {
       body: JSON.stringify({
         definition: template.definition,
         description: template.description,
+        expectedCurrentVersion: template.currentVersion,
         name: template.name,
       }),
       method: "PUT",
     },
   );
+  return body.template;
 }
 
 export async function startAudit(templateId: string) {

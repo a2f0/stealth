@@ -22,6 +22,7 @@ interface UnknownRecord {
   assignedTo?: unknown;
   definition?: unknown;
   description?: unknown;
+  expectedCurrentVersion?: unknown;
   id?: unknown;
   itemId?: unknown;
   items?: unknown;
@@ -32,6 +33,7 @@ interface UnknownRecord {
   responses?: unknown;
   responseType?: unknown;
   sections?: unknown;
+  scope?: unknown;
   status?: unknown;
   title?: unknown;
   version?: unknown;

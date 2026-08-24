@@ -8,7 +8,14 @@ import type { AuthVariables } from "./authMiddleware";
 import type { Bindings } from "./types";
 
 interface TemplateResponse {
-  template: { definition: AuditDefinition; id: string; name: string };
+  template: {
+    currentVersion: number;
+    definition: AuditDefinition;
+    id: string;
+    name: string;
+    scope: "global" | "organization";
+    version: number;
+  };
 }
 
 interface TemplateListResponse {
@@ -16,7 +23,13 @@ interface TemplateListResponse {
     definition: AuditDefinition;
     id: string;
     name: string;
+    scope: "global" | "organization";
+    version: number;
   }>;
+}
+
+interface TemplateVersionsResponse {
+  versions: Array<{ createdBy: { id: string }; version: number }>;
 }
 
 interface RunResponse {
@@ -27,7 +40,94 @@ interface IssueResponse {
   issueId: string;
 }
 
+interface TestIdentity {
+  organizationId?: string;
+  role?: string;
+  userId?: string;
+}
+
 describe("audits", () => {
+  it("migrates existing templates and audit provenance into version one", async () => {
+    const database = await createLegacyDatabase();
+    const definition: AuditDefinition = {
+      sections: [
+        {
+          id: "legacy-section",
+          items: [
+            {
+              id: "legacy-item",
+              prompt: "Legacy question",
+              required: true,
+              responseType: "check",
+            },
+          ],
+          title: "Legacy section",
+        },
+      ],
+      version: 1,
+    };
+    database
+      .query(
+        `INSERT INTO audit_templates
+         (id, organization_id, name, description, definition, status,
+          created_by, created_at, updated_at)
+         VALUES (?, ?, ?, '', ?, 'draft', ?, ?, ?)`,
+      )
+      .run(
+        "legacy-template",
+        "org_user-1",
+        "Legacy form",
+        JSON.stringify(definition),
+        "user-1",
+        "2026-08-18T12:00:00.000Z",
+        "2026-08-19T12:00:00.000Z",
+      );
+    database
+      .query(
+        `INSERT INTO audits
+         (id, organization_id, template_id, template_name, definition,
+          responses, status, started_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, '{}', 'in_progress', ?, ?, ?)`,
+      )
+      .run(
+        "legacy-run",
+        "org_user-1",
+        "legacy-template",
+        "Legacy form",
+        JSON.stringify(definition),
+        "user-1",
+        "2026-08-20T12:00:00.000Z",
+        "2026-08-20T12:00:00.000Z",
+      );
+
+    await applyMigration(database, "0022_version_audit_templates.sql");
+
+    expect(
+      database
+        .query(
+          `SELECT scope, organization_id, current_version
+           FROM audit_template_families WHERE id = ?`,
+        )
+        .get("legacy-template"),
+    ).toEqual({
+      current_version: 1,
+      organization_id: "org_user-1",
+      scope: "organization",
+    });
+    expect(
+      database
+        .query(
+          `SELECT template_family_id, template_version_id, template_version
+           FROM audits WHERE id = ?`,
+        )
+        .get("legacy-run"),
+    ).toEqual({
+      template_family_id: "legacy-template",
+      template_version: 1,
+      template_version_id: "legacy-template:v1",
+    });
+  });
+
   it("creates templates, snapshots audit runs, and tracks assigned issues", async () => {
     const fixture = await createFixture();
     const starterResponse = await fixture.app.request(
@@ -49,6 +149,11 @@ describe("audits", () => {
     );
     expect(created.response.status).toBe(201);
     const template = created.body.template;
+    expect(template).toMatchObject({
+      currentVersion: 1,
+      scope: "organization",
+      version: 1,
+    });
     template.definition.sections[0]?.items.push({
       id: "notes-item",
       prompt: "Record observations",
@@ -56,7 +161,7 @@ describe("audits", () => {
       responseType: "text",
     });
 
-    const updated = await jsonRequest(
+    const updated = await jsonRequest<TemplateResponse>(
       fixture,
       `/templates/${template.id}`,
       "PUT",
@@ -67,6 +172,10 @@ describe("audits", () => {
       },
     );
     expect(updated.response.status).toBe(200);
+    expect(updated.body.template).toMatchObject({
+      currentVersion: 2,
+      version: 2,
+    });
 
     const started = await jsonRequest<RunResponse>(
       fixture,
@@ -113,7 +222,11 @@ describe("audits", () => {
       fixture.bindings,
     );
     expect(await detail.json()).toMatchObject({
-      audit: { responses: { [firstItem?.id ?? ""]: "fail" } },
+      audit: {
+        responses: { [firstItem?.id ?? ""]: "fail" },
+        templateId: template.id,
+        templateVersion: 2,
+      },
       issues: [
         {
           assignedTo: "user-1",
@@ -133,43 +246,231 @@ describe("audits", () => {
     );
     expect(resolved.response.status).toBe(200);
   });
+
+  it("keeps every saved template version immutable", async () => {
+    const fixture = await createFixture();
+    const created = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/templates",
+      "POST",
+      { name: "Versioned form", scope: "organization" },
+    );
+    const first = created.body.template;
+    const secondDefinition = structuredClone(first.definition);
+    const firstItem = secondDefinition.sections[0]?.items[0];
+    if (firstItem) firstItem.prompt = "Second version question";
+    const second = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/templates/${first.id}`,
+      "PUT",
+      {
+        definition: secondDefinition,
+        description: "Second version",
+        expectedCurrentVersion: 1,
+        name: first.name,
+      },
+    );
+    expect(second.body.template.version).toBe(2);
+
+    const third = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/templates/${first.id}`,
+      "PUT",
+      {
+        definition: first.definition,
+        description: "Created from the first version",
+        expectedCurrentVersion: 2,
+        name: "Restored form",
+      },
+    );
+    expect(third.body.template).toMatchObject({
+      currentVersion: 3,
+      name: "Restored form",
+      version: 3,
+    });
+
+    const history = await jsonRequest<TemplateVersionsResponse>(
+      fixture,
+      `/templates/${first.id}/versions`,
+      "GET",
+    );
+    expect(history.body.versions.map(({ version }) => version)).toEqual([
+      3, 2, 1,
+    ]);
+    expect(
+      history.body.versions.every(({ createdBy }) => createdBy.id === "user-1"),
+    ).toBe(true);
+
+    const original = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/templates/${first.id}/versions/1`,
+      "GET",
+    );
+    expect(original.body.template).toMatchObject({
+      currentVersion: 3,
+      name: "Versioned form",
+      version: 1,
+    });
+    expect(original.body.template.definition).toEqual(first.definition);
+
+    const stale = await jsonRequest(fixture, `/templates/${first.id}`, "PUT", {
+      definition: first.definition,
+      expectedCurrentVersion: 2,
+      name: "Stale form",
+    });
+    expect(stale.response.status).toBe(409);
+  });
+
+  it("shares global templates without exposing organization templates", async () => {
+    const fixture = await createFixture();
+    const denied = await jsonRequest(fixture, "/templates", "POST", {
+      name: "Unauthorized global form",
+      scope: "global",
+    });
+    expect(denied.response.status).toBe(403);
+
+    const global = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/templates",
+      "POST",
+      { name: "Shared safety form", scope: "global" },
+      { role: "admin" },
+    );
+    expect(global.body.template.scope).toBe("global");
+
+    const local = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/templates",
+      "POST",
+      { name: "Private form", scope: "organization" },
+    );
+    expect(local.response.status).toBe(201);
+
+    const otherOrganization = await jsonRequest<TemplateListResponse>(
+      fixture,
+      "/templates",
+      "GET",
+      undefined,
+      { organizationId: "org_user-2", userId: "user-2" },
+    );
+    expect(otherOrganization.body.templates.map(({ name }) => name)).toContain(
+      "Shared safety form",
+    );
+    expect(
+      otherOrganization.body.templates.map(({ name }) => name),
+    ).not.toContain("Private form");
+
+    const userUpdate = await jsonRequest(
+      fixture,
+      `/templates/${global.body.template.id}`,
+      "PUT",
+      {
+        definition: global.body.template.definition,
+        expectedCurrentVersion: 1,
+        name: "User edit",
+      },
+    );
+    expect(userUpdate.response.status).toBe(403);
+
+    const adminUpdate = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/templates/${global.body.template.id}`,
+      "PUT",
+      {
+        definition: global.body.template.definition,
+        expectedCurrentVersion: 1,
+        name: "Shared safety form v2",
+      },
+      { role: "admin" },
+    );
+    expect(adminUpdate.body.template).toMatchObject({
+      scope: "global",
+      version: 2,
+    });
+
+    const privateRun = await jsonRequest(
+      fixture,
+      `/templates/${local.body.template.id}/runs`,
+      "POST",
+      undefined,
+      { organizationId: "org_user-2", userId: "user-2" },
+    );
+    expect(privateRun.response.status).toBe(404);
+
+    const globalRun = await jsonRequest<RunResponse>(
+      fixture,
+      `/templates/${global.body.template.id}/runs`,
+      "POST",
+      undefined,
+      { organizationId: "org_user-2", userId: "user-2" },
+    );
+    expect(globalRun.response.status).toBe(201);
+    const globalRunDetail = await jsonRequest(
+      fixture,
+      `/runs/${globalRun.body.auditId}`,
+      "GET",
+      undefined,
+      { organizationId: "org_user-2", userId: "user-2" },
+    );
+    expect(globalRunDetail.body).toMatchObject({
+      audit: {
+        templateId: global.body.template.id,
+        templateName: "Shared safety form v2",
+        templateVersion: 2,
+      },
+    });
+  });
 });
 
 async function createFixture() {
+  const database = await createLegacyDatabase();
+  await applyMigration(database, "0022_version_audit_templates.sql");
+  const bindings = bindingsFor(database);
+  const app = testApp();
+  return { app, bindings, database };
+}
+
+async function createLegacyDatabase() {
   const database = new Database(":memory:");
   await applyMigration(database, "0003_create_auth.sql");
-  database
-    .query(
-      `INSERT INTO user
-       (id, name, email, emailVerified, createdAt, updatedAt, role, banned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      "user-1",
-      "Example Person",
-      "person@example.com",
+  const insertUser = database.query(
+    `INSERT INTO user
+     (id, name, email, emailVerified, createdAt, updatedAt, role, banned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const [id, name, email] of [
+    ["user-1", "Example Person", "person@example.com"],
+    ["user-2", "Second Person", "second@example.com"],
+  ] as const) {
+    insertUser.run(
+      id,
+      name,
+      email,
       false,
       "2026-08-18T12:00:00.000Z",
       "2026-08-18T12:00:00.000Z",
       "user",
       false,
     );
+  }
   await applyMigration(database, "0004_create_organizations.sql");
   await applyMigration(database, "0005_create_audits.sql");
-  const bindings = bindingsFor(database);
-  const app = testApp();
-  return { app, bindings };
+  return database;
 }
 
 function testApp() {
   const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>();
   app.use("*", async (context, next) => {
-    context.set("organizationId", "org_user-1");
+    const organizationId =
+      context.req.header("x-test-organization-id") ?? "org_user-1";
+    const userId = context.req.header("x-test-user-id") ?? "user-1";
+    context.set("organizationId", organizationId);
+    context.set("organizationRole", "owner");
     context.set("authSession", {
       user: {
-        defaultOrganizationId: "org_user-1",
-        id: "user-1",
-        role: "user",
+        defaultOrganizationId: organizationId,
+        id: userId,
+        role: context.req.header("x-test-role") ?? "user",
       },
     } as unknown as AuthSession);
     await next();
@@ -183,9 +484,18 @@ async function jsonRequest<T = unknown>(
   path: string,
   method: string,
   body?: unknown,
+  identity?: TestIdentity,
 ) {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  if (identity?.organizationId) {
+    headers["x-test-organization-id"] = identity.organizationId;
+  }
+  if (identity?.role) headers["x-test-role"] = identity.role;
+  if (identity?.userId) headers["x-test-user-id"] = identity.userId;
   const init: RequestInit = {
-    headers: { "content-type": "application/json" },
+    headers,
     method,
   };
   if (body !== undefined) init.body = JSON.stringify(body);
@@ -208,6 +518,11 @@ function bindingsFor(database: Database): Bindings {
 
 function toD1(database: Database) {
   return {
+    batch: async (statements: D1PreparedStatement[]) => {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
+    },
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const statement = {
