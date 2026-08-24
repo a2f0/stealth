@@ -16,12 +16,28 @@ const audits = new Hono<{
 
 interface TemplateRow {
   created_at: string;
+  current_version: number;
   definition: string;
   description: string;
   id: string;
   name: string;
+  scope: "global" | "organization";
   status: string;
   updated_at: string;
+  version: number;
+  version_created_at: string;
+  version_created_by_email: string;
+  version_created_by_id: string;
+  version_created_by_name: string;
+  version_id: string;
+}
+
+interface TemplateVersionRow {
+  created_at: string;
+  created_by_email: string;
+  created_by_id: string;
+  created_by_name: string;
+  version: number;
 }
 
 interface AuditRow {
@@ -31,8 +47,10 @@ interface AuditRow {
   id: string;
   responses: string;
   status: string;
+  template_family_id: string | null;
   template_id: string | null;
   template_name: string;
+  template_version: number | null;
   updated_at: string;
 }
 
@@ -60,15 +78,39 @@ interface MemberRow {
   name: string;
 }
 
+const templateColumns = `
+  family.id,
+  family.scope,
+  family.current_version,
+  family.created_at,
+  family.updated_at,
+  version.id AS version_id,
+  version.version,
+  version.name,
+  version.description,
+  version.definition,
+  version.status,
+  version.created_at AS version_created_at,
+  version.created_by AS version_created_by_id,
+  creator.name AS version_created_by_name,
+  creator.email AS version_created_by_email`;
+
+const templateSelect = `
+  SELECT ${templateColumns}
+  FROM audit_template_families AS family
+  JOIN audit_template_versions AS version
+    ON version.template_id = family.id
+   AND version.version = family.current_version
+  JOIN user AS creator ON creator.id = version.created_by`;
+
 audits.get("/templates", async (context) => {
   const organizationId = context.get("organizationId");
   const userId = context.get("authSession").user.id;
   await ensureStarterTemplate(context.env.DB, organizationId, userId);
   const result = await context.env.DB.prepare(
-    `SELECT id, name, description, definition, status, created_at, updated_at
-     FROM audit_templates
-     WHERE organization_id = ?
-     ORDER BY updated_at DESC`,
+    `${templateSelect}
+     WHERE family.scope = 'global' OR family.organization_id = ?
+     ORDER BY family.updated_at DESC`,
   )
     .bind(organizationId)
     .all<TemplateRow>();
@@ -80,40 +122,94 @@ audits.post("/templates", async (context) => {
   if (!isRecord(body) || !validText(body.name, 200)) {
     return context.json({ error: "A template name is required." }, 400);
   }
+  const scope = parseTemplateScope(body.scope);
+  if (!scope) return context.json({ error: "Template scope is invalid." }, 400);
+  if (
+    scope === "global" &&
+    !hasRole(context.get("authSession").user.role, "admin")
+  ) {
+    return context.json(
+      { error: "Platform administrator access is required." },
+      403,
+    );
+  }
   const definition = blankDefinition();
   const id = crypto.randomUUID();
+  const versionId = crypto.randomUUID();
+  const userId = context.get("authSession").user.id;
   const now = new Date().toISOString();
-  await context.env.DB.prepare(
-    `INSERT INTO audit_templates
-     (id, organization_id, name, description, definition, status, created_by,
-      created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
-  )
-    .bind(
+  await context.env.DB.batch([
+    context.env.DB.prepare(
+      `INSERT INTO audit_template_families
+       (id, scope, organization_id, current_version, created_by, created_at,
+        updated_at)
+       VALUES (?, ?, ?, 1, ?, ?, ?)`,
+    ).bind(
       id,
-      context.get("organizationId"),
+      scope,
+      scope === "organization" ? context.get("organizationId") : null,
+      userId,
+      now,
+      now,
+    ),
+    context.env.DB.prepare(
+      `INSERT INTO audit_template_versions
+       (id, template_id, version, name, description, definition, status,
+        created_by, created_at)
+       VALUES (?, ?, 1, ?, '', ?, 'draft', ?, ?)`,
+    ).bind(
+      versionId,
+      id,
       body.name.trim(),
-      "",
       JSON.stringify(definition),
-      context.get("authSession").user.id,
+      userId,
       now,
-      now,
-    )
-    .run();
-  return context.json(
-    {
-      template: {
-        createdAt: now,
-        definition,
-        description: "",
-        id,
-        name: body.name.trim(),
-        status: "draft",
-        updatedAt: now,
-      },
-    },
-    201,
+    ),
+  ]);
+  const template = await findTemplate(
+    context.env.DB,
+    context.get("organizationId"),
+    id,
   );
+  if (!template) throw new Error("Created template could not be loaded.");
+  return context.json({ template: toTemplate(template) }, 201);
+});
+
+audits.get("/templates/:id/versions", async (context) => {
+  const template = await findTemplate(
+    context.env.DB,
+    context.get("organizationId"),
+    context.req.param("id"),
+  );
+  if (!template) return context.json({ error: "Template not found." }, 404);
+  const result = await context.env.DB.prepare(
+    `SELECT version.version, version.created_at,
+            version.created_by AS created_by_id,
+            creator.name AS created_by_name,
+            creator.email AS created_by_email
+     FROM audit_template_versions AS version
+     JOIN user AS creator ON creator.id = version.created_by
+     WHERE version.template_id = ?
+     ORDER BY version.version DESC`,
+  )
+    .bind(template.id)
+    .all<TemplateVersionRow>();
+  return context.json({ versions: result.results.map(toTemplateVersion) });
+});
+
+audits.get("/templates/:id/versions/:version", async (context) => {
+  const version = positiveInteger(context.req.param("version"));
+  if (!version)
+    return context.json({ error: "Template version is invalid." }, 400);
+  const template = await findTemplate(
+    context.env.DB,
+    context.get("organizationId"),
+    context.req.param("id"),
+    version,
+  );
+  return template
+    ? context.json({ template: toTemplate(template) })
+    : context.json({ error: "Template version not found." }, 404);
 });
 
 audits.get("/templates/:id", async (context) => {
@@ -128,6 +224,21 @@ audits.get("/templates/:id", async (context) => {
 });
 
 audits.put("/templates/:id", async (context) => {
+  const current = await findTemplate(
+    context.env.DB,
+    context.get("organizationId"),
+    context.req.param("id"),
+  );
+  if (!current) return context.json({ error: "Template not found." }, 404);
+  if (
+    current.scope === "global" &&
+    !hasRole(context.get("authSession").user.role, "admin")
+  ) {
+    return context.json(
+      { error: "Platform administrator access is required." },
+      403,
+    );
+  }
   const body: unknown = await context.req.json().catch(() => null);
   if (!isRecord(body) || !validText(body.name, 200)) {
     return context.json({ error: "A template name is required." }, 400);
@@ -144,24 +255,67 @@ audits.put("/templates/:id", async (context) => {
       400,
     );
   }
+  if (
+    isRecord(body) &&
+    body.expectedCurrentVersion !== undefined &&
+    body.expectedCurrentVersion !== current.current_version
+  ) {
+    return context.json(
+      { error: "This template has a newer version. Reload it before saving." },
+      409,
+    );
+  }
+  const version = current.current_version + 1;
+  const versionId = crypto.randomUUID();
+  const userId = context.get("authSession").user.id;
   const now = new Date().toISOString();
-  const result = await context.env.DB.prepare(
-    `UPDATE audit_templates
-     SET name = ?, description = ?, definition = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(
-      body.name.trim(),
-      description,
-      JSON.stringify(definition),
-      now,
-      context.req.param("id"),
+  try {
+    await context.env.DB.batch([
+      context.env.DB.prepare(
+        `UPDATE audit_template_families
+         SET current_version = ?, updated_at = ?
+         WHERE id = ? AND current_version = ?`,
+      ).bind(version, now, current.id, current.current_version),
+      context.env.DB.prepare(
+        `INSERT INTO audit_template_versions
+         (id, template_id, version, name, description, definition, status,
+          created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        versionId,
+        current.id,
+        version,
+        body.name.trim(),
+        description,
+        JSON.stringify(definition),
+        current.status,
+        userId,
+        now,
+      ),
+    ]);
+  } catch (cause) {
+    const latest = await findTemplate(
+      context.env.DB,
       context.get("organizationId"),
-    )
-    .run();
-  return result.meta.changes > 0
-    ? context.json({ updatedAt: now })
-    : context.json({ error: "Template not found." }, 404);
+      current.id,
+    );
+    if (latest && latest.current_version !== current.current_version) {
+      return context.json(
+        {
+          error: "This template has a newer version. Reload it before saving.",
+        },
+        409,
+      );
+    }
+    throw cause;
+  }
+  const saved = await findTemplate(
+    context.env.DB,
+    context.get("organizationId"),
+    current.id,
+  );
+  if (!saved) throw new Error("Saved template could not be loaded.");
+  return context.json({ template: toTemplate(saved) });
 });
 
 audits.post("/templates/:id/runs", async (context) => {
@@ -175,14 +329,17 @@ audits.post("/templates/:id/runs", async (context) => {
   const now = new Date().toISOString();
   await context.env.DB.prepare(
     `INSERT INTO audits
-     (id, organization_id, template_id, template_name, definition, responses,
-      status, started_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, '{}', 'in_progress', ?, ?, ?)`,
+     (id, organization_id, template_id, template_family_id,
+      template_version_id, template_version, template_name, definition,
+      responses, status, started_by, created_at, updated_at)
+     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, '{}', 'in_progress', ?, ?, ?)`,
   )
     .bind(
       id,
       context.get("organizationId"),
       template.id,
+      template.version_id,
+      template.version,
       template.name,
       template.definition,
       context.get("authSession").user.id,
@@ -195,9 +352,10 @@ audits.post("/templates/:id/runs", async (context) => {
 
 audits.get("/runs", async (context) => {
   const result = await context.env.DB.prepare(
-    `SELECT audit.id, audit.template_id, audit.template_name, audit.definition,
-            audit.responses, audit.status, audit.completed_at, audit.created_at,
-            audit.updated_at, COUNT(issue.id) AS issue_count
+    `SELECT audit.id, audit.template_id, audit.template_family_id,
+            audit.template_version, audit.template_name, audit.definition,
+            audit.responses, audit.status, audit.completed_at,
+            audit.created_at, audit.updated_at, COUNT(issue.id) AS issue_count
      FROM audits AS audit
      LEFT JOIN audit_issues AS issue ON issue.audit_id = audit.id
      WHERE audit.organization_id = ?
@@ -340,39 +498,72 @@ async function ensureStarterTemplate(
   organizationId: string,
   userId: string,
 ) {
+  const id = `nfpa70e_${organizationId}`;
   const now = new Date().toISOString();
-  await database
-    .prepare(
-      `INSERT OR IGNORE INTO audit_templates
-       (id, organization_id, name, description, definition, status, created_by,
-        created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'published', ?, ?, ?)`,
-    )
-    .bind(
-      `nfpa70e_${organizationId}`,
-      organizationId,
-      nfpa70eStarter.name,
-      nfpa70eStarter.description,
-      JSON.stringify(nfpa70eStarter.definition),
-      userId,
-      now,
-      now,
-    )
-    .run();
+  await database.batch([
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO audit_template_families
+         (id, scope, organization_id, current_version, created_by, created_at,
+          updated_at)
+         VALUES (?, 'organization', ?, 1, ?, ?, ?)`,
+      )
+      .bind(id, organizationId, userId, now, now),
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO audit_template_versions
+         (id, template_id, version, name, description, definition, status,
+          created_by, created_at)
+         VALUES (?, ?, 1, ?, ?, ?, 'published', ?, ?)`,
+      )
+      .bind(
+        `${id}:v1`,
+        id,
+        nfpa70eStarter.name,
+        nfpa70eStarter.description,
+        JSON.stringify(nfpa70eStarter.definition),
+        userId,
+        now,
+      ),
+  ]);
 }
 
 async function findTemplate(
   database: D1Database,
   organizationId: string,
   id: string,
+  version?: number,
 ) {
-  return database
-    .prepare(
-      `SELECT id, name, description, definition, status, created_at, updated_at
-       FROM audit_templates WHERE id = ? AND organization_id = ?`,
-    )
-    .bind(id, organizationId)
-    .first<TemplateRow>();
+  const versionJoin = version
+    ? "version.version = ?"
+    : "version.version = family.current_version";
+  const statement = database.prepare(
+    `SELECT ${templateColumns}
+     FROM audit_template_families AS family
+     JOIN audit_template_versions AS version
+       ON version.template_id = family.id AND ${versionJoin}
+     JOIN user AS creator ON creator.id = version.created_by
+     WHERE family.id = ?
+       AND (family.scope = 'global' OR family.organization_id = ?)`,
+  );
+  return version
+    ? statement.bind(version, id, organizationId).first<TemplateRow>()
+    : statement.bind(id, organizationId).first<TemplateRow>();
+}
+
+function parseTemplateScope(value: unknown) {
+  if (value === undefined || value === "organization") return "organization";
+  if (value === "global") return "global";
+  return null;
+}
+
+function positiveInteger(value: string) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function hasRole(roles: string, role: string) {
+  return roles.split(",").some((candidate) => candidate.trim() === role);
 }
 
 async function findAudit(
@@ -382,8 +573,9 @@ async function findAudit(
 ) {
   return database
     .prepare(
-      `SELECT id, template_id, template_name, definition, responses, status,
-              completed_at, created_at, updated_at
+      `SELECT id, template_id, template_family_id, template_version,
+              template_name, definition, responses, status, completed_at,
+              created_at, updated_at
        FROM audits WHERE id = ? AND organization_id = ?`,
     )
     .bind(id, organizationId)
@@ -539,12 +731,33 @@ function definitionItemIds(definition: AuditDefinition) {
 function toTemplate(row: TemplateRow) {
   return {
     createdAt: row.created_at,
+    currentVersion: row.current_version,
     definition: storedDefinition(row.definition),
     description: row.description,
     id: row.id,
     name: row.name,
+    savedAt: row.version_created_at,
+    savedBy: {
+      email: row.version_created_by_email,
+      id: row.version_created_by_id,
+      name: row.version_created_by_name,
+    },
+    scope: row.scope,
     status: row.status,
     updatedAt: row.updated_at,
+    version: row.version,
+  };
+}
+
+function toTemplateVersion(row: TemplateVersionRow) {
+  return {
+    createdAt: row.created_at,
+    createdBy: {
+      email: row.created_by_email,
+      id: row.created_by_id,
+      name: row.created_by_name,
+    },
+    version: row.version,
   };
 }
 
@@ -556,8 +769,9 @@ function toAudit(row: AuditRow) {
     id: row.id,
     responses: JSON.parse(row.responses) as Record<string, string>,
     status: row.status,
-    templateId: row.template_id,
+    templateId: row.template_family_id ?? row.template_id,
     templateName: row.template_name,
+    templateVersion: row.template_version,
     updatedAt: row.updated_at,
   };
 }
@@ -572,6 +786,7 @@ function toAuditSummary(row: AuditSummaryRow) {
     responseCount: Object.keys(audit.responses).length,
     status: audit.status,
     templateName: audit.templateName,
+    templateVersion: audit.templateVersion,
     updatedAt: audit.updatedAt,
   };
 }
