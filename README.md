@@ -96,8 +96,8 @@ Authenticated users can build organization-scoped checklist templates at
 raise issues with priorities and optional organization-member assignees. Audit
 runs snapshot their template so later template edits do not rewrite history.
 
-The seeded NFPA 70E readiness checklist is a customizable starting point based
-on broad electrical-safety themes. It is not an official checklist,
+The global NFPA 70E readiness checklist is a shared starting point based on
+broad electrical-safety themes. It is not an official checklist,
 certification, or substitute for the current standard, an employer's required
 risk assessment, or qualified professional judgment. Consult the
 [NFPA 70E publication](https://link.nfpa.org/all-publications/70E/2024) and

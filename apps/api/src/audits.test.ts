@@ -138,7 +138,11 @@ describe("audits", () => {
     expect(starterResponse.status).toBe(200);
     const starterBody = (await starterResponse.json()) as TemplateListResponse;
     expect(starterBody.templates).toHaveLength(1);
-    expect(starterBody.templates[0]?.name).toBe("NFPA 70E readiness checklist");
+    expect(starterBody.templates[0]).toMatchObject({
+      id: "nfpa70e_global",
+      name: "NFPA 70E readiness checklist",
+      scope: "global",
+    });
     expect(starterBody.templates[0]?.definition.sections).toHaveLength(6);
 
     const created = await jsonRequest<TemplateResponse>(
@@ -357,6 +361,11 @@ describe("audits", () => {
       "Shared safety form",
     );
     expect(
+      otherOrganization.body.templates.filter(
+        ({ id }) => id === "nfpa70e_global",
+      ),
+    ).toHaveLength(1);
+    expect(
       otherOrganization.body.templates.map(({ name }) => name),
     ).not.toContain("Private form");
 
@@ -418,6 +427,86 @@ describe("audits", () => {
         templateName: "Shared safety form v2",
         templateVersion: 2,
       },
+    });
+  });
+
+  it("consolidates organization starters into one global template", async () => {
+    const database = await createLegacyDatabase();
+    database.exec("PRAGMA foreign_keys = ON");
+    await applyMigration(database, "0022_version_audit_templates.sql");
+    const definition = JSON.stringify({ sections: [], version: 1 });
+    const insertFamily = database.query(
+      `INSERT INTO audit_template_families
+       (id, scope, organization_id, current_version, created_by, created_at,
+        updated_at)
+       VALUES (?, 'organization', ?, 1, ?, ?, ?)`,
+    );
+    const insertVersion = database.query(
+      `INSERT INTO audit_template_versions
+       (id, template_id, version, name, description, definition, status,
+        created_by, created_at)
+       VALUES (?, ?, 1, 'NFPA 70E readiness checklist', '', ?, 'published',
+        ?, ?)`,
+    );
+    for (const [templateId, organizationId, userId] of [
+      ["nfpa70e_org_user-1", "org_user-1", "user-1"],
+      ["nfpa70e_org_user-2", "org_user-2", "user-2"],
+    ] as const) {
+      insertFamily.run(
+        templateId,
+        organizationId,
+        userId,
+        "2026-08-20T12:00:00.000Z",
+        "2026-08-20T12:00:00.000Z",
+      );
+      insertVersion.run(
+        `${templateId}:v1`,
+        templateId,
+        definition,
+        userId,
+        "2026-08-20T12:00:00.000Z",
+      );
+    }
+    database
+      .query(
+        `INSERT INTO audits
+         (id, organization_id, template_id, template_family_id,
+          template_version_id, template_version, template_name, definition,
+          responses, status, started_by, created_at, updated_at)
+         VALUES ('starter-run', 'org_user-1', NULL, 'nfpa70e_org_user-1',
+          'nfpa70e_org_user-1:v1', 1, 'NFPA 70E readiness checklist', ?, '{}',
+          'in_progress', 'user-1', ?, ?)`,
+      )
+      .run(definition, "2026-08-21T12:00:00.000Z", "2026-08-21T12:00:00.000Z");
+
+    await applyMigration(database, "0023_make_nfpa70e_template_global.sql");
+
+    expect(
+      database
+        .query(
+          `SELECT id, scope, organization_id
+           FROM audit_template_families
+           WHERE id GLOB 'nfpa70e_*'`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "nfpa70e_global",
+        organization_id: null,
+        scope: "global",
+      },
+    ]);
+    expect(
+      database
+        .query(
+          `SELECT template_family_id, template_version_id, template_version
+           FROM audits WHERE id = 'starter-run'`,
+        )
+        .get(),
+    ).toEqual({
+      template_family_id: "nfpa70e_global",
+      template_version: 1,
+      template_version_id: "nfpa70e_global:v1",
     });
   });
 });
