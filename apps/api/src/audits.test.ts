@@ -782,6 +782,43 @@ describe("audits", () => {
         .query(`SELECT id FROM objects WHERE id = 'cascade-object'`)
         .get(),
     ).toBeNull();
+
+    fixture.database
+      .query(
+        `INSERT INTO audit_issues
+         (id, organization_id, audit_id, item_id, title, created_by,
+          created_at, updated_at)
+         VALUES ('upload-race-issue', 'org_user-1', 'cascade-audit', 'item-2',
+                 'Upload race issue', 'user-1', ?, ?)`,
+      )
+      .run(now, now);
+    fixture.storageControl.beforeNextPut = async () => {
+      fixture.database
+        .query(`DELETE FROM audit_issues WHERE id = 'upload-race-issue'`)
+        .run();
+    };
+
+    const racedUpload = await fixture.app.request(
+      "/issues/upload-race-issue/images?filename=race.png",
+      imageUpload(pngBytes()),
+      fixture.bindings,
+    );
+
+    expect(racedUpload.status).toBe(500);
+    expect(fixture.stored.size).toBe(0);
+    expect(
+      fixture.database
+        .query(
+          `SELECT COUNT(*) AS count FROM objects
+           WHERE kind = 'audit_issue_image'`,
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      fixture.database
+        .query(`SELECT COUNT(*) AS count FROM audit_issue_images`)
+        .get(),
+    ).toEqual({ count: 0 });
   });
 
   it("keeps every saved template version immutable", async () => {

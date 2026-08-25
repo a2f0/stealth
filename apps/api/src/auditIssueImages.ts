@@ -348,9 +348,14 @@ async function persistAuditIssueImage(
            upload_lease_expires_at = NULL
        WHERE id = ? AND kind = 'audit_issue_image'
          AND deletion_pending = 1 AND cleanup_token IS NULL
-         AND upload_token = ?`,
+         AND upload_token = ?
+         AND EXISTS (
+           SELECT 1 FROM audit_issue_images AS reservation
+           WHERE reservation.object_id = objects.id
+             AND reservation.issue_id = ?
+         )`,
     )
-      .bind(normalizedSize, image.objectId, image.uploadToken)
+      .bind(normalizedSize, image.objectId, image.uploadToken, image.issueId)
       .run();
     if (Number(activated.meta.changes) !== 1) {
       throw new Error("Issue image reservation could not be activated.");
