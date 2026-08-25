@@ -22,9 +22,9 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
   `"feat(app): add widget"`.
 - Second argument (optional): the expected PR head SHA.
 - Third argument (optional): the expected PR base SHA. The two SHAs must be
-  supplied together. The guarded path requires the base to remain current and
-  invokes GitHub with an exact expected head, so a moved pair is rejected and
-  repository merge policy is enforced by the final API mutation.
+  supplied together. The guarded path uses exact leases on both refs when the
+  base has no policy, or GitHub's policy-enforcing API when strict up-to-date
+  checks or a merge queue also guard the base. A moved pair is rejected.
 - `--keep-branch` (optional flag, position-independent): skip the post-merge
   cleanup (step 4) and stay on the feature branch. Use when the branch is still
   needed locally (e.g. to build a follow-up PR on top of it).
@@ -143,11 +143,13 @@ as-is.
    - Appends the PR reference so the subject ends with a space followed by
      `(#<pr>)`, replacing any existing trailing `(#<n>)` (idempotent on
      re-runs), and asserts the suffix is present before merging.
-   - With both reviewed SHAs, fetches and ancestry-checks the reviewed base,
-     requires a fresh GitHub snapshot to report the same head and base, and runs
-     `gh pr merge --squash --match-head-commit <reviewed-head>`. GitHub performs
-     the final head comparison and enforces draft, review, status, mergeability,
-     and repository policy atomically with its merge mutation.
+   - With both reviewed SHAs, fetches and ancestry-checks the reviewed base and
+     requires a fresh GitHub snapshot to report the same pair. It then inspects
+     effective branch policy. With no policy, it atomically pushes a one-parent
+     squash commit to the base and head refs with exact leases on both reviewed
+     SHAs. With policy, it uses `gh pr merge --match-head-commit` only when
+     strict up-to-date checks or a merge queue also guard base movement. A policy
+     without either condition stops with setup guidance.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
    - Confirms the PR reached the `MERGED` state.

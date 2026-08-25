@@ -150,11 +150,7 @@ async function persistAuditIssueImage(
       },
     });
   } catch (cause) {
-    await attemptPendingObjectCleanup(
-      environment,
-      image.objectId,
-      image.objectKey,
-    );
+    await attemptPendingObjectCleanup(environment, image.objectId);
     throw cause;
   }
   try {
@@ -163,7 +159,11 @@ async function persistAuditIssueImage(
         `INSERT INTO audit_issue_images
          (id, issue_id, object_id, uploaded_by, created_at, slot)
          VALUES (
-           ?, ?, ?, ?, ?,
+           ?, ?,
+           (SELECT id FROM objects
+            WHERE id = ? AND kind = 'audit_issue_image'
+              AND deletion_pending = 1 AND cleanup_token IS NULL),
+           ?, ?,
            (WITH RECURSIVE slots(slot) AS (
               VALUES (1)
               UNION ALL
@@ -188,15 +188,12 @@ async function persistAuditIssueImage(
       ),
       environment.DB.prepare(
         `UPDATE objects SET deletion_pending = 0
-         WHERE id = ? AND kind = 'audit_issue_image'`,
+         WHERE id = ? AND kind = 'audit_issue_image'
+           AND deletion_pending = 1 AND cleanup_token IS NULL`,
       ).bind(image.objectId),
     ]);
   } catch (cause) {
-    await attemptPendingObjectCleanup(
-      environment,
-      image.objectId,
-      image.objectKey,
-    );
+    await attemptPendingObjectCleanup(environment, image.objectId);
     if (await issueHasMaximumImages(environment.DB, image.issueId)) {
       return false;
     }
@@ -307,32 +304,47 @@ async function issueHasMaximumImages(database: D1Database, issueId: string) {
 
 interface PendingAuditIssueObject {
   id: string;
-  object_key: string;
 }
 
 async function deletePendingAuditIssueObject(
   environment: Pick<Bindings, "DB" | "STORAGE">,
   object: PendingAuditIssueObject,
+  abandonedClaimCutoff = new Date(
+    Date.now() - pendingUploadGraceMilliseconds,
+  ).toISOString(),
 ) {
-  await environment.STORAGE.delete(object.object_key);
+  const cleanupToken = crypto.randomUUID();
+  const claimed = await environment.DB.prepare(
+    `UPDATE objects SET cleanup_token = ?, cleanup_claimed_at = ?
+     WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1
+       AND (cleanup_token IS NULL OR datetime(cleanup_claimed_at) <= datetime(?))
+     RETURNING object_key`,
+  )
+    .bind(
+      cleanupToken,
+      new Date().toISOString(),
+      object.id,
+      abandonedClaimCutoff,
+    )
+    .first<{ object_key: string }>();
+  if (!claimed) return false;
+  await environment.STORAGE.delete(claimed.object_key);
   await environment.DB.prepare(
     `DELETE FROM objects
-     WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1`,
+     WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1
+       AND cleanup_token = ?`,
   )
-    .bind(object.id)
+    .bind(object.id, cleanupToken)
     .run();
+  return true;
 }
 
 async function attemptPendingObjectCleanup(
   environment: Pick<Bindings, "DB" | "STORAGE">,
   id: string,
-  objectKey: string,
 ) {
   try {
-    await deletePendingAuditIssueObject(environment, {
-      id,
-      object_key: objectKey,
-    });
+    await deletePendingAuditIssueObject(environment, { id });
   } catch (cause) {
     // The D1 tombstone intentionally remains for the scheduled retry.
     console.error("Audit issue image cleanup deferred.", cause);
@@ -345,20 +357,25 @@ export async function purgePendingAuditIssueImages(
   cutoff = new Date(Date.now() - pendingUploadGraceMilliseconds).toISOString(),
 ) {
   const result = await environment.DB.prepare(
-    `SELECT id, object_key FROM objects
+    `SELECT id FROM objects
      WHERE kind = 'audit_issue_image' AND deletion_pending = 1
        AND datetime(created_at) <= datetime(?)
+       AND (cleanup_token IS NULL OR datetime(cleanup_claimed_at) <= datetime(?))
      ORDER BY created_at ASC, id ASC
      LIMIT ?`,
   )
-    .bind(cutoff, pendingCleanupBatchSize)
+    .bind(cutoff, cutoff, pendingCleanupBatchSize)
     .all<PendingAuditIssueObject>();
   let firstFailure: unknown;
   let purged = 0;
   for (const object of result.results) {
     try {
-      await deletePendingAuditIssueObject(environment, object);
-      purged += 1;
+      const deleted = await deletePendingAuditIssueObject(
+        environment,
+        object,
+        cutoff,
+      );
+      if (deleted) purged += 1;
     } catch (cause) {
       firstFailure ??= cause;
     }
@@ -381,7 +398,9 @@ auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
   // cleanup. A failed R2 delete leaves a durable object tombstone for cron.
   await context.env.DB.batch([
     context.env.DB.prepare(
-      `UPDATE objects SET deletion_pending = 1
+      `UPDATE objects
+       SET deletion_pending = 1, cleanup_token = NULL,
+           cleanup_claimed_at = NULL
        WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
     ).bind(row.object_id, organizationId),
     context.env.DB.prepare(
@@ -391,7 +410,6 @@ auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
   try {
     await deletePendingAuditIssueObject(context.env, {
       id: row.object_id,
-      object_key: row.object_key,
     });
   } catch {
     return context.json({ cleanupPending: true }, 202);

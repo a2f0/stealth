@@ -105,13 +105,13 @@ The subject is validated against the repository's own commitlint setup (the same
 so conventional-commit syntax and the 50-char header limit are enforced
 identically. The two review SHAs must be supplied together. With both present,
 the tool fetches and ancestry-checks the reviewed base, refreshes the PR, and
-requires the same base and head immediately before invoking GitHub's squash
-merge API with `--match-head-commit`. GitHub atomically binds the reviewed head
-and enforces draft, approval, required-status, mergeability, and other repository
-policy as part of the final mutation. A moved base is rejected by the fresh
-preflight and must be synced and re-reviewed. The unguarded form uses the same
-GitHub squash API without the review/base checks for manual use. Backs the
-`squash-merge` compatibility skill.
+inspects GitHub's effective branch policy. An unprotected branch has no policy
+to bypass, so the tool creates a one-parent squash commit and atomically updates
+the base and head refs with exact leases on both reviewed SHAs. A protected
+branch merges through GitHub's policy-enforcing API only when strict up-to-date
+checks or a merge queue also close the base race; a weaker policy is rejected
+with setup guidance. The unguarded form remains GitHub's ordinary squash API for
+manual use. Backs the `squash-merge` compatibility skill.
 
 The tool only merges. Returning to the base branch, fast-forwarding it, and
 deleting the merged branch live in the `squash-merge` skill *around* this call —

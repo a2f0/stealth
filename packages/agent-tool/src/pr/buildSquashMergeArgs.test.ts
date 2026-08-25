@@ -6,7 +6,10 @@ import {
   assertGuardPair,
   assertMergeRequirements,
   assertReviewedAncestry,
+  buildAtomicPushArgs,
+  buildReviewedCommitArgs,
   buildSquashMergeArgs,
+  selectGuardedMergeStrategy,
 } from "./squashMerge";
 
 const pr = { prNumber: "1537", repo: "a2f0/stealth" };
@@ -112,5 +115,61 @@ describe("reviewed merge guards", () => {
     expect(() => assertReviewedAncestry(0)).not.toThrow();
     expect(() => assertReviewedAncestry(1)).toThrow("sync the base");
     expect(() => assertReviewedAncestry(128)).toThrow("Could not verify");
+  });
+
+  test("uses ref CAS only without policy and API only with strict policy", () => {
+    expect(selectGuardedMergeStrategy(null, [])).toBe("atomic_refs");
+    expect(
+      selectGuardedMergeStrategy(
+        { required_status_checks: { strict: true } },
+        [],
+      ),
+    ).toBe("github_api");
+    expect(
+      selectGuardedMergeStrategy(null, [
+        {
+          parameters: { strict_required_status_checks_policy: true },
+          type: "required_status_checks",
+        },
+      ]),
+    ).toBe("github_api");
+    expect(() =>
+      selectGuardedMergeStrategy({ required_pull_request_reviews: {} }, []),
+    ).toThrow("does not require branches to be up to date");
+  });
+
+  test("builds a one-parent squash commit", () => {
+    expect(buildReviewedCommitArgs("tree-1", "base-1")).toEqual([
+      "commit-tree",
+      "tree-1",
+      "-p",
+      "base-1",
+    ]);
+  });
+
+  test("atomically leases both reviewed refs", () => {
+    expect(
+      buildAtomicPushArgs(
+        "https://github.com/a2f0/stealth",
+        "merge-1",
+        "main",
+        "base-1",
+        "feat/widget",
+        "head-1",
+      ),
+    ).toEqual([
+      "-c",
+      "credential.helper=",
+      "-c",
+      "credential.helper=!gh auth git-credential",
+      "push",
+      "--porcelain",
+      "--atomic",
+      "--force-with-lease=refs/heads/main:base-1",
+      "--force-with-lease=refs/heads/feat/widget:head-1",
+      "https://github.com/a2f0/stealth",
+      "merge-1:refs/heads/main",
+      "merge-1:refs/heads/feat/widget",
+    ]);
   });
 });

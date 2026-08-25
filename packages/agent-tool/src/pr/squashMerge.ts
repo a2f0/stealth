@@ -3,8 +3,10 @@ import { spawnSync } from "node:child_process";
 import {
   type PrMergeIdentity,
   prState,
+  repositoryHttpsUrl,
   resolveFreshBaseRef,
   resolvePr,
+  run,
   spawnExitCode,
 } from "../git/prContext";
 import { appendPrNumberSuffix, stripPrNumberSuffix } from "./prNumberSuffix";
@@ -143,6 +145,173 @@ function assertSameMergeTarget(
   }
 }
 
+type GuardedMergeStrategy = "atomic_refs" | "github_api";
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function fieldOf(value: unknown, key: string): unknown {
+  return recordOf(value)?.[key];
+}
+
+/** Select a base-race-safe strategy from GitHub's effective branch policy. */
+export function selectGuardedMergeStrategy(
+  classicProtection: unknown,
+  rules: unknown,
+): GuardedMergeStrategy {
+  const ruleList = Array.isArray(rules) ? rules : [];
+  if (classicProtection === null && ruleList.length === 0) {
+    // With no branch policy to bypass, an atomic two-ref lease is the complete
+    // server-side guard for both reviewed commits.
+    return "atomic_refs";
+  }
+
+  const requiredChecks = recordOf(
+    fieldOf(classicProtection, "required_status_checks"),
+  );
+  const classicStrict = fieldOf(requiredChecks, "strict") === true;
+  const rulesetStrict = ruleList.some((candidate) => {
+    const parameters = recordOf(fieldOf(candidate, "parameters"));
+    const ruleType = fieldOf(candidate, "type");
+    return (
+      ruleType === "merge_queue" ||
+      (ruleType === "required_status_checks" &&
+        fieldOf(parameters, "strict_required_status_checks_policy") === true)
+    );
+  });
+  if (classicStrict || rulesetStrict) return "github_api";
+  throw new Error(
+    "The base branch has merge policy but does not require branches to be up to date. Enable strict status checks or a merge queue before guarded merging.",
+  );
+}
+
+function githubApiJson(path: string, allowUnprotected = false): unknown {
+  const result = spawnSync("gh", ["api", path], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) throw result.error;
+  const stderr = result.stderr ?? "";
+  if (
+    allowUnprotected &&
+    result.status === 1 &&
+    /Branch not protected.*HTTP 404/i.test(stderr)
+  ) {
+    return null;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `gh api ${path} failed (${result.status ?? "signal"}): ${stderr.trim()}`,
+    );
+  }
+  try {
+    return JSON.parse(result.stdout ?? "");
+  } catch {
+    throw new Error(`gh api ${path} returned invalid JSON.`);
+  }
+}
+
+function resolveGuardedMergeStrategy(
+  repo: string,
+  branch: string,
+): GuardedMergeStrategy {
+  const encodedBranch = encodeURIComponent(branch);
+  const protection = githubApiJson(
+    `repos/${repo}/branches/${encodedBranch}/protection`,
+    true,
+  );
+  const rules = githubApiJson(`repos/${repo}/rules/branches/${encodedBranch}`);
+  return selectGuardedMergeStrategy(protection, rules);
+}
+
+/** Build a one-parent squash commit from the exact reviewed tree and base. */
+export function buildReviewedCommitArgs(
+  treeSha: string,
+  expectedBaseSha: string,
+): string[] {
+  return ["commit-tree", treeSha, "-p", expectedBaseSha];
+}
+
+/** Build an atomic compare-and-swap update for both reviewed refs. */
+export function buildAtomicPushArgs(
+  repositoryUrl: string,
+  mergeCommitSha: string,
+  baseRefName: string,
+  expectedBaseSha: string,
+  headRefName: string,
+  expectedHeadSha: string,
+): string[] {
+  const baseRef = `refs/heads/${baseRefName}`;
+  const headRef = `refs/heads/${headRefName}`;
+  return [
+    "-c",
+    "credential.helper=",
+    "-c",
+    "credential.helper=!gh auth git-credential",
+    "push",
+    "--porcelain",
+    "--atomic",
+    `--force-with-lease=${baseRef}:${expectedBaseSha}`,
+    `--force-with-lease=${headRef}:${expectedHeadSha}`,
+    repositoryUrl,
+    `${mergeCommitSha}:${baseRef}`,
+    `${mergeCommitSha}:${headRef}`,
+  ];
+}
+
+function createReviewedMergeCommit(
+  finalSubject: string,
+  expectedHeadSha: string,
+  expectedBaseSha: string,
+): string {
+  const localHead = run("git", ["rev-parse", "--verify", "HEAD^{commit}"]);
+  assertExpectedHeadCommit(expectedHeadSha, localHead);
+  const treeSha = run("git", [
+    "rev-parse",
+    "--verify",
+    `${expectedHeadSha}^{tree}`,
+  ]);
+  return run("git", [
+    ...buildReviewedCommitArgs(treeSha, expectedBaseSha),
+    "-m",
+    finalSubject,
+  ]);
+}
+
+function atomicReviewedMerge(
+  pr: PrMergeIdentity,
+  finalSubject: string,
+  expectedHeadSha: string,
+  expectedBaseSha: string,
+): number {
+  if (pr.headRepository !== pr.repo) {
+    throw new Error(
+      "An unprotected fork PR cannot atomically update refs in two repositories.",
+    );
+  }
+  const mergeCommitSha = createReviewedMergeCommit(
+    finalSubject,
+    expectedHeadSha,
+    expectedBaseSha,
+  );
+  const result = spawnSync(
+    "git",
+    buildAtomicPushArgs(
+      repositoryHttpsUrl(pr.repo),
+      mergeCommitSha,
+      pr.baseRefName,
+      expectedBaseSha,
+      pr.headRefName,
+      expectedHeadSha,
+    ),
+    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: "inherit" },
+  );
+  return spawnExitCode("atomic reviewed merge push", result);
+}
+
 /**
  * Squash through GitHub's policy-enforcing merge API. The API atomically binds
  * the reviewed head; the reviewed base is fetched, ancestry-checked, and
@@ -184,12 +353,26 @@ function guardedReviewedMerge(
   assertExpectedBaseCommit(expectedBaseSha, freshPr.baseRefOid);
   assertMergeRequirements(freshPr);
 
-  const mergeResult = spawnSync(
-    "gh",
-    buildSquashMergeArgs(freshPr, finalSubject, expectedHeadSha),
-    { stdio: "inherit" },
+  const strategy = resolveGuardedMergeStrategy(
+    freshPr.repo,
+    freshPr.baseRefName,
   );
-  const mergeExitCode = spawnExitCode("gh pr merge", mergeResult);
+  const mergeExitCode =
+    strategy === "atomic_refs"
+      ? atomicReviewedMerge(
+          freshPr,
+          finalSubject,
+          expectedHeadSha,
+          expectedBaseSha,
+        )
+      : spawnExitCode(
+          "gh pr merge",
+          spawnSync(
+            "gh",
+            buildSquashMergeArgs(freshPr, finalSubject, expectedHeadSha),
+            { stdio: "inherit" },
+          ),
+        );
   if (mergeExitCode !== 0) return mergeExitCode;
 
   const state = prState(pr.prNumber, pr.repo);

@@ -352,6 +352,28 @@ describe("audits", () => {
         .get(),
     ).toEqual({ count: 1 });
     expect(await purgePendingAuditIssueImages(fixture.bindings)).toBe(0);
+    fixture.databaseControl.activateBeforeCleanupClaim = true;
+    expect(
+      await purgePendingAuditIssueImages(
+        fixture.bindings,
+        "9999-12-31T23:59:59.999Z",
+      ),
+    ).toBe(0);
+    expect(fixture.stored.size).toBe(2);
+    expect(
+      fixture.database
+        .query(
+          `SELECT cleanup_token, deletion_pending FROM objects
+           WHERE filename = 'cleanup-retry.png'`,
+        )
+        .get(),
+    ).toEqual({ cleanup_token: null, deletion_pending: 0 });
+    fixture.database
+      .query(
+        `UPDATE objects SET deletion_pending = 1
+         WHERE filename = 'cleanup-retry.png'`,
+      )
+      .run();
     expect(
       await purgePendingAuditIssueImages(
         fixture.bindings,
@@ -918,8 +940,10 @@ async function createFixture() {
   await applyMigration(database, "0024_create_audit_issue_images.sql");
   await applyMigration(database, "0025_classify_objects.sql");
   await applyMigration(database, "0026_track_object_deletion.sql");
+  await applyMigration(database, "0027_claim_object_cleanup.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
+    activateBeforeCleanupClaim: false,
     failNextImageInsert: false,
     failNextPendingUpdate: false,
   };
@@ -1021,6 +1045,7 @@ function bindingsFor(
   stored: Map<string, Uint8Array> = new Map(),
   storageControl = { failNextDelete: false },
   databaseControl = {
+    activateBeforeCleanupClaim: false,
     failNextImageInsert: false,
     failNextPendingUpdate: false,
   },
@@ -1066,7 +1091,11 @@ function storageFor(
 
 function toD1(
   database: Database,
-  control = { failNextImageInsert: false, failNextPendingUpdate: false },
+  control = {
+    activateBeforeCleanupClaim: false,
+    failNextImageInsert: false,
+    failNextPendingUpdate: false,
+  },
 ) {
   let batchTail: Promise<void> = Promise.resolve();
   return {
@@ -1106,7 +1135,7 @@ function toD1(
         }
         if (
           control.failNextPendingUpdate &&
-          query.includes("UPDATE objects SET deletion_pending = 1")
+          query.includes("SET deletion_pending = 1")
         ) {
           control.failNextPendingUpdate = false;
           throw new Error("Transient D1 update failure");
@@ -1123,7 +1152,27 @@ function toD1(
           values = nextValues;
           return statement;
         },
-        first: async () => database.query(query).get(...values),
+        first: async () => {
+          if (
+            control.activateBeforeCleanupClaim &&
+            query.includes("UPDATE objects SET cleanup_token")
+          ) {
+            control.activateBeforeCleanupClaim = false;
+            const objectId = values[2];
+            if (typeof objectId !== "string") {
+              throw new Error("Cleanup claim object id missing");
+            }
+            database
+              .query(
+                `UPDATE objects
+                 SET deletion_pending = 0, cleanup_token = NULL,
+                     cleanup_claimed_at = NULL
+                 WHERE id = ?`,
+              )
+              .run(objectId);
+          }
+          return database.query(query).get(...values);
+        },
         run: async () => runSync(),
         runSync,
       };

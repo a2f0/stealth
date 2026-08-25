@@ -236,9 +236,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    Then invoke the `squash-merge` compatibility skill, passing
    `REVIEWED_SHA` as its **second (head-SHA) argument** and
    `REVIEWED_BASE_SHA` as its **third (base-SHA) argument**. The guarded merge
-   requires the reviewed base to remain current and invokes GitHub's squash API
-   with an exact expected head. GitHub performs the final head check and enforces
-   repository merge policy atomically with the merge mutation.
+   selects a server-side strategy from the effective branch policy: exact
+   two-ref leases when unprotected, or GitHub's API when strict up-to-date policy
+   also guards the reviewed base. Weaker protected configurations stop safely.
 
    That skill also owns the post-merge cleanup: once GitHub confirms `MERGED`, it
    returns to the PR's base branch, fast-forwards it, verifies it contains the
@@ -318,10 +318,10 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
   interpreted.
 - **The merged head and base are the reviewed pair** — `cross-agent-review`
   reports the exact head and base it reviewed. This skill re-verifies both once
-  the PR is open and immediately before merge; `squash-merge` gives GitHub the
-  reviewed head as an atomic match condition and requires the reviewed base to
-  remain current at its final preflight. A head or base change therefore sends
-  the flow back through sync and review. (A message-only
+  the PR is open and immediately before merge; `squash-merge` then uses exact
+  leases on both reviewed refs or a strict server policy that guards both sides.
+  A head or base change therefore sends the flow back through sync and review.
+  (A message-only
   co-author strip keeps it: step 3 checks tree and merge-base identity, then
   re-pins `REVIEWED_SHA`.) The lone exception
   is an explicit `--merge-anyway` over a could-not-run verdict, where the bound
