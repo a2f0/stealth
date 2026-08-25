@@ -56,6 +56,7 @@ type ReadAtRef = (rootDir: string, ref: string, filename: string) => string;
 function gitShow(rootDir: string, ref: string, filename: string): string {
   return execFileSync("git", ["-C", rootDir, "show", `${ref}:${filename}`], {
     encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
   });
 }
 
