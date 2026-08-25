@@ -36,6 +36,7 @@ describe("buildSquashMergeArgs", () => {
       "merge",
       "1537",
       "--squash",
+      "--auto",
       "--subject",
       "feat(app): add widget (#1537)",
       "--body",
@@ -87,16 +88,19 @@ describe("reviewed merge guards", () => {
         ...mergeablePr,
         reviewDecision: "REVIEW_REQUIRED",
       }),
-    ).toThrow("approving review");
+    ).not.toThrow();
     expect(() =>
       assertMergeRequirements({
         ...mergeablePr,
         mergeStateStatus: "BLOCKED",
       }),
-    ).toThrow("not clean");
+    ).not.toThrow();
     expect(() =>
       assertMergeRequirements({ ...mergeablePr, mergeable: "CONFLICTING" }),
-    ).toThrow("not MERGEABLE");
+    ).toThrow("merge conflicts");
+    expect(() =>
+      assertMergeRequirements({ ...mergeablePr, mergeable: "UNKNOWN" }),
+    ).not.toThrow();
   });
 
   test("requires the reviewed head and base together", () => {

@@ -132,13 +132,14 @@ describe("audit issue API", () => {
         },
         url: `${apiUrl}/api/audits/issues/issue%2Fid`,
       });
-      expect(requests[1]?.init?.body).toBeInstanceOf(FormData);
-      expect(requests[1]?.init?.headers).toBeUndefined();
-      const form = requests[1]?.init?.body as FormData;
-      expect((form.get("file") as File).name).toBe("panel.png");
       expect(requests[1]).toMatchObject({
-        init: { credentials: "include", method: "POST" },
-        url: `${apiUrl}/api/audits/issues/issue%2Fid/images`,
+        init: {
+          body: file,
+          credentials: "include",
+          headers: { "Content-Type": "image/png" },
+          method: "POST",
+        },
+        url: `${apiUrl}/api/audits/issues/issue%2Fid/images?filename=panel.png`,
       });
       expect(requests[2]).toMatchObject({
         init: { credentials: "include", method: "DELETE" },

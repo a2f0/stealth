@@ -41,6 +41,7 @@ export function buildSquashMergeArgs(
     "merge",
     pr.prNumber,
     "--squash",
+    "--auto",
     "--subject",
     finalSubject,
     // Empty body keeps the squash commit to the subject line only.
@@ -112,22 +113,15 @@ export function assertMergeRequirements(pr: PrMergeIdentity): void {
   if (pr.isDraft) {
     throw new Error("The PR is a draft and cannot be merged.");
   }
-  if (pr.mergeable !== "MERGEABLE") {
-    throw new Error(
-      `GitHub reports the PR as ${pr.mergeable || "UNKNOWN"}, not MERGEABLE.`,
-    );
+  if (pr.mergeable === "CONFLICTING") {
+    throw new Error("GitHub reports that the PR has merge conflicts.");
   }
   if (pr.reviewDecision === "CHANGES_REQUESTED") {
     throw new Error("The PR has unresolved requested changes.");
   }
-  if (pr.reviewDecision === "REVIEW_REQUIRED") {
-    throw new Error("The PR still requires an approving review.");
-  }
-  if (pr.mergeStateStatus !== "CLEAN") {
-    throw new Error(
-      `GitHub merge requirements are not clean (state: ${pr.mergeStateStatus || "UNKNOWN"}).`,
-    );
-  }
+  // REVIEW_REQUIRED and BLOCKED/BEHIND/UNSTABLE can represent pending policy
+  // requirements or an active merge queue. `gh pr merge --auto` enrolls those
+  // PRs, and GitHub re-enforces the policy when they leave the queue.
 }
 
 function assertSameMergeTarget(

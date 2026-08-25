@@ -228,11 +228,13 @@ export function updateAuditIssue(
 }
 
 export function uploadAuditIssueImage(issueId: string, file: File) {
-  const form = new FormData();
-  form.set("file", file);
   return request<{ image: AuditIssueImage }>(
-    `/issues/${encodeURIComponent(issueId)}/images`,
-    { body: form, method: "POST" },
+    `/issues/${encodeURIComponent(issueId)}/images?filename=${encodeURIComponent(file.name)}`,
+    {
+      body: file,
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      method: "POST",
+    },
   );
 }
 
@@ -261,7 +263,7 @@ async function request<T>(path: string, init?: RequestInit) {
     ...init,
     credentials: "include",
   };
-  if (init?.body && !(init.body instanceof FormData)) {
+  if (init?.body && !(init.body instanceof FormData) && !init.headers) {
     requestInit.headers = { "Content-Type": "application/json" };
   }
   const response = await fetch(`${apiUrl}/api/audits${path}`, requestInit);

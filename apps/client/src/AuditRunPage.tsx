@@ -316,11 +316,8 @@ function IssueForm({
         priority,
         title,
       });
-      const uploads = await Promise.allSettled(
-        images.map((image) => uploadAuditIssueImage(issueId, image)),
-      );
-      const failedUploads = uploads.filter(
-        ({ status }) => status === "rejected",
+      const failedUploads = (
+        await uploadIssueImagesSequentially(issueId, images)
       ).length;
       await onCreated(
         failedUploads > 0
@@ -589,13 +586,8 @@ function IssueCard({
     setBusy(true);
     onError(undefined);
     try {
-      const uploads = await Promise.allSettled(
-        selected.map((file) => uploadAuditIssueImage(issue.id, file)),
-      );
-      const failure = uploads.find(({ status }) => status === "rejected");
-      if (failure?.status === "rejected") {
-        onError(messageFrom(failure.reason));
-      }
+      const [failure] = await uploadIssueImagesSequentially(issue.id, selected);
+      if (failure !== undefined) onError(messageFrom(failure));
       await onChange();
     } catch (cause) {
       onError(messageFrom(cause));
@@ -670,6 +662,21 @@ function IssueCard({
       </div>
     </article>
   );
+}
+
+async function uploadIssueImagesSequentially(issueId: string, files: File[]) {
+  const failures: unknown[] = [];
+  // Keep at most one decoded upload in a Worker isolate for this browser. A
+  // user can select ten 10 MB files, so firing them all at once can exhaust the
+  // isolate's shared memory before image normalization completes.
+  for (const file of files) {
+    try {
+      await uploadAuditIssueImage(issueId, file);
+    } catch (cause) {
+      failures.push(cause);
+    }
+  }
+  return failures;
 }
 
 function IssueImages({

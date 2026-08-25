@@ -76,7 +76,9 @@ describe("audits", () => {
         controller.close();
       },
     });
-    expect(await readBodyWithLimit(exact, 3)).toEqual(
+    const exactBytes = await readBodyWithLimit(exact, 3);
+    expect(exactBytes).not.toBeNull();
+    expect(new Uint8Array(exactBytes as ArrayBuffer)).toEqual(
       Uint8Array.from([1, 2, 3]),
     );
   });
@@ -277,31 +279,19 @@ describe("audits", () => {
     );
     expect(reassigned.response.status).toBe(200);
 
-    const invalidImageForm = new FormData();
-    invalidImageForm.set(
-      "file",
-      new File(["not an image"], "fake.png", { type: "image/png" }),
-    );
     const invalidImage = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images`,
-      { body: invalidImageForm, method: "POST" },
+      `/issues/${issue.body.issueId}/images?filename=fake.png`,
+      imageUpload("not an image"),
       fixture.bindings,
     );
     expect(invalidImage.status).toBe(400);
     expect(fixture.stored.size).toBe(0);
 
-    const truncatedImageForm = new FormData();
-    truncatedImageForm.set(
-      "file",
-      new File(
-        [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
-        "truncated.png",
-        { type: "image/png" },
-      ),
-    );
     const truncatedImage = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images`,
-      { body: truncatedImageForm, method: "POST" },
+      `/issues/${issue.body.issueId}/images?filename=truncated.png`,
+      imageUpload(
+        new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      ),
       fixture.bindings,
     );
     expect(truncatedImage.status).toBe(400);
@@ -309,22 +299,17 @@ describe("audits", () => {
 
     fixture.bindings.IMAGES = imagesFor({ width: 12_001 });
     const oversizedDimensions = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images`,
-      { body: pngForm("too-wide.png"), method: "POST" },
+      `/issues/${issue.body.issueId}/images?filename=too-wide.png`,
+      imageUpload(pngBytes()),
       fixture.bindings,
     );
     expect(oversizedDimensions.status).toBe(400);
     expect(fixture.stored.size).toBe(0);
     fixture.bindings.IMAGES = imagesFor();
 
-    const imageForm = new FormData();
-    imageForm.set(
-      "file",
-      new File([pngBytes()], "electrical-panel.jpg", { type: "image/jpeg" }),
-    );
     const uploaded = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images`,
-      { body: imageForm, method: "POST" },
+      `/issues/${issue.body.issueId}/images?filename=electrical-panel.jpg`,
+      imageUpload(pngBytes(), "image/jpeg"),
       fixture.bindings,
     );
     expect(uploaded.status).toBe(201);
@@ -337,8 +322,8 @@ describe("audits", () => {
     fixture.databaseControl.failNextImageInsert = true;
     fixture.storageControl.failNextDelete = true;
     const failedUploadCleanup = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images`,
-      { body: pngForm("cleanup-retry.png"), method: "POST" },
+      `/issues/${issue.body.issueId}/images?filename=cleanup-retry.png`,
+      imageUpload(pngBytes()),
       fixture.bindings,
     );
     expect(failedUploadCleanup.status).toBe(500);
@@ -385,11 +370,8 @@ describe("audits", () => {
     const concurrentUploads = await Promise.all(
       Array.from({ length: 10 }, (_, index) =>
         fixture.app.request(
-          `/issues/${issue.body.issueId}/images`,
-          {
-            body: pngForm(`concurrent-${index}.png`),
-            method: "POST",
-          },
+          `/issues/${issue.body.issueId}/images?filename=concurrent-${index}.png`,
+          imageUpload(pngBytes()),
           fixture.bindings,
         ),
       ),
@@ -413,14 +395,9 @@ describe("audits", () => {
       fixture.database.query(`SELECT DISTINCT kind FROM objects`).all(),
     ).toEqual([{ kind: "audit_issue_image" }]);
 
-    const fullIssueInvalidUpload = new FormData();
-    fullIssueInvalidUpload.set(
-      "file",
-      new File(["not an image"], "invalid.png", { type: "image/png" }),
-    );
     const rejectedBeforeProcessing = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images`,
-      { body: fullIssueInvalidUpload, method: "POST" },
+      `/issues/${issue.body.issueId}/images?filename=invalid.png`,
+      imageUpload("not an image"),
       fixture.bindings,
     );
     expect(rejectedBeforeProcessing.status).toBe(409);
@@ -554,8 +531,8 @@ describe("audits", () => {
     );
     expect(pendingImage.status).toBe(404);
     const replacementImage = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images`,
-      { body: pngForm("replacement.png"), method: "POST" },
+      `/issues/${issue.body.issueId}/images?filename=replacement.png`,
+      imageUpload(pngBytes()),
       fixture.bindings,
     );
     expect(replacementImage.status).toBe(201);
@@ -1181,10 +1158,12 @@ function toD1(
   } as unknown as D1Database;
 }
 
-function pngForm(filename: string) {
-  const form = new FormData();
-  form.set("file", new File([pngBytes()], filename, { type: "image/png" }));
-  return form;
+function imageUpload(bytes: BodyInit, contentType = "image/png"): RequestInit {
+  return {
+    body: bytes,
+    headers: { "content-type": contentType },
+    method: "POST",
+  };
 }
 
 function pngBytes() {
