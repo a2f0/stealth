@@ -123,6 +123,104 @@ describe("audits", () => {
     expect(timeoutOutcome).toBeInstanceOf(ImageUploadReadTimeoutError);
   });
 
+  it("normalizes and stores every supported issue image format", async () => {
+    const fixture = await createFixture();
+    const now = "2026-08-25T12:00:00.000Z";
+    fixture.database
+      .query(
+        `INSERT INTO audits
+         (id, organization_id, template_name, definition, responses, status,
+          started_by, created_at, updated_at)
+         VALUES ('format-audit', 'org_user-1', 'Format test', '{}', '{}',
+                 'in_progress', 'user-1', ?, ?)`,
+      )
+      .run(now, now);
+    fixture.database
+      .query(
+        `INSERT INTO audit_issues
+         (id, organization_id, audit_id, item_id, title, created_by,
+          created_at, updated_at)
+         VALUES ('format-issue', 'org_user-1', 'format-audit', 'item',
+                 'Format test issue', 'user-1', ?, ?)`,
+      )
+      .run(now, now);
+
+    const formats = [
+      {
+        bytes: pngBytes(),
+        contentType: "image/png",
+        extension: "png",
+      },
+      {
+        bytes: jpegBytes(),
+        contentType: "image/jpeg",
+        extension: "jpg",
+      },
+      {
+        bytes: gifBytes(),
+        contentType: "image/gif",
+        extension: "gif",
+      },
+      {
+        bytes: webpBytes(),
+        contentType: "image/webp",
+        extension: "webp",
+      },
+    ] as const;
+
+    for (const format of formats) {
+      let outputOptions: ImageOutputOptions | undefined;
+      fixture.bindings.IMAGES = imagesFor({
+        expectedBytes: format.bytes,
+        format: format.contentType,
+        onOutput: (options) => {
+          outputOptions = options;
+        },
+      });
+      const uploaded = await fixture.app.request(
+        `/issues/format-issue/images?filename=evidence.original`,
+        imageUpload(format.bytes, format.contentType),
+        fixture.bindings,
+      );
+      expect(uploaded.status).toBe(201);
+      const body = (await uploaded.json()) as IssueImageResponse;
+      expect(body.image).toMatchObject({
+        contentType: format.contentType,
+        filename: `evidence.${format.extension}`,
+      });
+      expect(outputOptions).toEqual({
+        anim: false,
+        format: format.contentType,
+      });
+
+      const object = fixture.database
+        .query(
+          `SELECT object_key, content_type, filename, deletion_pending
+           FROM objects WHERE filename = ?`,
+        )
+        .get(`evidence.${format.extension}`) as {
+        content_type: string;
+        deletion_pending: number;
+        filename: string;
+        object_key: string;
+      };
+      expect(object).toMatchObject({
+        content_type: format.contentType,
+        deletion_pending: 0,
+        filename: `evidence.${format.extension}`,
+      });
+      expect(fixture.stored.get(object.object_key)).toEqual(format.bytes);
+
+      const storedImage = await fixture.app.request(
+        `/issues/format-issue/images/${body.image.id}`,
+        undefined,
+        fixture.bindings,
+      );
+      expect(storedImage.status).toBe(200);
+      expect(storedImage.headers.get("content-type")).toBe(format.contentType);
+    }
+  });
+
   it("bounds concurrent maximum-size image upload memory", async () => {
     const fixture = await createFixture();
     const now = "2026-08-25T12:00:00.000Z";
@@ -1648,20 +1746,39 @@ function imageUpload(
 }
 
 function pngBytes() {
-  return Uint8Array.from(
-    atob(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-    ),
-    (character) => character.charCodeAt(0),
+  return decodeImageFixture(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   );
+}
+
+function jpegBytes() {
+  return decodeImageFixture(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EB//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EB//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EB//2Q==",
+  );
+}
+
+function gifBytes() {
+  return decodeImageFixture("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==");
+}
+
+function webpBytes() {
+  return decodeImageFixture(
+    "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA",
+  );
+}
+
+function decodeImageFixture(encoded: string) {
+  return Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
 }
 
 function imagesFor(
   dimensions: {
     expectedBytes?: Uint8Array;
+    format?: "image/gif" | "image/jpeg" | "image/png" | "image/webp";
     height?: number;
     normalizedBytes?: Uint8Array;
     onInfo?: () => Promise<void> | void;
+    onOutput?: (options: ImageOutputOptions) => void;
     onTransform?: (options: Record<string, unknown>) => void;
     width?: number;
   } = {},
@@ -1683,7 +1800,7 @@ function imagesFor(
       const actual = await readValidPng(stream);
       return {
         fileSize: actual.length,
-        format: "image/png",
+        format: dimensions.format ?? "image/png",
         height: dimensions.height ?? 1,
         width: dimensions.width ?? 1,
       };
@@ -1696,12 +1813,16 @@ function imagesFor(
           return transformer;
         },
         output: async (options: ImageOutputOptions) => {
-          if (
-            options.anim !== false ||
-            (options.format !== "image/png" && options.format !== "image/webp")
-          ) {
+          const supportedOutput = [
+            "image/gif",
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+          ].includes(options.format);
+          if (options.anim !== false || !supportedOutput) {
             throw new Error("Test images must be normalized without animation");
           }
+          dimensions.onOutput?.(options);
           const actualBytes = await actual;
           const normalized = dimensions.normalizedBytes ?? actualBytes;
           return {
