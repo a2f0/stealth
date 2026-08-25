@@ -57,10 +57,7 @@ auditIssueImages.post("/:issueId/images", async (context) => {
 
   const id = crypto.randomUUID();
   const objectId = crypto.randomUUID();
-  const filename = normalizeFilename(
-    file.name,
-    `issue-image.${imageType.extension}`,
-  );
+  const filename = normalizedImageFilename(file.name, imageType.extension);
   const objectKey =
     `organizations/${organizationId}/audit-issues/${issue.id}/` +
     `${objectId}/${filename}`;
@@ -103,6 +100,15 @@ interface AuditIssueImageInsert {
   objectKey: string;
   organizationId: string;
   userId: string;
+}
+
+function normalizedImageFilename(filename: string, extension: string) {
+  const normalized = normalizeFilename(filename, "issue-image");
+  const dotIndex = normalized.lastIndexOf(".");
+  const stem = dotIndex > 0 ? normalized.slice(0, dotIndex) : normalized;
+  const suffix = `.${extension}`;
+  const trimmedStem = stem.slice(0, 255 - suffix.length) || "issue-image";
+  return `${trimmedStem}${suffix}`;
 }
 
 async function persistAuditIssueImage(

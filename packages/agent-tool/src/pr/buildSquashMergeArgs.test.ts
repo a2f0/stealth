@@ -4,6 +4,7 @@ import {
   assertExpectedBaseCommit,
   assertExpectedHeadCommit,
   assertGuardPair,
+  assertMergeRequirements,
   assertReviewedAncestry,
   buildAtomicPushArgs,
   buildReviewedCommitArgs,
@@ -11,6 +12,20 @@ import {
 } from "./squashMerge";
 
 const pr = { prNumber: "1537", repo: "a2f0/stealth" };
+const mergeablePr = {
+  ...pr,
+  baseRefName: "main",
+  baseRefOid: "base-1",
+  branch: "feat/widget",
+  headRefName: "feat/widget",
+  headRefOid: "head-1",
+  headRepository: "a2f0/stealth",
+  isDraft: false,
+  mergeable: "MERGEABLE",
+  mergeStateStatus: "CLEAN",
+  reviewDecision: "APPROVED",
+  title: "feat: x",
+};
 
 describe("buildSquashMergeArgs", () => {
   test("builds a subject-only squash with an empty body", () => {
@@ -60,6 +75,28 @@ describe("assertExpectedBaseCommit", () => {
 });
 
 describe("reviewed merge guards", () => {
+  test("enforces GitHub draft, review, and status requirements", () => {
+    expect(() => assertMergeRequirements(mergeablePr)).not.toThrow();
+    expect(() =>
+      assertMergeRequirements({ ...mergeablePr, isDraft: true }),
+    ).toThrow("draft");
+    expect(() =>
+      assertMergeRequirements({
+        ...mergeablePr,
+        reviewDecision: "REVIEW_REQUIRED",
+      }),
+    ).toThrow("approving review");
+    expect(() =>
+      assertMergeRequirements({
+        ...mergeablePr,
+        mergeStateStatus: "BLOCKED",
+      }),
+    ).toThrow("not clean");
+    expect(() =>
+      assertMergeRequirements({ ...mergeablePr, mergeable: "CONFLICTING" }),
+    ).toThrow("not MERGEABLE");
+  });
+
   test("requires the reviewed head and base together", () => {
     expect(() => assertGuardPair("head", "base")).not.toThrow();
     expect(() => assertGuardPair(undefined, undefined)).not.toThrow();

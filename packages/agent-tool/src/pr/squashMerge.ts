@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 
 import {
+  type PrMergeIdentity,
   prState,
   repositoryHttpsUrl,
   resolveFreshBaseRef,
@@ -104,6 +105,44 @@ export function assertReviewedAncestry(status: number | null): void {
   throw new Error(
     `Could not verify reviewed base ancestry (git exited ${status ?? "on a signal"}).`,
   );
+}
+
+/** Refuse to use a direct atomic push to bypass GitHub's PR requirements. */
+export function assertMergeRequirements(pr: PrMergeIdentity): void {
+  if (pr.isDraft) {
+    throw new Error("The PR is a draft and cannot be merged.");
+  }
+  if (pr.mergeable !== "MERGEABLE") {
+    throw new Error(
+      `GitHub reports the PR as ${pr.mergeable || "UNKNOWN"}, not MERGEABLE.`,
+    );
+  }
+  if (pr.reviewDecision === "CHANGES_REQUESTED") {
+    throw new Error("The PR has unresolved requested changes.");
+  }
+  if (pr.reviewDecision === "REVIEW_REQUIRED") {
+    throw new Error("The PR still requires an approving review.");
+  }
+  if (pr.mergeStateStatus !== "CLEAN") {
+    throw new Error(
+      `GitHub merge requirements are not clean (state: ${pr.mergeStateStatus || "UNKNOWN"}).`,
+    );
+  }
+}
+
+function assertSameMergeTarget(
+  initial: PrMergeIdentity,
+  fresh: PrMergeIdentity,
+): void {
+  if (
+    initial.prNumber !== fresh.prNumber ||
+    initial.repo !== fresh.repo ||
+    initial.baseRefName !== fresh.baseRefName ||
+    initial.headRefName !== fresh.headRefName ||
+    initial.headRepository !== fresh.headRepository
+  ) {
+    throw new Error("The PR merge target changed during guarded merge setup.");
+  }
 }
 
 /** Build a squash commit with the reviewed base as its sole parent. */
@@ -222,14 +261,23 @@ function atomicReviewedMerge(
     return 1;
   }
 
+  // Refresh immediately before the ref transaction. This explicitly enforces
+  // draft, review, mergeability, and required-status policy even when the
+  // authenticated account could bypass those protections with a direct push.
+  const freshPr = resolvePr();
+  assertSameMergeTarget(pr, freshPr);
+  assertExpectedHeadCommit(expectedHeadSha, freshPr.headRefOid);
+  assertExpectedBaseCommit(expectedBaseSha, freshPr.baseRefOid);
+  assertMergeRequirements(freshPr);
+
   const pushResult = spawnSync(
     "git",
     buildAtomicPushArgs(
-      repositoryHttpsUrl(pr.repo),
+      repositoryHttpsUrl(freshPr.repo),
       mergeCommitSha,
-      pr.baseRefName,
+      freshPr.baseRefName,
       expectedBaseSha,
-      pr.headRefName,
+      freshPr.headRefName,
       expectedHeadSha,
     ),
     { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: "inherit" },

@@ -7,12 +7,16 @@ export interface PrIdentity {
   readonly title: string;
 }
 
-interface PrMergeIdentity extends PrIdentity {
+export interface PrMergeIdentity extends PrIdentity {
   readonly baseRefName: string;
   readonly baseRefOid: string;
   readonly headRefName: string;
   readonly headRefOid: string;
   readonly headRepository: string;
+  readonly isDraft: boolean;
+  readonly mergeable: string;
+  readonly mergeStateStatus: string;
+  readonly reviewDecision: string;
 }
 
 export interface PrContext extends PrIdentity {
@@ -64,6 +68,10 @@ function fieldOf(value: unknown, key: string): unknown {
 function stringField(source: string, key: string): string {
   const value = fieldOf(safeParse(source), key);
   return typeof value === "string" ? value : "";
+}
+
+function booleanField(source: string, key: string): boolean {
+  return fieldOf(safeParse(source), key) === true;
 }
 
 function nestedStringField(
@@ -338,7 +346,7 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     "view",
     prNumber,
     "--json",
-    "title,baseRefName,baseRefOid,headRefName,headRefOid,headRepository",
+    "title,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isDraft,mergeable,mergeStateStatus,reviewDecision",
     "-R",
     repo,
   ]);
@@ -357,6 +365,10 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
       "headRepository",
       "nameWithOwner",
     ),
+    isDraft: booleanField(viewRaw, "isDraft"),
+    mergeable: stringField(viewRaw, "mergeable"),
+    mergeStateStatus: stringField(viewRaw, "mergeStateStatus"),
+    reviewDecision: stringField(viewRaw, "reviewDecision"),
   };
 }
 
@@ -397,6 +409,10 @@ export function resolvePr(): PrMergeIdentity {
     headRefName: view.headRefName,
     headRefOid: view.headRefOid,
     headRepository: view.headRepository,
+    isDraft: view.isDraft,
+    mergeable: view.mergeable,
+    mergeStateStatus: view.mergeStateStatus,
+    reviewDecision: view.reviewDecision,
   };
 }
 

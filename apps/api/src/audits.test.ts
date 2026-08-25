@@ -320,7 +320,7 @@ describe("audits", () => {
     const imageForm = new FormData();
     imageForm.set(
       "file",
-      new File([pngBytes()], "electrical-panel.png", { type: "image/png" }),
+      new File([pngBytes()], "electrical-panel.jpg", { type: "image/jpeg" }),
     );
     const uploaded = await fixture.app.request(
       `/issues/${issue.body.issueId}/images`,

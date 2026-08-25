@@ -149,7 +149,10 @@ as-is.
      `gh auth git-credential`; no separate SSH setup is assumed. The remote
      rejects either intervening update, and moving the feature ref onto the
      squash commit makes the PR head reachable from the base. Guarded fork PRs
-     stop because refs in two repositories cannot share one atomic push.
+     stop because refs in two repositories cannot share one atomic push. Just
+     before the transaction, a fresh GitHub snapshot must report a non-draft,
+     mergeable PR with no required review or requested changes and a `CLEAN`
+     merge state, so a bypass-capable credential cannot skip PR policy.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
    - Confirms the PR reached the `MERGED` state.

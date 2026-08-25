@@ -107,6 +107,11 @@ reviewed base and head SHAs. The push uses HTTPS with `gh auth git-credential`,
 so it does not assume separate SSH credentials. That two-ref compare-and-swap
 rejects either a changed base or head, while moving the PR head onto the squash
 commit so GitHub marks it merged.
+Immediately before that transaction, the tool refreshes the PR and requires it
+to be non-draft, mergeable, free of requested changes or required reviews, and
+in GitHub's `CLEAN` merge state. This prevents a bypass-capable push credential
+from skipping the review and required-status policy that the normal merge API
+would enforce.
 Guarded fork PRs stop because Git cannot atomically update refs across two
 repositories. The unguarded form remains a normal GitHub squash merge for
 manual use. Backs the `squash-merge` compatibility skill.
