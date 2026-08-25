@@ -99,11 +99,14 @@ describe("buildCodexReviewArgs", () => {
   test("allows the sandbox helper to execute the installed Codex runtime", () => {
     expect(reviewerRuntimePaths({ PATH: "/definitely/missing" })).toEqual([]);
     const config = buildCodexReviewArgs("high", "/tmp/x/review.md", "/tmp/x", [
+      "/opt/homebrew/bin",
       "/opt/homebrew/bin/codex",
+      "/opt/homebrew/Caskroom/codex/bin",
       "/opt/homebrew/Caskroom/codex/bin/codex",
     ]).find((arg) =>
       arg.startsWith("permissions.agent-tool-review.filesystem="),
     );
+    expect(config).toContain('"/opt/homebrew/bin"="read"');
     expect(config).toContain('"/opt/homebrew/bin/codex"="read"');
     expect(config).toContain('"/opt/homebrew/Caskroom/codex/bin/codex"="read"');
   });

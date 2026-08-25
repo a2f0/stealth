@@ -77,7 +77,15 @@ export function reviewerRuntimePaths(env: ReviewerEnv): string[] {
     const candidate = path.join(directory, "codex");
     try {
       accessSync(candidate, constants.X_OK);
-      return [...new Set([candidate, realpathSync(candidate)])];
+      const resolved = realpathSync(candidate);
+      return [
+        ...new Set([
+          path.dirname(candidate),
+          candidate,
+          path.dirname(resolved),
+          resolved,
+        ]),
+      ];
     } catch {
       // Keep searching PATH for an executable Codex installation.
     }
