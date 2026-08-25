@@ -4,6 +4,7 @@ import {
   assertExpectedBaseCommit,
   assertExpectedHeadCommit,
   assertGuardPair,
+  assertImmediatelyMergeable,
   assertMergeRequirements,
   assertReviewedAncestry,
   buildAtomicPushArgs,
@@ -63,6 +64,12 @@ describe("buildSquashMergeArgs", () => {
     const args = buildSquashMergeArgs(pr, "feat: x (#1537)", "");
     expect(args).not.toContain("--match-head-commit");
   });
+
+  test("omits delayed auto-merge for guarded API merges", () => {
+    const args = buildSquashMergeArgs(pr, "feat: x (#1537)", "abc123", false);
+    expect(args).not.toContain("--auto");
+    expect(args).toContain("--match-head-commit");
+  });
 });
 
 describe("assertExpectedBaseCommit", () => {
@@ -102,6 +109,22 @@ describe("reviewed merge guards", () => {
     expect(() =>
       assertMergeRequirements({ ...mergeablePr, mergeable: "UNKNOWN" }),
     ).not.toThrow();
+    expect(() => assertImmediatelyMergeable(mergeablePr)).not.toThrow();
+    expect(() =>
+      assertImmediatelyMergeable({
+        ...mergeablePr,
+        reviewDecision: "REVIEW_REQUIRED",
+      }),
+    ).toThrow("immediately mergeable without auto-merge");
+    expect(() =>
+      assertImmediatelyMergeable({
+        ...mergeablePr,
+        mergeStateStatus: "BLOCKED",
+      }),
+    ).toThrow("immediately mergeable without auto-merge");
+    expect(() =>
+      assertImmediatelyMergeable({ ...mergeablePr, mergeable: "UNKNOWN" }),
+    ).toThrow("immediately mergeable without auto-merge");
   });
 
   test("requires the reviewed head and base together", () => {

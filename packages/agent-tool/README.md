@@ -110,12 +110,14 @@ the tool fetches and ancestry-checks the reviewed base, refreshes the PR, and
 inspects GitHub's effective branch policy. An unprotected branch has no policy
 to bypass, so the tool creates a one-parent squash commit and atomically updates
 the base and head refs with exact leases on both reviewed SHAs. A protected
-branch merges through GitHub's policy-enforcing API only when strict up-to-date
-checks close the base race. Merge queues are rejected because their generated
-merge-group commit and configured merge method are not the reviewed head/base
-pair; weaker policy is also rejected with setup guidance. The unguarded form
-remains GitHub's ordinary squash API for manual use. Backs the `squash-merge`
-compatibility skill.
+branch merges immediately through GitHub's policy-enforcing API only when strict
+up-to-date checks close the base race and every requirement is already clean.
+The guarded path never enables delayed auto-merge, because a later writer push
+could escape the reviewed head lease. Merge queues are rejected because their
+generated merge-group commit and configured merge method are not the reviewed
+head/base pair; weaker policy is also rejected with setup guidance. The
+unguarded form remains GitHub's ordinary squash API for manual use. Backs the
+`squash-merge` compatibility skill.
 
 For the unguarded compatibility form, if GitHub queues the merge, the command
 polls for up to ten minutes for the PR to reach the terminal `MERGED` or

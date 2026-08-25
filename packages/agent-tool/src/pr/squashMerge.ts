@@ -35,13 +35,14 @@ export function buildSquashMergeArgs(
   pr: { prNumber: string; repo: string },
   finalSubject: string,
   expectedHeadSha?: string,
+  enableAutoMerge = true,
 ): string[] {
   const args = [
     "pr",
     "merge",
     pr.prNumber,
     "--squash",
-    "--auto",
+    ...(enableAutoMerge ? ["--auto"] : []),
     "--subject",
     finalSubject,
     // Empty body keeps the squash commit to the subject line only.
@@ -119,10 +120,19 @@ export function assertMergeRequirements(pr: PrMergeIdentity): void {
   if (pr.reviewDecision === "CHANGES_REQUESTED") {
     throw new Error("The PR has unresolved requested changes.");
   }
-  // REVIEW_REQUIRED and BLOCKED/BEHIND/UNSTABLE can represent pending strict
-  // policy requirements. `gh pr merge --auto` enrolls those PRs, and GitHub
-  // re-enforces the policy before merging. Guarded merge queues are rejected
-  // separately because they synthesize an unreviewed merge-group commit.
+}
+
+export function assertImmediatelyMergeable(pr: PrMergeIdentity): void {
+  assertMergeRequirements(pr);
+  if (
+    pr.mergeable !== "MERGEABLE" ||
+    pr.mergeStateStatus !== "CLEAN" ||
+    pr.reviewDecision === "REVIEW_REQUIRED"
+  ) {
+    throw new Error(
+      `The guarded GitHub merge must be immediately mergeable without auto-merge (mergeable: ${pr.mergeable || "UNKNOWN"}; state: ${pr.mergeStateStatus || "UNKNOWN"}; review: ${pr.reviewDecision || "NONE"}). Wait for policy requirements, then re-review the unchanged head/base pair.`,
+    );
+  }
 }
 
 function assertSameMergeTarget(
@@ -417,6 +427,7 @@ function guardedReviewedMerge(
     freshPr.repo,
     freshPr.baseRefName,
   );
+  if (strategy === "github_api") assertImmediatelyMergeable(freshPr);
   const mergeExitCode =
     strategy === "atomic_refs"
       ? atomicReviewedMerge(
@@ -429,7 +440,7 @@ function guardedReviewedMerge(
           "gh pr merge",
           spawnSync(
             "gh",
-            buildSquashMergeArgs(freshPr, finalSubject, expectedHeadSha),
+            buildSquashMergeArgs(freshPr, finalSubject, expectedHeadSha, false),
             { stdio: "inherit" },
           ),
         );
