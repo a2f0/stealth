@@ -189,6 +189,38 @@ test("shipping skills isolate preflights and disable contributor hooks", () => {
   }
 });
 
+test("reset reaches the exact fetched upstream before installing hooks", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  for (const skillPath of [
+    ".claude/skills/reset/SKILL.md",
+    ".codex/skills/reset/SKILL.md",
+  ]) {
+    const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
+    expect(content).not.toContain(
+      "git -c core.hooksPath=/dev/null pull --ff-only",
+    );
+    const fetch = content.indexOf(
+      'git -c core.hooksPath=/dev/null fetch "$REMOTE" "$UPSTREAM_REF"',
+    );
+    const ancestry = content.indexOf(
+      'git merge-base --is-ancestor "$LOCAL_TARGET" "$FETCHED_UPSTREAM"',
+    );
+    const fastForward = content.indexOf(
+      'git -c core.hooksPath=/dev/null merge --ff-only "$FETCHED_UPSTREAM"',
+    );
+    const equality = content.indexOf(
+      '[ "$(git rev-parse --verify \'HEAD^{commit}\')" = "$FETCHED_UPSTREAM" ]',
+    );
+    const install = content.indexOf('sh "$HOOKS_SCRIPT"');
+
+    expect(fetch).toBeGreaterThan(-1);
+    expect(ancestry).toBeGreaterThan(fetch);
+    expect(fastForward).toBeGreaterThan(ancestry);
+    expect(equality).toBeGreaterThan(fastForward);
+    expect(install).toBeGreaterThan(equality);
+  }
+});
+
 test("open-pr validates branch names without feature-checkout code", () => {
   const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
   for (const skillPath of [
