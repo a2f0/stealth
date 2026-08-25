@@ -65,6 +65,8 @@ commit, repair rounds produce new commits to read.
   `base...HEAD` content only; allowing local changes would let `open-pr` commit
   and push content that the reviewer never saw. Commit intended changes before
   invoking this skill, including in report-only mode.
+- macOS Seatbelt for repair preflights. The tool fails closed instead of running
+  branch scripts unsandboxed on another platform.
 
 ## Setup
 
@@ -224,8 +226,8 @@ Require a clean worktree before fetching or snapshotting anything:
 
    ```bash
    PRE_SYNC_HEAD=$(git rev-parse HEAD)
-   git merge --no-edit "$FETCHED_BASE" || {
-     git merge --abort
+   git -c core.hooksPath=/dev/null -c commit.gpgSign=false merge --no-edit "$FETCHED_BASE" || {
+     git -c core.hooksPath=/dev/null merge --abort
      echo "Error: merging the latest $BASE_REF into $BRANCH conflicts — resolve it and re-run" >&2
      exit 1
    }
@@ -402,11 +404,28 @@ Require a clean worktree before fetching or snapshotting anything:
           non-blocking findings when doing so is low-risk and avoids dead code or
           vacuous tests; do not expand the PR into unrelated cleanup.
        3. Run validation proportionate to the changes, including the repository's
-          staged source-shape check before committing.
+          staged source-shape check before committing. Execute every
+          branch-controlled package script through the trusted tool's
+          credential-free, external-network-denied sandbox, for example:
+
+          ```bash
+          "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" runPreflight check
+          ```
+
+          Run additional test or build scripts as separate `runPreflight`
+          actions. Never execute a branch-controlled preflight directly in the
+          credential-bearing review shell.
        4. Stage only the repair paths and commit with a valid conventional
-          subject. **When a PR is open, push without force and with
+          subject, with contributor-controlled hooks and signing disabled:
+
+          ```bash
+          git add <intended-repair-paths>
+          git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "$REPAIR_SUBJECT"
+          ```
+
+          **When a PR is open, push without force and with
           `--no-verify`** so feature-controlled hooks cannot run with ambient
-          credentials; the explicit validation in step 3 remains authoritative.
+          credentials; the sandboxed validation in step 3 remains authoritative.
           **With no PR, do not push** — the repairs stay local and are pushed
           once, later, when the PR is opened. Stop if unrelated changes are mixed
           into the worktree.

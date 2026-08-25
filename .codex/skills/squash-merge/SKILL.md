@@ -259,9 +259,9 @@ as-is.
    MERGED_BRANCH="$BRANCH"
    MERGE_COMMIT=$(gh pr view "$PR_NUMBER" --json mergeCommit -q .mergeCommit.oid -R "$REPO")
 
-   git switch "$BASE_BRANCH" || { echo "Error: could not switch to $BASE_BRANCH" >&2; exit 1; }
+   git -c core.hooksPath=/dev/null switch "$BASE_BRANCH" || { echo "Error: could not switch to $BASE_BRANCH" >&2; exit 1; }
    git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch "$BASE_REPO_URL" "$BASE_BRANCH" || { echo "Error: could not fetch $REPO:$BASE_BRANCH; skipping delete" >&2; exit 1; }
-   git merge --ff-only FETCH_HEAD || { echo "Error: $BASE_BRANCH could not fast-forward to $REPO:$BASE_BRANCH; skipping delete" >&2; exit 1; }
+   git -c core.hooksPath=/dev/null merge --ff-only FETCH_HEAD || { echo "Error: $BASE_BRANCH could not fast-forward to $REPO:$BASE_BRANCH; skipping delete" >&2; exit 1; }
 
    # The real gate on the delete: prove this branch now contains the squash commit.
    [ -n "$MERGE_COMMIT" ] || { echo "Error: could not resolve merge commit; skipping delete" >&2; exit 1; }

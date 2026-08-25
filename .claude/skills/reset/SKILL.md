@@ -140,7 +140,7 @@ TARGET_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name) 
 2. **Switch to the target branch**, if not already on it:
 
    ```bash
-   [ "$BRANCH" = "$TARGET_BRANCH" ] || git switch "$TARGET_BRANCH" || { echo "Error: could not switch to $TARGET_BRANCH" >&2; exit 1; }
+   [ "$BRANCH" = "$TARGET_BRANCH" ] || git -c core.hooksPath=/dev/null switch "$TARGET_BRANCH" || { echo "Error: could not switch to $TARGET_BRANCH" >&2; exit 1; }
    ```
 
    Already being on it is the common case after `ship-pr` — `squash-merge`
@@ -154,7 +154,7 @@ TARGET_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name) 
    REMOTE=$(git config "branch.$TARGET_BRANCH.remote" 2>/dev/null || echo origin)
    # Honor the *complete* upstream: the remote AND the branch name it maps to.
    UPSTREAM_REF=$(git config "branch.$TARGET_BRANCH.merge" 2>/dev/null || echo "refs/heads/$TARGET_BRANCH")
-   git pull --ff-only "$REMOTE" "${UPSTREAM_REF#refs/heads/}" || { echo "Error: $TARGET_BRANCH could not fast-forward; hooks not installed" >&2; exit 1; }
+   git -c core.hooksPath=/dev/null pull --ff-only "$REMOTE" "${UPSTREAM_REF#refs/heads/}" || { echo "Error: $TARGET_BRANCH could not fast-forward; hooks not installed" >&2; exit 1; }
    git fetch "$REMOTE" --prune || { echo "Error: prune failed; hooks not installed" >&2; exit 1; }
    ```
 

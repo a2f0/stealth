@@ -60,6 +60,8 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 - The trusted `@tearleads/agent-tool` setup required by the delegated
   `cross-agent-review`, `open-pr`, and `squash-merge` skills.
 - `node_modules` installed (`bun install`) so repository checks and hooks run.
+- macOS Seatbelt for credential-free preflights. The delegated preflight fails
+  closed on another platform.
 - The worktree contains only changes intended for this PR. A PR may already be
   open; this is how a prior gated run resumes after fixes.
 
@@ -72,13 +74,80 @@ the single push. Each wrapped skill re-checks its own preconditions.
 ## Setup
 
 ```bash
-ROOT_DIR=$(git rev-parse --show-toplevel)
+REALPATH_BIN=/usr/bin/realpath
+[ -x "$REALPATH_BIN" ] || REALPATH_BIN=/bin/realpath
+[ -x "$REALPATH_BIN" ] || {
+  echo "Error: trusted system realpath is unavailable" >&2
+  exit 1
+}
+CHECKOUT_ROOT=$("$REALPATH_BIN" .)
+while [ ! -e "$CHECKOUT_ROOT/.git" ] && [ "$CHECKOUT_ROOT" != "/" ]; do
+  CHECKOUT_ROOT=${CHECKOUT_ROOT%/*}
+  [ -n "$CHECKOUT_ROOT" ] || CHECKOUT_ROOT=/
+done
+[ -e "$CHECKOUT_ROOT/.git" ] || {
+  echo "Error: could not find the checkout boundary" >&2
+  exit 1
+}
+
+resolve_bootstrap_tool() {
+  tool_name=$1
+  candidate=$(command -v "$tool_name") || {
+    echo "Error: $tool_name is unavailable" >&2
+    return 1
+  }
+  candidate=$("$REALPATH_BIN" "$candidate") || return 1
+  case "$candidate" in
+    "$CHECKOUT_ROOT" | "$CHECKOUT_ROOT"/*)
+      echo "Error: refusing checkout-controlled $tool_name executable" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$candidate"
+}
+
+GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
+GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
+BUN_BIN=$(resolve_bootstrap_tool bun) || exit 1
+TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 [ -n "$REPO" ] || { echo "Error: repository identity is unavailable" >&2; exit 1; }
 DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef -q .defaultBranchRef.name)
 [ -n "$DEFAULT_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
+BASE_URL=$(gh repo view "$REPO" --json url -q .url)
+[ -n "$BASE_URL" ] || { echo "Error: repository fetch URL is unavailable" >&2; exit 1; }
+git fetch --quiet "$BASE_URL" "$DEFAULT_BRANCH" || {
+  echo "Error: could not fetch $DEFAULT_BRANCH from $BASE_URL" >&2
+  exit 1
+}
+BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
+  echo "Error: fetched base commit is unavailable" >&2
+  exit 1
+}
+
+if git cat-file -e "$BASE_HEAD:packages/agent-tool/src/index.ts" 2>/dev/null; then
+  TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
+  trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
+  git archive "$BASE_HEAD" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
+  AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
+else
+  [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || { echo "Error: base has no agent-tool; set TEARLEADS_AGENT_TOOL_DIR to a trusted external installation" >&2; exit 1; }
+  AGENT_TOOL=$(realpath "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || { echo "Error: trusted agent-tool path is invalid" >&2; exit 1; }
+  case "$AGENT_TOOL" in
+    "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted agent-tool must be outside the feature checkout" >&2; exit 1 ;;
+  esac
+fi
+[ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
 ```
+
+The setup fetches the exact GitHub base and materializes `packages/agent-tool`
+from that base outside the checkout. This is required even when the PR already
+exists: the feature branch must never choose the process that receives GitHub
+or reviewer credentials.
 
 ## Workflow
 
@@ -118,6 +187,22 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
      paths, and commit any uncommitted intended work with a valid conventional
      subject. **Do not push.** Leave `PR_NUMBER` empty.
    - In every case, stop if unrelated changes are mixed into the worktree.
+
+   In all three paths, "run the preflight" and "commit" mean this protected
+   sequence. Run additional relevant scripts such as `test` or `build` as their
+   own `runPreflight` actions:
+
+   ```bash
+   "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" runPreflight check
+   git add <intended-paths>
+   git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "$COMMIT_SUBJECT"
+   ```
+
+   Skip `git add` and `git commit` when there is no uncommitted work. The
+   preflight sandbox strips credentials, denies external network access, and
+   blocks writes to `.git` and `node_modules`; the commit disables all
+   contributor-controlled hooks and signing. Never run a branch-controlled
+   package script or commit hook in this credential-bearing orchestration shell.
 
    If no title argument was supplied, capture the intended PR title now — the work
    commit's subject (`git log -1 --format=%s`) — and reuse it when opening the PR

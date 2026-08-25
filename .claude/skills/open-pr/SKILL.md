@@ -30,6 +30,8 @@ PR **title must conform to the repository's commitlint rules**
   package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
   independently trusted installation outside the repository checkout.
 - `node_modules` installed (`bun install`) so repository checks and hooks run.
+- macOS Seatbelt for credential-free preflights. The tool fails closed instead
+  of running branch scripts unsandboxed on another platform.
 - The working tree contains only changes intended for this PR. Stop and ask
   before carrying unrelated changes onto a new branch or committing them.
 - Before `openPr` runs, the feature branch must be pushed and have commits ahead
@@ -194,15 +196,15 @@ fi
      carried:
 
      ```bash
-     git stash push --include-untracked -m "open-pr: move work to $NEW_BRANCH"
+     git -c core.hooksPath=/dev/null stash push --include-untracked -m "open-pr: move work to $NEW_BRANCH"
      STASH_OID=$(git rev-parse "stash@{0}")
      ```
 
    - Fast-forward the local default branch and create the new branch:
 
      ```bash
-     git merge --ff-only "$BASE_HEAD"
-     git switch -c "$NEW_BRANCH"
+     git -c core.hooksPath=/dev/null merge --ff-only "$BASE_HEAD"
+     git -c core.hooksPath=/dev/null switch -c "$NEW_BRANCH"
      BRANCH=$(git branch --show-current)
      PUSH_REMOTE=$(resolve_push_remote "$BRANCH")
      [ "$PUSH_REMOTE" = "$FEATURE_REMOTE" ] || {
@@ -214,7 +216,7 @@ fi
      If work was stashed, restore its saved index/worktree state:
 
      ```bash
-     git stash apply --index "$STASH_OID"
+     git -c core.hooksPath=/dev/null stash apply --index "$STASH_OID"
      ```
 
      After a successful apply, resolve the recorded OID back to its current
@@ -230,7 +232,7 @@ fi
        echo "Error: restored stash OID is no longer in the stash list" >&2
        exit 1
      }
-     git stash drop "$STASH_REF"
+     git -c core.hooksPath=/dev/null stash drop "$STASH_REF"
      ```
 
      Drop only the resolved entry, and only after a successful apply. If apply
@@ -240,12 +242,27 @@ fi
      same OID-to-reference lookup before dropping it. Never use a hard reset,
      clean, forced branch creation, automatic rebase, or force push.
 
-3. **Commit and push**: Run the repository's relevant preflight, review the
-   final diff, stage only intended paths, and commit any uncommitted work with a
-   valid conventional subject — and never with a `Co-authored-by` trailer,
-   which repository policy rejects. Use separate commits for distinct changes
-   when useful. Confirm the branch has commits ahead of
-   `$BASE_HEAD`, then push without force to the resolved
+3. **Commit and push**: Run every branch-controlled package script through the
+   trusted tool's credential-free, external-network-denied sandbox. Run the
+   repository's primary preflight first, and invoke any additional relevant
+   test or build script as another `runPreflight` action:
+
+   ```bash
+   "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" runPreflight check
+   ```
+
+   Review the final diff, stage only intended paths, and commit any uncommitted
+   work with a valid conventional subject — and never with a `Co-authored-by`
+   trailer, which repository policy rejects. Contributor-controlled hooks and
+   signing stay disabled for the commit:
+
+   ```bash
+   git add <intended-paths>
+   git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "$COMMIT_SUBJECT"
+   ```
+
+   Use separate commits for distinct changes when useful. Confirm the branch
+   has commits ahead of `$BASE_HEAD`, then push without force to the resolved
    feature remote:
 
    ```bash
@@ -253,9 +270,11 @@ fi
    ```
 
    `--no-verify` is required here: feature-controlled hooks must not run with
-   ambient GitHub or reviewer credentials. The explicit preflight above is the
-   validation gate. Inspect commit messages for forbidden co-author trailers
-   before the review; never rewrite the reviewed head during this push step.
+   ambient GitHub or reviewer credentials. The sandboxed preflight above is the
+   validation gate: it strips credentials, denies external network access, and
+   prevents writes to `.git` and `node_modules`. Inspect commit messages for
+   forbidden co-author trailers before the review; never rewrite the reviewed
+   head during this push step.
 
 4. **Open the PR** (title single-quoted; body via a quoted heredoc):
 

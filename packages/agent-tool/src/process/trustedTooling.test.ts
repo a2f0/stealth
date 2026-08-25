@@ -45,9 +45,11 @@ test("trusted skill launchers disable feature-checkout dotenv loading", () => {
   const credentialedSkillPaths = [
     ".claude/skills/cross-agent-review/SKILL.md",
     ".claude/skills/open-pr/SKILL.md",
+    ".claude/skills/ship-pr/SKILL.md",
     ".claude/skills/squash-merge/SKILL.md",
     ".codex/skills/cross-agent-review/SKILL.md",
     ".codex/skills/open-pr/SKILL.md",
+    ".codex/skills/ship-pr/SKILL.md",
     ".codex/skills/squash-merge/SKILL.md",
   ];
   for (const skillPath of credentialedSkillPaths) {
@@ -99,10 +101,12 @@ test("shipping skills bootstrap tools outside the feature checkout", () => {
     ".claude/skills/cross-agent-review/SKILL.md",
     ".claude/skills/open-pr/SKILL.md",
     ".claude/skills/reset/SKILL.md",
+    ".claude/skills/ship-pr/SKILL.md",
     ".claude/skills/squash-merge/SKILL.md",
     ".codex/skills/cross-agent-review/SKILL.md",
     ".codex/skills/open-pr/SKILL.md",
     ".codex/skills/reset/SKILL.md",
+    ".codex/skills/ship-pr/SKILL.md",
     ".codex/skills/squash-merge/SKILL.md",
   ];
 
@@ -120,6 +124,68 @@ test("shipping skills bootstrap tools outside the feature checkout", () => {
     expect(pathExport).toBeGreaterThan(-1);
     expect(pathExport).toBeLessThan(bootstrap.indexOf("git rev-parse"));
     expect(pathExport).toBeLessThan(bootstrap.indexOf("gh repo view"));
+  }
+});
+
+test("shipping skills isolate preflights and disable contributor hooks", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  const mirroredSkillPaths = [
+    ".claude/skills/cross-agent-review/SKILL.md",
+    ".claude/skills/open-pr/SKILL.md",
+    ".claude/skills/ship-pr/SKILL.md",
+    ".claude/skills/squash-merge/SKILL.md",
+    ".claude/skills/reset/SKILL.md",
+    ".codex/skills/cross-agent-review/SKILL.md",
+    ".codex/skills/open-pr/SKILL.md",
+    ".codex/skills/ship-pr/SKILL.md",
+    ".codex/skills/squash-merge/SKILL.md",
+    ".codex/skills/reset/SKILL.md",
+  ];
+  const preflightSkillPaths = mirroredSkillPaths.filter((skillPath) =>
+    /\/(cross-agent-review|open-pr|ship-pr)\//.test(skillPath),
+  );
+
+  for (const skillPath of preflightSkillPaths) {
+    const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
+    expect(content).toContain('"$AGENT_TOOL" runPreflight check');
+    expect(content).not.toContain("git merge --no-edit");
+
+    const commitCommands = content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("git ") && line.includes(" commit "));
+    expect(commitCommands.length).toBeGreaterThan(0);
+    expect(
+      commitCommands.every(
+        (line) =>
+          line.includes("-c core.hooksPath=/dev/null") &&
+          line.includes("--no-gpg-sign"),
+      ),
+    ).toBe(true);
+  }
+
+  for (const skillPath of mirroredSkillPaths) {
+    const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
+    const mutatingCommands = content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("git ") || line.includes("|| git "))
+      .filter((line) => {
+        const command = line.slice(line.indexOf("git "));
+        const withoutConfig = command.replace(
+          /^git(?:\s+-c\s+(?:'[^']*'|"[^"]*"|\S+))*/,
+          "git",
+        );
+        return (
+          /^git (?:merge|switch|pull)(?:\s|$)/.test(withoutConfig) ||
+          /^git stash (?:push|apply|drop)(?:\s|$)/.test(withoutConfig)
+        );
+      });
+    expect(
+      mutatingCommands.every((line) =>
+        line.includes("-c core.hooksPath=/dev/null"),
+      ),
+    ).toBe(true);
   }
 });
 
