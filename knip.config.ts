@@ -23,6 +23,10 @@ const baseConfig = {
       entry: ["src/pages/**/*.astro"],
       project: ["src/**/*.{astro,ts}"],
     },
+    "packages/agent-tool": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts"],
+    },
   },
 } satisfies KnipConfig;
 
@@ -40,6 +44,10 @@ const productionConfig = {
     },
     "apps/website": {
       entry: ["astro.config.ts!", "src/**/*.{astro,ts}!"],
+      project: [],
+    },
+    "packages/agent-tool": {
+      entry: ["src/index.ts!"],
       project: [],
     },
   },
