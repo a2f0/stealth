@@ -74,7 +74,9 @@ the single push. Each wrapped skill re-checks its own preconditions.
 ```bash
 ROOT_DIR=$(git rev-parse --show-toplevel)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+[ -n "$REPO" ] || { echo "Error: repository identity is unavailable" >&2; exit 1; }
+DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef -q .defaultBranchRef.name)
 [ -n "$DEFAULT_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
 ```
 
@@ -154,7 +156,7 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    REVIEWED_BASE_SHA=<final base SHA reported by cross-agent-review>
    test "$REVIEWED_SHA" = "$(git rev-parse HEAD)"
    if [ -n "$PR_NUMBER" ]; then
-     PR_SHAS=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid -q '.headRefOid + " " + .baseRefOid')
+     PR_SHAS=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid -q '.headRefOid + " " + .baseRefOid' -R "$REPO")
      test "$PR_SHAS" = "$REVIEWED_SHA $REVIEWED_BASE_SHA"
    fi
    ```
@@ -201,7 +203,7 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
 
    ```bash
    test "$REVIEWED_SHA" = "$(git rev-parse HEAD)"
-   PR_SHAS=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid -q '.headRefOid + " " + .baseRefOid')
+   PR_SHAS=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid -q '.headRefOid + " " + .baseRefOid' -R "$REPO")
    test "$PR_SHAS" = "$REVIEWED_SHA $REVIEWED_BASE_SHA"
    ```
 
@@ -229,7 +231,7 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    `REVIEWED_BASE_SHA`:
 
    ```bash
-   test "$REVIEWED_BASE_SHA" = "$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid)"
+   test "$REVIEWED_BASE_SHA" = "$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid -R "$REPO")"
    ```
 
    Then invoke the `squash-merge` compatibility skill, passing

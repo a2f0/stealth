@@ -291,7 +291,7 @@ Require a clean worktree before fetching or snapshotting anything:
 
    ```bash
    test "$REVIEWED_SHA" = "$(git rev-parse HEAD)"
-   [ -z "$PR_NUMBER" ] || test "$REVIEWED_SHA" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)"
+   [ -z "$PR_NUMBER" ] || test "$REVIEWED_SHA" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")"
    git fetch "$BASE_URL" "$BASE_REF" || { echo "Error: could not re-fetch $BASE_REF after review" >&2; exit 1; }
    POST_REVIEW_BASE=$(git rev-parse 'FETCH_HEAD^{commit}') || { echo "Error: post-review base is unavailable" >&2; exit 1; }
    test "$FETCHED_BASE" = "$POST_REVIEW_BASE" || { echo "Error: $BASE_REF moved during review; discard the result and re-run" >&2; exit 1; }

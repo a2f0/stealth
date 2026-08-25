@@ -199,6 +199,8 @@ describe("reviewed merge guards", () => {
       "credential.helper=",
       "-c",
       "credential.helper=!gh auth git-credential",
+      "-c",
+      "core.hooksPath=/dev/null",
       "push",
       "--porcelain",
       "--atomic",
