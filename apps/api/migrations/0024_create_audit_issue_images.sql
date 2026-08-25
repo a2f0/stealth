@@ -6,7 +6,9 @@ CREATE TABLE audit_issue_images (
     REFERENCES objects (id) ON DELETE CASCADE,
   uploaded_by TEXT NOT NULL
     REFERENCES user (id) ON DELETE RESTRICT,
-  created_at TEXT NOT NULL
+  slot INTEGER NOT NULL CHECK (slot BETWEEN 1 AND 10),
+  created_at TEXT NOT NULL,
+  UNIQUE (issue_id, slot)
 );
 
 CREATE INDEX audit_issue_images_issue_idx

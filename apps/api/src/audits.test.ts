@@ -281,6 +281,34 @@ describe("audits", () => {
       filename: "electrical-panel.png",
     });
 
+    const concurrentUploads = await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        fixture.app.request(
+          `/issues/${issue.body.issueId}/images`,
+          {
+            body: pngForm(`concurrent-${index}.png`),
+            method: "POST",
+          },
+          fixture.bindings,
+        ),
+      ),
+    );
+    expect(
+      concurrentUploads.filter(({ status }) => status === 201),
+    ).toHaveLength(9);
+    expect(
+      concurrentUploads.filter(({ status }) => status === 409),
+    ).toHaveLength(1);
+    expect(fixture.stored.size).toBe(10);
+    expect(
+      fixture.database
+        .query(`SELECT COUNT(*) AS count FROM audit_issue_images`)
+        .get(),
+    ).toEqual({ count: 10 });
+    expect(
+      fixture.database.query(`SELECT COUNT(*) AS count FROM objects`).get(),
+    ).toEqual({ count: 10 });
+
     const hiddenImage = await fixture.app.request(
       `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
       {
@@ -299,6 +327,7 @@ describe("audits", () => {
       fixture.bindings,
     );
     expect(image.status).toBe(200);
+    expect(image.headers.get("cache-control")).toBe("no-store");
     expect(image.headers.get("content-type")).toBe("image/png");
     expect(image.headers.get("content-disposition")).toContain("inline");
 
@@ -307,7 +336,17 @@ describe("audits", () => {
       undefined,
       fixture.bindings,
     );
-    expect(await detail.json()).toMatchObject({
+    const detailBody = (await detail.json()) as {
+      issues: Array<{
+        images: Array<{
+          contentType: string;
+          filename: string;
+          id: string;
+          uploadedBy: { id: string };
+        }>;
+      }>;
+    };
+    expect(detailBody).toMatchObject({
       audit: {
         responses: { [firstItem?.id ?? ""]: "fail" },
         templateId: template.id,
@@ -318,20 +357,24 @@ describe("audits", () => {
           assignedTo: "user-1",
           assigneeName: "Example Person",
           description: "Correct before the next shift.",
-          images: [
-            {
-              contentType: "image/png",
-              filename: "electrical-panel.png",
-              uploadedBy: { id: "user-1" },
-            },
-          ],
           priority: "high",
           status: "open",
         },
       ],
       members: [{ id: "user-1", name: "Example Person" }],
     });
+    expect(detailBody.issues[0]?.images).toHaveLength(10);
+    expect(detailBody.issues[0]?.images).toContainEqual(
+      expect.objectContaining({
+        contentType: "image/png",
+        filename: "electrical-panel.png",
+        uploadedBy: expect.objectContaining({ id: "user-1" }),
+      }),
+    );
 
+    fixture.database
+      .query(`DELETE FROM member WHERE organizationId = ? AND userId = ?`)
+      .run("org_user-1", "user-1");
     const resolved = await jsonRequest(
       fixture,
       `/issues/${issue.body.issueId}`,
@@ -339,13 +382,22 @@ describe("audits", () => {
       { status: "resolved" },
     );
     expect(resolved.response.status).toBe(200);
+    expect(
+      fixture.database
+        .query(`SELECT assigned_to, status FROM audit_issues WHERE id = ?`)
+        .get(issue.body.issueId),
+    ).toEqual({ assigned_to: "user-1", status: "resolved" });
 
-    const deletedImage = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
-      { method: "DELETE" },
-      fixture.bindings,
+    const deletedImages = await Promise.all(
+      (detailBody.issues[0]?.images ?? []).map(({ id }) =>
+        fixture.app.request(
+          `/issues/${issue.body.issueId}/images/${id}`,
+          { method: "DELETE" },
+          fixture.bindings,
+        ),
+      ),
     );
-    expect(deletedImage.status).toBe(204);
+    expect(deletedImages.every(({ status }) => status === 204)).toBe(true);
     expect(fixture.stored.size).toBe(0);
   });
 
@@ -810,14 +862,38 @@ function storageFor(stored: Map<string, Uint8Array>) {
 }
 
 function toD1(database: Database) {
+  let batchTail: Promise<void> = Promise.resolve();
   return {
-    batch: async (statements: D1PreparedStatement[]) => {
-      const results = [];
-      for (const statement of statements) results.push(await statement.run());
-      return results;
+    batch: (statements: D1PreparedStatement[]) => {
+      const execution = batchTail.then(() => {
+        database.exec("BEGIN");
+        try {
+          const results = statements.map((statement) =>
+            (
+              statement as D1PreparedStatement & {
+                runSync: () => D1Result;
+              }
+            ).runSync(),
+          );
+          database.exec("COMMIT");
+          return results;
+        } catch (cause) {
+          database.exec("ROLLBACK");
+          throw cause;
+        }
+      });
+      batchTail = execution.then(
+        () => undefined,
+        () => undefined,
+      );
+      return execution;
     },
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
+      const runSync = () => {
+        const result = database.query(query).run(...values);
+        return { meta: { changes: result.changes }, success: true };
+      };
       const statement = {
         all: async () => ({
           results: database.query(query).all(...values),
@@ -828,14 +904,25 @@ function toD1(database: Database) {
           return statement;
         },
         first: async () => database.query(query).get(...values),
-        run: async () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes }, success: true };
-        },
+        run: async () => runSync(),
+        runSync,
       };
       return statement;
     },
   } as unknown as D1Database;
+}
+
+function pngForm(filename: string) {
+  const form = new FormData();
+  form.set(
+    "file",
+    new File(
+      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+      filename,
+      { type: "image/png" },
+    ),
+  );
+  return form;
 }
 
 async function applyMigration(database: Database, filename: string) {

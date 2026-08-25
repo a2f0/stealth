@@ -35,19 +35,6 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     .first<{ id: string }>();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
 
-  const count = await context.env.DB.prepare(
-    `SELECT COUNT(*) AS image_count
-     FROM audit_issue_images WHERE issue_id = ?`,
-  )
-    .bind(issue.id)
-    .first<{ image_count: number }>();
-  if (Number(count?.image_count ?? 0) >= maxImagesPerIssue) {
-    return context.json(
-      { error: `Issues are limited to ${maxImagesPerIssue} images.` },
-      409,
-    );
-  }
-
   const body = (await context.req.parseBody()) as { file?: File | string };
   const file = body.file;
   if (!(file instanceof File)) {
@@ -98,12 +85,40 @@ auditIssueImages.post("/:issueId/images", async (context) => {
       ),
       context.env.DB.prepare(
         `INSERT INTO audit_issue_images
-         (id, issue_id, object_id, uploaded_by, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).bind(id, issue.id, objectId, userId, createdAt),
+         (id, issue_id, object_id, uploaded_by, created_at, slot)
+         VALUES (
+           ?, ?, ?, ?, ?,
+           (WITH RECURSIVE slots(slot) AS (
+              VALUES (1)
+              UNION ALL
+              SELECT slot + 1 FROM slots WHERE slot < ?
+            )
+            SELECT slot FROM slots
+            WHERE NOT EXISTS (
+              SELECT 1 FROM audit_issue_images AS existing
+              WHERE existing.issue_id = ? AND existing.slot = slots.slot
+            )
+            ORDER BY slot ASC
+            LIMIT 1)
+         )`,
+      ).bind(
+        id,
+        issue.id,
+        objectId,
+        userId,
+        createdAt,
+        maxImagesPerIssue,
+        issue.id,
+      ),
     ]);
   } catch (cause) {
     await context.env.STORAGE.delete(objectKey);
+    if (await issueHasMaximumImages(context.env.DB, issue.id)) {
+      return context.json(
+        { error: `Issues are limited to ${maxImagesPerIssue} images.` },
+        409,
+      );
+    }
     throw cause;
   }
   const image = await findAuditIssueImage(
@@ -133,7 +148,7 @@ auditIssueImages.get("/:issueId/images/:imageId", async (context) => {
     "%27",
   );
   const headers = new Headers({
-    "cache-control": "private, max-age=3600",
+    "cache-control": "no-store",
     "content-disposition": `inline; filename="image"; filename*=UTF-8''${encodedFilename}`,
     "content-length": String(row.size),
     "content-type": row.content_type,
@@ -142,6 +157,17 @@ auditIssueImages.get("/:issueId/images/:imageId", async (context) => {
   });
   return new Response(object.body, { headers });
 });
+
+async function issueHasMaximumImages(database: D1Database, issueId: string) {
+  const count = await database
+    .prepare(
+      `SELECT COUNT(*) AS image_count
+       FROM audit_issue_images WHERE issue_id = ?`,
+    )
+    .bind(issueId)
+    .first<{ image_count: number }>();
+  return Number(count?.image_count ?? 0) >= maxImagesPerIssue;
+}
 
 auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
   const organizationId = context.get("organizationId");

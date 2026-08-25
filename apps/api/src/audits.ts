@@ -485,7 +485,9 @@ audits.patch("/issues/:id", async (context) => {
     .bind(context.req.param("id"), organizationId)
     .first<{ assigned_to: string | null; id: string; status: string }>();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
-  if (body.status === undefined && body.assignedTo === undefined) {
+  const changesStatus = body.status !== undefined;
+  const changesAssignee = body.assignedTo !== undefined;
+  if (!changesStatus && !changesAssignee) {
     return context.json({ error: "No issue changes were provided." }, 400);
   }
   if (
@@ -498,11 +500,14 @@ audits.patch("/issues/:id", async (context) => {
       400,
     );
   }
-  const assignedTo = parseAssignee(body.assignedTo, issue.assigned_to);
-  if (assignedTo === undefined) {
+  const assignedTo = changesAssignee
+    ? parseAssignee(body.assignedTo)
+    : issue.assigned_to;
+  if (changesAssignee && assignedTo === undefined) {
     return context.json({ error: "Issue assignee is invalid." }, 400);
   }
   if (
+    changesAssignee &&
     assignedTo &&
     !(await isMember(context.env.DB, organizationId, assignedTo))
   ) {
@@ -513,12 +518,27 @@ audits.patch("/issues/:id", async (context) => {
       ? body.status
       : issue.status;
   const now = new Date().toISOString();
-  const result = await context.env.DB.prepare(
-    `UPDATE audit_issues SET status = ?, assigned_to = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(status, assignedTo, now, issue.id, organizationId)
-    .run();
+  const result = changesStatus
+    ? changesAssignee
+      ? await context.env.DB.prepare(
+          `UPDATE audit_issues
+           SET status = ?, assigned_to = ?, updated_at = ?
+           WHERE id = ? AND organization_id = ?`,
+        )
+          .bind(status, assignedTo, now, issue.id, organizationId)
+          .run()
+      : await context.env.DB.prepare(
+          `UPDATE audit_issues SET status = ?, updated_at = ?
+           WHERE id = ? AND organization_id = ?`,
+        )
+          .bind(status, now, issue.id, organizationId)
+          .run()
+    : await context.env.DB.prepare(
+        `UPDATE audit_issues SET assigned_to = ?, updated_at = ?
+         WHERE id = ? AND organization_id = ?`,
+      )
+        .bind(assignedTo, now, issue.id, organizationId)
+        .run();
   return result.meta.changes > 0
     ? context.json({ assignedTo, status, updatedAt: now })
     : context.json({ error: "Issue not found." }, 404);
@@ -687,8 +707,7 @@ function positiveInteger(value: string) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function parseAssignee(value: unknown, current: string | null) {
-  if (value === undefined) return current;
+function parseAssignee(value: unknown) {
   if (value === null || value === "") return null;
   return validText(value, 100) ? value.trim() : undefined;
 }

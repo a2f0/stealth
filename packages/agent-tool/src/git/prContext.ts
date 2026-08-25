@@ -13,7 +13,6 @@ export interface PrContext extends PrIdentity {
 
 interface PrView extends PrIdentity {
   readonly baseRefName: string;
-  readonly baseRefOid: string;
 }
 
 interface SpawnResult {
@@ -73,66 +72,47 @@ function firstPrNumber(source: string | null): string {
   return typeof numberField === "number" ? String(numberField) : "";
 }
 
-function gitRefExists(ref: string): boolean {
-  if (ref.length === 0) {
-    return false;
-  }
-  const result = spawnSync(
-    "git",
-    ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
-    { stdio: "ignore" },
-  );
-  return result.status === 0;
-}
-
-/**
- * Resolve the PR base branch to a ref that exists locally. GitHub returns a
- * bare branch name (e.g. `main`), which `git diff` cannot resolve when the
- * branch only exists as a remote-tracking ref. Prefer a local ref, then the
- * remote-tracking ref, then the base commit SHA, fetching from origin if none
- * are present locally.
- */
-function resolveBaseRef(baseRefName: string, baseRefOid: string): string {
-  for (const candidate of [baseRefName, `origin/${baseRefName}`, baseRefOid]) {
-    if (gitRefExists(candidate)) {
-      return candidate;
-    }
-  }
-
-  spawnSync("git", ["fetch", "--quiet", "origin", baseRefName], {
-    stdio: "ignore",
-  });
-  if (gitRefExists(`origin/${baseRefName}`)) {
-    return `origin/${baseRefName}`;
-  }
-  if (gitRefExists(baseRefOid)) {
-    return baseRefOid;
-  }
-
-  throw new Error(
-    `Could not resolve base ref '${baseRefName}' locally. Fetch it and retry.`,
-  );
-}
-
 /**
  * Base ref for a review, resolved to the *current* remote base. A branch cut from
  * an older base than the local ref would otherwise diff in upstream commits it
  * never authored — so a review (or a repair round) could flag or touch code the
- * branch does not own. Fetch first and prefer the freshly-updated remote-tracking
- * ref, then the base OID GitHub reported, then whatever `resolveBaseRef` can find
- * when offline.
+ * branch does not own. Fetch first, require that fetch to succeed, and use the
+ * fetched commit itself: narrow fetch refspecs are allowed to update only
+ * FETCH_HEAD without moving an origin/* remote-tracking ref.
  */
-function resolveFreshBaseRef(baseRefName: string, baseRefOid: string): string {
-  spawnSync("git", ["fetch", "--quiet", "origin", baseRefName], {
-    stdio: "ignore",
-  });
-  if (gitRefExists(`origin/${baseRefName}`)) {
-    return `origin/${baseRefName}`;
+function resolveFreshBaseRef(baseRefName: string): string {
+  const fetchResult = spawnSync(
+    "git",
+    ["fetch", "--quiet", "origin", baseRefName],
+    {
+      stdio: "ignore",
+    },
+  );
+  assertSpawnSucceeded(`git fetch origin ${baseRefName}`, fetchResult);
+  try {
+    return run("git", ["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
+  } catch {
+    throw new Error(
+      `Could not resolve the commit fetched for base ref '${baseRefName}'.`,
+    );
   }
-  if (gitRefExists(baseRefOid)) {
-    return baseRefOid;
+}
+
+export function assertSpawnSucceeded(
+  command: string,
+  result: SpawnResult,
+): void {
+  if (result.error) {
+    throw new Error(`Failed to run ${command}: ${result.error.message}`);
   }
-  return resolveBaseRef(baseRefName, baseRefOid);
+  if (result.signal !== null) {
+    throw new Error(`${command} terminated by signal ${result.signal}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `${command} exited with code ${result.status ?? "unknown"}`,
+    );
+  }
 }
 
 export function ensureChanges(baseRef: string): void {
@@ -248,7 +228,7 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     "view",
     prNumber,
     "--json",
-    "title,baseRefName,baseRefOid",
+    "title,baseRefName",
     "-R",
     repo,
   ]);
@@ -259,7 +239,6 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     prNumber,
     title: stringField(viewRaw, "title"),
     baseRefName: stringField(viewRaw, "baseRefName"),
-    baseRefOid: stringField(viewRaw, "baseRefOid"),
   };
 }
 
@@ -328,7 +307,7 @@ export function resolveReviewContext(): PrContext {
       repo,
       prNumber: "",
       title: "",
-      baseRef: resolveFreshBaseRef(defaultBranch, ""),
+      baseRef: resolveFreshBaseRef(defaultBranch),
     };
   }
 
@@ -341,6 +320,6 @@ export function resolveReviewContext(): PrContext {
     repo,
     prNumber,
     title: view.title,
-    baseRef: resolveFreshBaseRef(view.baseRefName, view.baseRefOid),
+    baseRef: resolveFreshBaseRef(view.baseRefName),
   };
 }

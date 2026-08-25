@@ -1,6 +1,30 @@
 import { describe, expect, test } from "bun:test";
 
-import { spawnExitCode } from "./prContext";
+import { assertSpawnSucceeded, spawnExitCode } from "./prContext";
+
+describe("assertSpawnSucceeded", () => {
+  test("accepts a successful command", () => {
+    expect(() =>
+      assertSpawnSucceeded("git fetch", { status: 0, signal: null }),
+    ).not.toThrow();
+  });
+
+  test("rejects fetch exits, signals, and launch failures", () => {
+    expect(() =>
+      assertSpawnSucceeded("git fetch", { status: 1, signal: null }),
+    ).toThrow("git fetch exited with code 1");
+    expect(() =>
+      assertSpawnSucceeded("git fetch", { status: null, signal: "SIGKILL" }),
+    ).toThrow("git fetch terminated by signal SIGKILL");
+    expect(() =>
+      assertSpawnSucceeded("git fetch", {
+        error: new Error("ENOENT"),
+        signal: null,
+        status: null,
+      }),
+    ).toThrow("Failed to run git fetch: ENOENT");
+  });
+});
 
 describe("spawnExitCode", () => {
   test("passes through a real exit code", () => {
