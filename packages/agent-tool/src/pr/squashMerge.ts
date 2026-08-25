@@ -119,9 +119,10 @@ export function assertMergeRequirements(pr: PrMergeIdentity): void {
   if (pr.reviewDecision === "CHANGES_REQUESTED") {
     throw new Error("The PR has unresolved requested changes.");
   }
-  // REVIEW_REQUIRED and BLOCKED/BEHIND/UNSTABLE can represent pending policy
-  // requirements or an active merge queue. `gh pr merge --auto` enrolls those
-  // PRs, and GitHub re-enforces the policy when they leave the queue.
+  // REVIEW_REQUIRED and BLOCKED/BEHIND/UNSTABLE can represent pending strict
+  // policy requirements. `gh pr merge --auto` enrolls those PRs, and GitHub
+  // re-enforces the policy before merging. Guarded merge queues are rejected
+  // separately because they synthesize an unreviewed merge-group commit.
 }
 
 function assertSameMergeTarget(
@@ -157,6 +158,13 @@ export function selectGuardedMergeStrategy(
   rules: unknown,
 ): GuardedMergeStrategy {
   const ruleList = Array.isArray(rules) ? rules : [];
+  if (
+    ruleList.some((candidate) => fieldOf(candidate, "type") === "merge_queue")
+  ) {
+    throw new Error(
+      "Guarded merging does not support an active merge queue because its merge-group commit and configured merge method are not the reviewed head/base pair.",
+    );
+  }
   if (classicProtection === null && ruleList.length === 0) {
     // With no branch policy to bypass, an atomic two-ref lease is the complete
     // server-side guard for both reviewed commits.
@@ -171,14 +179,13 @@ export function selectGuardedMergeStrategy(
     const parameters = recordOf(fieldOf(candidate, "parameters"));
     const ruleType = fieldOf(candidate, "type");
     return (
-      ruleType === "merge_queue" ||
-      (ruleType === "required_status_checks" &&
-        fieldOf(parameters, "strict_required_status_checks_policy") === true)
+      ruleType === "required_status_checks" &&
+      fieldOf(parameters, "strict_required_status_checks_policy") === true
     );
   });
   if (classicStrict || rulesetStrict) return "github_api";
   throw new Error(
-    "The base branch has merge policy but does not require branches to be up to date. Enable strict status checks or a merge queue before guarded merging.",
+    "The base branch has merge policy but does not require branches to be up to date. Enable strict status checks before guarded merging; merge queues require review of the actual merge group and are not supported.",
   );
 }
 

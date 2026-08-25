@@ -238,7 +238,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    `REVIEWED_BASE_SHA` as its **third (base-SHA) argument**. The guarded merge
    selects a server-side strategy from the effective branch policy: exact
    two-ref leases when unprotected, or GitHub's API when strict up-to-date policy
-   also guards the reviewed base. Weaker protected configurations stop safely.
+   also guards the reviewed base. Active merge queues and weaker protected
+   configurations stop safely because they cannot preserve the reviewed
+   head/base pair and squash method.
 
    That skill also owns the post-merge cleanup: once GitHub confirms `MERGED`, it
    returns to the PR's base branch, fast-forwards it, verifies it contains the

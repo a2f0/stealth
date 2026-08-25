@@ -111,14 +111,17 @@ inspects GitHub's effective branch policy. An unprotected branch has no policy
 to bypass, so the tool creates a one-parent squash commit and atomically updates
 the base and head refs with exact leases on both reviewed SHAs. A protected
 branch merges through GitHub's policy-enforcing API only when strict up-to-date
-checks or a merge queue also close the base race; a weaker policy is rejected
-with setup guidance. The unguarded form remains GitHub's ordinary squash API for
-manual use. Backs the `squash-merge` compatibility skill.
+checks close the base race. Merge queues are rejected because their generated
+merge-group commit and configured merge method are not the reviewed head/base
+pair; weaker policy is also rejected with setup guidance. The unguarded form
+remains GitHub's ordinary squash API for manual use. Backs the `squash-merge`
+compatibility skill.
 
-If GitHub queues the merge, the command polls for up to ten minutes for the PR
-to reach the terminal `MERGED` or `CLOSED` state. After that it exits `2`, says
-that the auto-merge or queue entry may still be active, and requires the caller
-to skip cleanup until GitHub separately confirms `MERGED`.
+For the unguarded compatibility form, if GitHub queues the merge, the command
+polls for up to ten minutes for the PR to reach the terminal `MERGED` or
+`CLOSED` state. After that it exits `2`, says that the auto-merge or queue entry
+may still be active, and requires the caller to skip cleanup until GitHub
+separately confirms `MERGED`.
 
 The tool only merges. Returning to the base branch, fast-forwarding it, and
 deleting the merged branch live in the `squash-merge` skill *around* this call —

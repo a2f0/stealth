@@ -140,6 +140,14 @@ describe("reviewed merge guards", () => {
       ]),
     ).toBe("github_api");
     expect(() =>
+      selectGuardedMergeStrategy(null, [{ type: "merge_queue" }]),
+    ).toThrow("does not support an active merge queue");
+    expect(() =>
+      selectGuardedMergeStrategy({ required_status_checks: { strict: true } }, [
+        { type: "merge_queue" },
+      ]),
+    ).toThrow("does not support an active merge queue");
+    expect(() =>
       selectGuardedMergeStrategy({ required_pull_request_reviews: {} }, []),
     ).toThrow("does not require branches to be up to date");
   });

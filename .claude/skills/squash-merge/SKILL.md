@@ -24,7 +24,9 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
 - Third argument (optional): the expected PR base SHA. The two SHAs must be
   supplied together. The guarded path uses exact leases on both refs when the
   base has no policy, or GitHub's policy-enforcing API when strict up-to-date
-  checks or a merge queue also guard the base. A moved pair is rejected.
+  checks guard the base. An active merge queue is rejected because it generates
+  a different, unreviewed merge-group commit and may override the squash method.
+  A moved pair is rejected.
 - `--keep-branch` (optional flag, position-independent): skip the post-merge
   cleanup (step 4) and stay on the feature branch. Use when the branch is still
   needed locally (e.g. to build a follow-up PR on top of it).
@@ -148,13 +150,14 @@ as-is.
      effective branch policy. With no policy, it atomically pushes a one-parent
      squash commit to the base and head refs with exact leases on both reviewed
      SHAs. With policy, it uses `gh pr merge --match-head-commit` only when
-     strict up-to-date checks or a merge queue also guard base movement. A policy
-     without either condition stops with setup guidance.
+     strict up-to-date checks guard base movement. An active merge queue and a
+     policy without strict checks both stop with setup guidance.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
-   - Waits up to ten minutes through an active merge queue and confirms the PR
-     reached `MERGED`. Exit `2` means the merge is still pending and may land
-     later; stop on the feature branch and skip every cleanup step.
+   - On the unguarded compatibility path, waits up to ten minutes through an
+     active merge queue and confirms the PR reached `MERGED`. Exit `2` means the
+     merge is still pending and may land later; stop on the feature branch and
+     skip every cleanup step.
 
 3. **On a validation failure**: relay commitlint's output, propose a corrected
    subject that satisfies the rules (valid type, ≤50 chars), and re-run with the
