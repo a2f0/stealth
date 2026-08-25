@@ -245,8 +245,13 @@ export function deleteAuditIssueImage(issueId: string, imageId: string) {
   );
 }
 
-export function auditIssueImageUrl(issueId: string, imageId: string) {
-  return `${apiUrl}/api/audits/issues/${encodeURIComponent(issueId)}/images/${encodeURIComponent(imageId)}`;
+export function auditIssueImageUrl(
+  issueId: string,
+  imageId: string,
+  variant?: "thumbnail",
+) {
+  const query = variant === "thumbnail" ? "?variant=thumbnail" : "";
+  return `${apiUrl}/api/audits/issues/${encodeURIComponent(issueId)}/images/${encodeURIComponent(imageId)}${query}`;
 }
 
 function templateSaveBody(template: AuditTemplate) {

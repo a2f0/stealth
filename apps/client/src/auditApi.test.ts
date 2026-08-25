@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   type AuditTemplate,
+  auditIssueImageUrl,
   copyAuditTemplate,
   createAuditTemplate,
   deleteAuditIssueImage,
@@ -89,7 +90,7 @@ describe("audit issue API", () => {
       const url = input.toString();
       requests.push({ init: init as RequestInit | undefined, url });
       if (init?.method === "DELETE") return new Response(null, { status: 204 });
-      if (init?.body instanceof FormData) {
+      if (init?.body instanceof File) {
         return Response.json({
           image: {
             contentType: "image/png",
@@ -145,6 +146,9 @@ describe("audit issue API", () => {
         init: { credentials: "include", method: "DELETE" },
         url: `${apiUrl}/api/audits/issues/issue%2Fid/images/image%2Fid`,
       });
+      expect(auditIssueImageUrl("issue/id", "image/id", "thumbnail")).toBe(
+        `${apiUrl}/api/audits/issues/issue%2Fid/images/image%2Fid?variant=thumbnail`,
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

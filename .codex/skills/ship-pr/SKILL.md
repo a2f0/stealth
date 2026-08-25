@@ -264,10 +264,11 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    The empty subject falls back to the PR title captured when the PR was opened
    or resumed (step 3, or step 1 on the resume path), to which the tool appends
    the `(#<pr>)` reference; it validates the subject with commitlint and
-   confirms the PR reached `MERGED` before returning. A non-zero result means
-   the PR did not actually merge (queued, blocked, or the head moved off
-   `REVIEWED_SHA`) — do not report success in that case; re-review the new head
-   instead.
+   confirms the PR reached `MERGED` before returning. Exit `2` means an
+   auto-merge or queue entry is still pending after the bounded wait and may
+   land later: do not clean up or report success, and monitor that PR before any
+   retry. Other non-zero results mean the merge failed or the head moved off
+   `REVIEWED_SHA`; do not report success, and re-review a changed head.
 
 5. **Reset the checkout** — invoke the `reset` skill with no arguments, but only
    when the merge landed and `--keep-branch` was **not** given. It puts the

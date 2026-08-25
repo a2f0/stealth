@@ -113,9 +113,10 @@ checks or a merge queue also close the base race; a weaker policy is rejected
 with setup guidance. The unguarded form remains GitHub's ordinary squash API for
 manual use. Backs the `squash-merge` compatibility skill.
 
-If GitHub queues the merge, the command keeps polling until the PR reaches the
-terminal `MERGED` or `CLOSED` state. It never reports failure while an active
-queue entry could still land later without the cleanup phase.
+If GitHub queues the merge, the command polls for up to ten minutes for the PR
+to reach the terminal `MERGED` or `CLOSED` state. After that it exits `2`, says
+that the auto-merge or queue entry may still be active, and requires the caller
+to skip cleanup until GitHub separately confirms `MERGED`.
 
 The tool only merges. Returning to the base branch, fast-forwarding it, and
 deleting the merged branch live in the `squash-merge` skill *around* this call —

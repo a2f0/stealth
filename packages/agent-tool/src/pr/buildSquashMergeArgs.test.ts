@@ -10,6 +10,7 @@ import {
   buildReviewedCommitArgs,
   buildSquashMergeArgs,
   mergeStateExitCode,
+  mergeWaitExitCode,
   selectGuardedMergeStrategy,
 } from "./squashMerge";
 
@@ -183,5 +184,8 @@ describe("reviewed merge guards", () => {
     expect(mergeStateExitCode("QUEUED")).toBeNull();
     expect(mergeStateExitCode("MERGED")).toBe(0);
     expect(mergeStateExitCode("CLOSED")).toBe(1);
+    expect(mergeWaitExitCode("OPEN", 599_999, 600_000)).toBeNull();
+    expect(mergeWaitExitCode("OPEN", 600_000, 600_000)).toBe(2);
+    expect(mergeWaitExitCode("MERGED", 600_000, 600_000)).toBe(0);
   });
 });

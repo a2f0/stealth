@@ -215,7 +215,11 @@ async function parseImageUpload(
     return { error: "Images must be 10 MB or smaller.", status: 413 };
   }
   const contentType = request.headers.get("content-type") ?? "";
-  if (!supportedImageType(contentType.split(";", 1)[0] ?? "")) {
+  const declaredType = (contentType.split(";", 1)[0] ?? "").toLowerCase();
+  if (
+    declaredType !== "application/octet-stream" &&
+    !supportedImageType(declaredType)
+  ) {
     return {
       error: "Images must be JPEG, PNG, GIF, or WebP files.",
       status: 400,
@@ -273,6 +277,25 @@ auditIssueImages.get("/:issueId/images/:imageId", async (context) => {
   const object = await context.env.STORAGE.get(row.object_key);
   if (!object) {
     return context.json({ error: "Issue image data not found." }, 404);
+  }
+  if (context.req.query("variant") === "thumbnail") {
+    try {
+      const thumbnail = await context.env.IMAGES.input(object.body)
+        .transform({ fit: "scale-down", height: 480, width: 480 })
+        .output({ anim: false, format: "image/webp", quality: 80 });
+      const response = thumbnail.response();
+      const headers = new Headers(response.headers);
+      headers.set("cache-control", "no-store");
+      headers.set("content-disposition", 'inline; filename="thumbnail.webp"');
+      headers.set("x-content-type-options", "nosniff");
+      return new Response(response.body, { headers, status: response.status });
+    } catch (cause) {
+      console.error("Audit issue thumbnail generation failed.", cause);
+      return context.json(
+        { error: "Issue thumbnail could not be generated." },
+        502,
+      );
+    }
   }
   const encodedFilename = encodeURIComponent(row.filename).replaceAll(
     "'",

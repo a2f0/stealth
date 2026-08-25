@@ -300,7 +300,7 @@ describe("audits", () => {
     fixture.bindings.IMAGES = imagesFor({ width: 12_001 });
     const oversizedDimensions = await fixture.app.request(
       `/issues/${issue.body.issueId}/images?filename=too-wide.png`,
-      imageUpload(pngBytes()),
+      imageUpload(pngBytes(), "application/octet-stream"),
       fixture.bindings,
     );
     expect(oversizedDimensions.status).toBe(400);
@@ -424,6 +424,26 @@ describe("audits", () => {
     expect(image.headers.get("cache-control")).toBe("no-store");
     expect(image.headers.get("content-type")).toBe("image/png");
     expect(image.headers.get("content-disposition")).toContain("inline");
+
+    let thumbnailTransform: Record<string, unknown> | undefined;
+    fixture.bindings.IMAGES = imagesFor({
+      onTransform: (options) => {
+        thumbnailTransform = options;
+      },
+    });
+    const thumbnail = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}?variant=thumbnail`,
+      undefined,
+      fixture.bindings,
+    );
+    expect(thumbnail.status).toBe(200);
+    expect(thumbnail.headers.get("cache-control")).toBe("no-store");
+    expect(thumbnail.headers.get("content-type")).toBe("image/webp");
+    expect(thumbnailTransform).toEqual({
+      fit: "scale-down",
+      height: 480,
+      width: 480,
+    });
 
     const detail = await fixture.app.request(
       `/runs/${started.body.auditId}`,
@@ -1175,7 +1195,13 @@ function pngBytes() {
   );
 }
 
-function imagesFor(dimensions: { height?: number; width?: number } = {}) {
+function imagesFor(
+  dimensions: {
+    height?: number;
+    onTransform?: (options: Record<string, unknown>) => void;
+    width?: number;
+  } = {},
+) {
   const readValidPng = async (stream: ReadableStream<Uint8Array>) => {
     const actual = new Uint8Array(await new Response(stream).arrayBuffer());
     const expected = pngBytes();
@@ -1199,18 +1225,30 @@ function imagesFor(dimensions: { height?: number; width?: number } = {}) {
     },
     input: (stream: ReadableStream<Uint8Array>) => {
       const actual = readValidPng(stream);
-      return {
+      const transformer = {
+        transform: (options: Record<string, unknown>) => {
+          dimensions.onTransform?.(options);
+          return transformer;
+        },
         output: async (options: ImageOutputOptions) => {
-          if (options.anim !== false || options.format !== "image/png") {
+          if (
+            options.anim !== false ||
+            (options.format !== "image/png" && options.format !== "image/webp")
+          ) {
             throw new Error("Test images must be normalized without animation");
           }
           const normalized = await actual;
           return {
-            contentType: () => "image/png",
+            contentType: () => options.format,
             image: () => new Blob([normalized]).stream(),
+            response: () =>
+              new Response(normalized, {
+                headers: { "content-type": options.format },
+              }),
           };
         },
       };
+      return transformer;
     },
   } as unknown as ImagesBinding;
 }

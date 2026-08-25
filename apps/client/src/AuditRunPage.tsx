@@ -703,8 +703,9 @@ function IssueImages({
               >
                 <img
                   alt={image.filename}
+                  decoding="async"
                   loading="lazy"
-                  src={auditIssueImageUrl(issue.id, image.id)}
+                  src={auditIssueImageUrl(issue.id, image.id, "thumbnail")}
                 />
               </a>
               <button

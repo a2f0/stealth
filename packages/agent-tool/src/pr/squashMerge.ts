@@ -312,10 +312,30 @@ export function mergeStateExitCode(state: string): number | null {
   return null;
 }
 
+const mergeWaitTimeoutMilliseconds = 10 * 60 * 1000;
+
+export function mergeWaitExitCode(
+  state: string,
+  elapsedMilliseconds: number,
+  timeoutMilliseconds = mergeWaitTimeoutMilliseconds,
+): number | null {
+  return (
+    mergeStateExitCode(state) ??
+    (elapsedMilliseconds >= timeoutMilliseconds ? 2 : null)
+  );
+}
+
 function waitForMergedPr(prNumber: string, repo: string): number {
   const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  const startedAt = Date.now();
   let polls = 0;
   while (true) {
+    if (mergeWaitExitCode("", Date.now() - startedAt) === 2) {
+      process.stderr.write(
+        `PR #${prNumber} is still pending after 10 minutes. Its auto-merge or queue entry may remain active; do not clean up the branch until GitHub reports MERGED.\n`,
+      );
+      return 2;
+    }
     let state: string;
     try {
       state = prState(prNumber, repo);

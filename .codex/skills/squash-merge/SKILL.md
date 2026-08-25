@@ -152,7 +152,9 @@ as-is.
      without either condition stops with setup guidance.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
-   - Waits through an active merge queue and confirms the PR reached `MERGED`.
+   - Waits up to ten minutes through an active merge queue and confirms the PR
+     reached `MERGED`. Exit `2` means the merge is still pending and may land
+     later; stop on the feature branch and skip every cleanup step.
 
 3. **On a validation failure**: relay commitlint's output, propose a corrected
    subject that satisfies the rules (valid type, ≤50 chars), and re-run with the
