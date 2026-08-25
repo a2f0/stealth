@@ -67,6 +67,7 @@ DEFAULT_BRANCH=${REPO_INFO##* }
 [ -n "$REPO" ] || { echo "Error: could not resolve repository" >&2; exit 1; }
 [ -n "$DEFAULT_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
 [ "$BRANCH" != "$DEFAULT_BRANCH" ] || { echo "Error: on default branch $DEFAULT_BRANCH" >&2; exit 1; }
+BASE_REPO_URL=$(gh repo view "$REPO" --json url -q .url) || { echo "Error: could not resolve HTTPS URL for $REPO" >&2; exit 1; }
 
 # Keep the feature branch's push remote separate from the base branch's pull
 # remote. On a fork these are different repositories.
@@ -189,14 +190,10 @@ as-is.
    ```bash
    MERGED_BRANCH="$BRANCH"
    MERGE_COMMIT=$(gh pr view "$PR_NUMBER" --json mergeCommit -q .mergeCommit.oid -R "$REPO")
-   # Pull from the remote the base branch actually tracks; on a fork, `origin` is
-   # the fork and the merge landed upstream, so a hardcoded `origin` pulls a stale
-   # branch and reports success.
-   BASE_REMOTE=$(git config "branch.$BASE_BRANCH.remote" 2>/dev/null || echo origin)
 
    git switch "$BASE_BRANCH" || { echo "Error: could not switch to $BASE_BRANCH" >&2; exit 1; }
-   git pull --ff-only "$BASE_REMOTE" "$BASE_BRANCH" || { echo "Error: $BASE_BRANCH could not fast-forward; skipping delete" >&2; exit 1; }
-   git fetch "$BASE_REMOTE" --prune || { echo "Error: prune failed; skipping delete" >&2; exit 1; }
+   git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch "$BASE_REPO_URL" "$BASE_BRANCH" || { echo "Error: could not fetch $REPO:$BASE_BRANCH; skipping delete" >&2; exit 1; }
+   git merge --ff-only FETCH_HEAD || { echo "Error: $BASE_BRANCH could not fast-forward to $REPO:$BASE_BRANCH; skipping delete" >&2; exit 1; }
 
    # The real gate on the delete: prove this branch now contains the squash commit.
    [ -n "$MERGE_COMMIT" ] || { echo "Error: could not resolve merge commit; skipping delete" >&2; exit 1; }

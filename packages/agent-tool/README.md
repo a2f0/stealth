@@ -14,9 +14,13 @@ bun packages/agent-tool/src/index.ts solicitClaudeCodeReview        # effort: xh
 bun packages/agent-tool/src/index.ts solicitCodexReview             # effort: high
 # Override the reasoning effort (low | medium | high | xhigh | max):
 bun packages/agent-tool/src/index.ts solicitCodexReview xhigh
+# Pin a wrapper-fetched base and reject it if it moves during review:
+bun packages/agent-tool/src/index.ts solicitCodexReview high "$BASE_SHA"
 ```
 
-Both actions:
+Both actions accept an optional second argument containing an expected base SHA
+and re-fetch that exact base after the reviewer exits successfully. This lets a
+wrapper prove that the reviewed and reported base are identical. Both actions:
 
 1. Resolve the review base from git + `gh` — the PR's base when the branch has an
    open PR, the repository's default branch when it does not.

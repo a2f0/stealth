@@ -3,12 +3,13 @@
  * agent-tool - minimal CLI for cross-agent code review and PR workflows.
  *
  * Usage: bun packages/agent-tool/src/index.ts <action> [args]
- *   solicitClaudeCodeReview [effort]
+ *   solicitClaudeCodeReview [effort] [base-sha]
  *                               Review the current branch's diff with the local
  *                               `claude` CLI — against the PR base, or the
  *                               default branch when no PR is open yet (effort
  *                               defaults to xhigh)
- *   solicitCodexReview [effort] Review the current branch's diff with the local
+ *   solicitCodexReview [effort] [base-sha]
+ *                               Review the current branch's diff with the local
  *                               `codex` CLI — against the PR base, or the default
  *                               branch when no PR is open yet (effort defaults to
  *                               high)
@@ -47,9 +48,9 @@ function main(): number {
 
   switch (action) {
     case "solicitClaudeCodeReview":
-      return solicitClaudeCodeReview(rootDir, process.argv[3]);
+      return solicitClaudeCodeReview(rootDir, process.argv[3], process.argv[4]);
     case "solicitCodexReview":
-      return solicitCodexReview(rootDir, process.argv[3]);
+      return solicitCodexReview(rootDir, process.argv[3], process.argv[4]);
     case "openPr":
       return openPr(rootDir, process.argv[3]);
     case "squashMerge":

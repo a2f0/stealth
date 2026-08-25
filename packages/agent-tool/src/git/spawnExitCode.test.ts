@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   assertCleanReviewWorktree,
   assertFetchedCommit,
+  assertSameReviewContext,
   assertSpawnSucceeded,
   selectOpenPrNumber,
   spawnExitCode,
@@ -14,6 +15,26 @@ describe("assertCleanReviewWorktree", () => {
     expect(() => assertCleanReviewWorktree(" M src/a.ts\n?? src/b.ts")).toThrow(
       "Review worktree is not clean",
     );
+  });
+});
+
+describe("assertSameReviewContext", () => {
+  const context = {
+    baseRef: "base-1",
+    branch: "feat/widget",
+    prNumber: "12",
+    repo: "a2f0/stealth",
+    title: "feat: widget",
+  };
+
+  test("rejects a base or PR identity that changes during review", () => {
+    expect(() => assertSameReviewContext(context, context)).not.toThrow();
+    expect(() =>
+      assertSameReviewContext(context, { ...context, baseRef: "base-2" }),
+    ).toThrow("pinned base changed");
+    expect(() =>
+      assertSameReviewContext(context, { ...context, prNumber: "13" }),
+    ).toThrow("pinned base changed");
   });
 });
 

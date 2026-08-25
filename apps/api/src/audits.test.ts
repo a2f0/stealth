@@ -334,6 +334,32 @@ describe("audits", () => {
       filename: "electrical-panel.png",
     });
 
+    fixture.databaseControl.failNextImageInsert = true;
+    fixture.storageControl.failNextDelete = true;
+    const failedUploadCleanup = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images`,
+      { body: pngForm("cleanup-retry.png"), method: "POST" },
+      fixture.bindings,
+    );
+    expect(failedUploadCleanup.status).toBe(500);
+    expect(fixture.stored.size).toBe(2);
+    expect(
+      fixture.database
+        .query(
+          `SELECT COUNT(*) AS count FROM objects
+           WHERE deletion_pending = 1 AND kind = 'audit_issue_image'`,
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(await purgePendingAuditIssueImages(fixture.bindings)).toBe(0);
+    expect(
+      await purgePendingAuditIssueImages(
+        fixture.bindings,
+        "9999-12-31T23:59:59.999Z",
+      ),
+    ).toBe(1);
+    expect(fixture.stored.size).toBe(1);
+
     const concurrentUploads = await Promise.all(
       Array.from({ length: 10 }, (_, index) =>
         fixture.app.request(
@@ -365,29 +391,17 @@ describe("audits", () => {
       fixture.database.query(`SELECT DISTINCT kind FROM objects`).all(),
     ).toEqual([{ kind: "audit_issue_image" }]);
 
-    fixture.storageControl.failNextDelete = true;
-    const failedUploadCleanup = await fixture.app.request(
+    const fullIssueInvalidUpload = new FormData();
+    fullIssueInvalidUpload.set(
+      "file",
+      new File(["not an image"], "invalid.png", { type: "image/png" }),
+    );
+    const rejectedBeforeProcessing = await fixture.app.request(
       `/issues/${issue.body.issueId}/images`,
-      { body: pngForm("cleanup-retry.png"), method: "POST" },
+      { body: fullIssueInvalidUpload, method: "POST" },
       fixture.bindings,
     );
-    expect(failedUploadCleanup.status).toBe(409);
-    expect(fixture.stored.size).toBe(11);
-    expect(
-      fixture.database
-        .query(
-          `SELECT COUNT(*) AS count FROM objects
-           WHERE deletion_pending = 1 AND kind = 'audit_issue_image'`,
-        )
-        .get(),
-    ).toEqual({ count: 1 });
-    expect(await purgePendingAuditIssueImages(fixture.bindings)).toBe(0);
-    expect(
-      await purgePendingAuditIssueImages(
-        fixture.bindings,
-        "9999-12-31T23:59:59.999Z",
-      ),
-    ).toBe(1);
+    expect(rejectedBeforeProcessing.status).toBe(409);
     expect(fixture.stored.size).toBe(10);
 
     const hiddenImage = await fixture.app.request(
@@ -905,7 +919,10 @@ async function createFixture() {
   await applyMigration(database, "0025_classify_objects.sql");
   await applyMigration(database, "0026_track_object_deletion.sql");
   const stored = new Map<string, Uint8Array>();
-  const databaseControl = { failNextPendingUpdate: false };
+  const databaseControl = {
+    failNextImageInsert: false,
+    failNextPendingUpdate: false,
+  };
   const storageControl = { failNextDelete: false };
   const bindings = bindingsFor(
     database,
@@ -1003,7 +1020,10 @@ function bindingsFor(
   database: Database,
   stored: Map<string, Uint8Array> = new Map(),
   storageControl = { failNextDelete: false },
-  databaseControl = { failNextPendingUpdate: false },
+  databaseControl = {
+    failNextImageInsert: false,
+    failNextPendingUpdate: false,
+  },
 ): Bindings {
   return {
     AUTH_EMAIL_FROM: "security@auth.tearleads.com",
@@ -1044,7 +1064,10 @@ function storageFor(
   } as unknown as R2Bucket;
 }
 
-function toD1(database: Database, control = { failNextPendingUpdate: false }) {
+function toD1(
+  database: Database,
+  control = { failNextImageInsert: false, failNextPendingUpdate: false },
+) {
   let batchTail: Promise<void> = Promise.resolve();
   return {
     batch: (statements: D1PreparedStatement[]) => {
@@ -1074,6 +1097,13 @@ function toD1(database: Database, control = { failNextPendingUpdate: false }) {
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const runSync = () => {
+        if (
+          control.failNextImageInsert &&
+          query.includes("INSERT INTO audit_issue_images")
+        ) {
+          control.failNextImageInsert = false;
+          throw new Error("Transient D1 image insert failure");
+        }
         if (
           control.failNextPendingUpdate &&
           query.includes("UPDATE objects SET deletion_pending = 1")

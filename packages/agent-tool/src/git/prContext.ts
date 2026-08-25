@@ -216,6 +216,22 @@ export function assertCleanReviewWorktree(status: string) {
   }
 }
 
+export function assertSameReviewContext(
+  expected: PrContext,
+  actual: PrContext,
+): void {
+  if (
+    expected.branch !== actual.branch ||
+    expected.repo !== actual.repo ||
+    expected.prNumber !== actual.prNumber ||
+    expected.baseRef !== actual.baseRef
+  ) {
+    throw new Error(
+      "The review branch, PR, or pinned base changed while the reviewer was running.",
+    );
+  }
+}
+
 export function assertSpawnSucceeded(
   command: string,
   result: SpawnResult,
@@ -428,7 +444,7 @@ export function resolvePr(): PrMergeIdentity {
  * is fetched fresh, so a stale local ref never leaks upstream commits into the
  * diff. Throws on the default branch, via `resolveRepoContext`.
  */
-export function resolveReviewContext(): PrContext {
+export function resolveReviewContext(expectedBaseRef = ""): PrContext {
   const { branch, repo, defaultBranch } = resolveRepoContext();
   assertCleanReviewWorktree(
     run("git", ["status", "--porcelain", "--untracked-files=all"]),
@@ -449,7 +465,7 @@ export function resolveReviewContext(): PrContext {
       repo,
       prNumber: "",
       title: "",
-      baseRef: resolveFreshBaseRef(repo, defaultBranch),
+      baseRef: resolveFreshBaseRef(repo, defaultBranch, expectedBaseRef),
     };
   }
 
@@ -462,6 +478,10 @@ export function resolveReviewContext(): PrContext {
     repo,
     prNumber,
     title: view.title,
-    baseRef: resolveFreshBaseRef(repo, view.baseRefName, view.baseRefOid),
+    baseRef: resolveFreshBaseRef(
+      repo,
+      view.baseRefName,
+      expectedBaseRef || view.baseRefOid,
+    ),
   };
 }

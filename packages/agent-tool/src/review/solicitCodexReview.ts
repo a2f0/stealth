@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  assertSameReviewContext,
   ensureChanges,
   MAX_BUFFER_BYTES,
   resolveReviewContext,
@@ -243,9 +244,10 @@ export function spawnCodexReview(
 export function solicitCodexReview(
   rootDir: string,
   effortArg?: string,
+  expectedBaseRef?: string,
 ): number {
   const effort = resolveReviewEffort(effortArg, DEFAULT_CODEX_EFFORT);
-  const context = resolveReviewContext();
+  const context = resolveReviewContext(expectedBaseRef);
   ensureChanges(context.baseRef);
 
   const diff = run("git", ["diff", `${context.baseRef}...HEAD`]);
@@ -256,5 +258,8 @@ export function solicitCodexReview(
     accessNote: `${CODEX_ACCESS_NOTE}. The committed files are in the tracked checkout/ directory`,
   });
 
-  return spawnCodexReview(prompt, effort, process.env, rootDir);
+  const exitCode = spawnCodexReview(prompt, effort, process.env, rootDir);
+  if (exitCode !== 0) return exitCode;
+  assertSameReviewContext(context, resolveReviewContext(context.baseRef));
+  return 0;
 }

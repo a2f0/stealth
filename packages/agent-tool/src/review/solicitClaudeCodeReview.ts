@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  assertSameReviewContext,
   ensureChanges,
   MAX_BUFFER_BYTES,
   resolveReviewContext,
@@ -222,9 +223,10 @@ export function spawnClaudeReview(
 export function solicitClaudeCodeReview(
   rootDir: string,
   effortArg?: string,
+  expectedBaseRef?: string,
 ): number {
   const effort = resolveReviewEffort(effortArg, DEFAULT_CLAUDE_EFFORT);
-  const context = resolveReviewContext();
+  const context = resolveReviewContext(expectedBaseRef);
   ensureChanges(context.baseRef);
 
   const diff = run("git", ["diff", `${context.baseRef}...HEAD`]);
@@ -235,5 +237,8 @@ export function solicitClaudeCodeReview(
     accessNote: `${CLAUDE_ACCESS_NOTE}. The committed files are in the tracked checkout/ directory`,
   });
 
-  return spawnClaudeReview(prompt, effort, process.env, rootDir);
+  const exitCode = spawnClaudeReview(prompt, effort, process.env, rootDir);
+  if (exitCode !== 0) return exitCode;
+  assertSameReviewContext(context, resolveReviewContext(context.baseRef));
+  return 0;
 }

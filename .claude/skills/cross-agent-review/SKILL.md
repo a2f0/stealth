@@ -212,15 +212,15 @@ Require a clean worktree before fetching or snapshotting anything:
    **For Codex review:**
 
    ```bash
-   bun "$AGENT_TOOL" solicitCodexReview            # effort: high (default)
-   bun "$AGENT_TOOL" solicitCodexReview xhigh      # explicit override
+   bun "$AGENT_TOOL" solicitCodexReview high "$FETCHED_BASE"
+   bun "$AGENT_TOOL" solicitCodexReview xhigh "$FETCHED_BASE"
    ```
 
    **For Claude Code review:**
 
    ```bash
-   bun "$AGENT_TOOL" solicitClaudeCodeReview       # effort: xhigh (default)
-   bun "$AGENT_TOOL" solicitClaudeCodeReview high  # explicit override
+   bun "$AGENT_TOOL" solicitClaudeCodeReview xhigh "$FETCHED_BASE"
+   bun "$AGENT_TOOL" solicitClaudeCodeReview high "$FETCHED_BASE"
    ```
 
    **Fallback behavior (required):**
@@ -231,7 +231,7 @@ Require a clean worktree before fetching or snapshotting anything:
      self-review:
 
      ```bash
-     bun "$AGENT_TOOL" solicitClaudeCodeReview
+     bun "$AGENT_TOOL" solicitClaudeCodeReview xhigh "$FETCHED_BASE"
      ```
 
    - If the Claude Code review also fails (or was selected first and fails due
@@ -265,13 +265,16 @@ Require a clean worktree before fetching or snapshotting anything:
    ```bash
    test "$REVIEWED_SHA" = "$(git rev-parse HEAD)"
    [ -z "$PR_NUMBER" ] || test "$REVIEWED_SHA" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)"
+   git fetch "$BASE_URL" "$BASE_REF" || { echo "Error: could not re-fetch $BASE_REF after review" >&2; exit 1; }
+   POST_REVIEW_BASE=$(git rev-parse 'FETCH_HEAD^{commit}') || { echo "Error: post-review base is unavailable" >&2; exit 1; }
+   test "$FETCHED_BASE" = "$POST_REVIEW_BASE" || { echo "Error: $BASE_REF moved during review; discard the result and re-run" >&2; exit 1; }
    ```
 
-   If either changed, something landed underneath the review. Discard the stale
-   result, reconcile safely, and return to step 2 with the new head. This check
-   runs *before* any repair of this round, so it detects foreign changes rather
+   If the head or pinned base changed, something landed underneath the review.
+   Discard the stale result, reconcile safely, and return to step 2. These checks
+   run *before* any repair of this round, so they detect foreign changes rather
    than the skill's own. With no PR there is no pushed head to check, only the
-   local one.
+   local one; the base re-fetch is required in both modes.
 
 4. **In-session file-by-file review** (when external agents are unavailable):
 

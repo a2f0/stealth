@@ -33,12 +33,6 @@ export interface AuditIssueImageRow {
 }
 
 auditIssueImages.post("/:issueId/images", async (context) => {
-  const upload = await parseImageUpload(context.req.raw);
-  if ("error" in upload) {
-    return context.json({ error: upload.error }, upload.status);
-  }
-  const { file } = upload;
-
   const organizationId = context.get("organizationId");
   const issueId = context.req.param("issueId");
   const issue = await context.env.DB.prepare(
@@ -47,6 +41,18 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     .bind(issueId, organizationId)
     .first<{ id: string }>();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
+  if (await issueHasMaximumImages(context.env.DB, issue.id)) {
+    return context.json(
+      { error: `Issues are limited to ${maxImagesPerIssue} images.` },
+      409,
+    );
+  }
+
+  const upload = await parseImageUpload(context.req.raw);
+  if ("error" in upload) {
+    return context.json({ error: upload.error }, upload.status);
+  }
+  const { file } = upload;
 
   const sourceBytes = await file.arrayBuffer();
   const validation = await validateImage(context.env.IMAGES, sourceBytes);
