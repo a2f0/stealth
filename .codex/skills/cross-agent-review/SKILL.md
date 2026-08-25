@@ -240,15 +240,15 @@ Require a clean worktree before fetching or snapshotting anything:
    **For Claude Code review:**
 
    ```bash
-   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" solicitClaudeCodeReview xhigh "$FETCHED_BASE"
-   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" solicitClaudeCodeReview high "$FETCHED_BASE"
+   "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" solicitClaudeCodeReview xhigh "$FETCHED_BASE"
+   "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" solicitClaudeCodeReview high "$FETCHED_BASE"
    ```
 
    **For Codex review:**
 
    ```bash
-   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" solicitCodexReview high "$FETCHED_BASE"
-   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" solicitCodexReview xhigh "$FETCHED_BASE"
+   "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" solicitCodexReview high "$FETCHED_BASE"
+   "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" solicitCodexReview xhigh "$FETCHED_BASE"
    ```
 
    **Fallback behavior (required):**
@@ -258,7 +258,7 @@ Require a clean worktree before fetching or snapshotting anything:
      tool's built-in retry), immediately fall back to a Codex self-review:
 
      ```bash
-     "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" solicitCodexReview high "$FETCHED_BASE"
+     "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" solicitCodexReview high "$FETCHED_BASE"
      ```
 
    - If the Codex review also fails (or was selected first and fails due to
