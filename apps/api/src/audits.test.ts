@@ -305,6 +305,22 @@ describe("audits", () => {
     );
     expect(oversizedDimensions.status).toBe(400);
     expect(fixture.stored.size).toBe(0);
+
+    fixture.bindings.IMAGES = imagesFor({
+      normalizedBytes: new Uint8Array(10 * 1024 * 1024 + 1),
+    });
+    const oversizedNormalizedImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images?filename=oversized-output.png`,
+      imageUpload(pngBytes()),
+      fixture.bindings,
+    );
+    expect(oversizedNormalizedImage.status).toBe(413);
+    expect(fixture.stored.size).toBe(0);
+    expect(
+      fixture.database
+        .query(`SELECT COUNT(*) AS count FROM audit_issue_images`)
+        .get(),
+    ).toEqual({ count: 0 });
     fixture.bindings.IMAGES = imagesFor();
 
     const uploaded = await fixture.app.request(
@@ -318,6 +334,44 @@ describe("audits", () => {
       contentType: "image/png",
       filename: "electrical-panel.png",
     });
+
+    fixture.storageControl.beforeNextPut = async () => {
+      fixture.database
+        .query(
+          `UPDATE objects SET created_at = '2000-01-01T00:00:00.000Z'
+           WHERE filename = 'lease-protected.png'`,
+        )
+        .run();
+      expect(await purgePendingAuditIssueImages(fixture.bindings)).toBe(0);
+      expect(
+        fixture.database
+          .query(
+            `SELECT cleanup_token, upload_token,
+                    datetime(upload_lease_expires_at) > datetime('now') AS leased
+             FROM objects WHERE filename = 'lease-protected.png'`,
+          )
+          .get(),
+      ).toEqual({
+        cleanup_token: null,
+        leased: 1,
+        upload_token: expect.any(String),
+      });
+    };
+    const leaseProtectedUpload = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images?filename=lease-protected.png`,
+      imageUpload(pngBytes()),
+      fixture.bindings,
+    );
+    expect(leaseProtectedUpload.status).toBe(201);
+    const leaseProtectedBody =
+      (await leaseProtectedUpload.json()) as IssueImageResponse;
+    const deletedLeaseProtectedImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${leaseProtectedBody.image.id}`,
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(deletedLeaseProtectedImage.status).toBe(204);
+    expect(fixture.stored.size).toBe(1);
 
     fixture.databaseControl.failNextImageActivation = true;
     fixture.storageControl.failNextDelete = true;
@@ -384,10 +438,31 @@ describe("audits", () => {
     );
     expect(
       concurrentUploads.filter(({ status }) => status === 201),
-    ).toHaveLength(9);
+    ).toHaveLength(4);
     expect(
-      concurrentUploads.filter(({ status }) => status === 409),
-    ).toHaveLength(1);
+      concurrentUploads.filter(({ status }) => status === 429),
+    ).toHaveLength(6);
+    expect(
+      concurrentUploads
+        .filter(({ status }) => status === 429)
+        .every((response) => response.headers.get("retry-after") === "1"),
+    ).toBe(true);
+    const retriedUploads: Response[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      retriedUploads.push(
+        await fixture.app.request(
+          `/issues/${issue.body.issueId}/images?filename=retry-${index}.png`,
+          imageUpload(pngBytes()),
+          fixture.bindings,
+        ),
+      );
+    }
+    expect(retriedUploads.filter(({ status }) => status === 201)).toHaveLength(
+      5,
+    );
+    expect(retriedUploads.filter(({ status }) => status === 409)).toHaveLength(
+      1,
+    );
     expect(processedConcurrentUploads).toBe(9);
     expect(fixture.stored.size).toBe(10);
     expect(
@@ -942,13 +1017,17 @@ async function createFixture() {
   await applyMigration(database, "0025_classify_objects.sql");
   await applyMigration(database, "0026_track_object_deletion.sql");
   await applyMigration(database, "0027_claim_object_cleanup.sql");
+  await applyMigration(database, "0028_lease_audit_image_uploads.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
   };
-  const storageControl = { failNextDelete: false };
+  const storageControl: {
+    beforeNextPut?: () => Promise<void>;
+    failNextDelete: boolean;
+  } = { failNextDelete: false };
   const bindings = bindingsFor(
     database,
     stored,
@@ -1044,7 +1123,10 @@ async function jsonRequest<T = unknown>(
 function bindingsFor(
   database: Database,
   stored: Map<string, Uint8Array> = new Map(),
-  storageControl = { failNextDelete: false },
+  storageControl: {
+    beforeNextPut?: () => Promise<void>;
+    failNextDelete: boolean;
+  } = { failNextDelete: false },
   databaseControl = {
     activateBeforeCleanupClaim: false,
     failNextImageActivation: false,
@@ -1066,7 +1148,10 @@ function bindingsFor(
 
 function storageFor(
   stored: Map<string, Uint8Array>,
-  control: { failNextDelete: boolean },
+  control: {
+    beforeNextPut?: () => Promise<void>;
+    failNextDelete: boolean;
+  },
 ) {
   return {
     delete: async (key: string) => {
@@ -1084,8 +1169,18 @@ function storageFor(
         httpEtag: '"test-etag"',
       };
     },
-    put: async (key: string, value: ArrayBuffer) => {
-      stored.set(key, new Uint8Array(value));
+    put: async (
+      key: string,
+      value: ArrayBuffer | ReadableStream<Uint8Array>,
+    ) => {
+      const beforePut = control.beforeNextPut;
+      delete control.beforeNextPut;
+      await beforePut?.();
+      const bytes =
+        value instanceof ReadableStream
+          ? await new Response(value).arrayBuffer()
+          : value;
+      stored.set(key, new Uint8Array(bytes));
     },
   } as unknown as R2Bucket;
 }
@@ -1129,7 +1224,7 @@ function toD1(
       const runSync = () => {
         if (
           control.failNextImageActivation &&
-          query.includes("UPDATE objects SET deletion_pending = 0")
+          query.includes("SET size = ?, deletion_pending = 0")
         ) {
           control.failNextImageActivation = false;
           throw new Error("Transient D1 image activation failure");
@@ -1156,7 +1251,7 @@ function toD1(
         first: async () => {
           if (
             control.activateBeforeCleanupClaim &&
-            query.includes("UPDATE objects SET cleanup_token")
+            query.includes("SET cleanup_token = ?")
           ) {
             control.activateBeforeCleanupClaim = false;
             const objectId = values[2];
@@ -1167,7 +1262,8 @@ function toD1(
               .query(
                 `UPDATE objects
                  SET deletion_pending = 0, cleanup_token = NULL,
-                     cleanup_claimed_at = NULL
+                     cleanup_claimed_at = NULL, upload_token = NULL,
+                     upload_lease_expires_at = NULL
                  WHERE id = ?`,
               )
               .run(objectId);
@@ -1202,6 +1298,7 @@ function pngBytes() {
 function imagesFor(
   dimensions: {
     height?: number;
+    normalizedBytes?: Uint8Array;
     onInfo?: () => void;
     onTransform?: (options: Record<string, unknown>) => void;
     width?: number;
@@ -1243,7 +1340,8 @@ function imagesFor(
           ) {
             throw new Error("Test images must be normalized without animation");
           }
-          const normalized = await actual;
+          const actualBytes = await actual;
+          const normalized = dimensions.normalizedBytes ?? actualBytes;
           return {
             contentType: () => options.format,
             image: () => new Blob([normalized]).stream(),

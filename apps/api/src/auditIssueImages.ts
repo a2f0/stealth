@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import { normalizeFilename } from "./filenames";
 import type { Bindings } from "./types";
@@ -7,13 +7,30 @@ const auditIssueImages = new Hono<{
   Bindings: Bindings;
   Variables: AuthVariables;
 }>();
+type AuditIssueImageContext = Context<{
+  Bindings: Bindings;
+  Variables: AuthVariables;
+}>;
 
 const maxImageBytes = 10 * 1024 * 1024;
 const maxImageDimension = 12_000;
 const maxImagePixels = 40_000_000;
 const maxImagesPerIssue = 10;
+const maxConcurrentImageUploads = 4;
 const pendingUploadGraceMilliseconds = 15 * 60 * 1000;
 const pendingCleanupBatchSize = 100;
+let activeImageUploads = 0;
+
+function acquireImageUploadCapacity() {
+  if (activeImageUploads >= maxConcurrentImageUploads) return null;
+  activeImageUploads += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeImageUploads -= 1;
+  };
+}
 
 export interface AuditIssueImageRow {
   content_type: string;
@@ -40,20 +57,45 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     .first<{ id: string }>();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
 
-  const reservation = await reserveAuditIssueImage(
-    context.env.DB,
-    organizationId,
-    issue.id,
-    context.get("authSession").user.id,
-    context.req.query("filename"),
-  );
-  if (reservation === null) {
+  const releaseCapacity = acquireImageUploadCapacity();
+  if (releaseCapacity === null) {
+    context.header("retry-after", "1");
     return context.json(
-      { error: `Issues are limited to ${maxImagesPerIssue} images.` },
-      409,
+      { error: "Image uploads are busy. Please retry in a moment." },
+      429,
     );
   }
+  try {
+    const reservation = await reserveAuditIssueImage(
+      context.env.DB,
+      organizationId,
+      issue.id,
+      context.get("authSession").user.id,
+      context.req.query("filename"),
+    );
+    if (reservation === null) {
+      return context.json(
+        { error: `Issues are limited to ${maxImagesPerIssue} images.` },
+        409,
+      );
+    }
+    return await uploadReservedAuditIssueImage(
+      context,
+      organizationId,
+      issue.id,
+      reservation,
+    );
+  } finally {
+    releaseCapacity();
+  }
+});
 
+async function uploadReservedAuditIssueImage(
+  context: AuditIssueImageContext,
+  organizationId: string,
+  issueId: string,
+  reservation: AuditIssueImageReservation,
+) {
   let upload: Awaited<ReturnType<typeof parseImageUpload>>;
   let validation: Awaited<ReturnType<typeof validateImage>>;
   try {
@@ -65,6 +107,7 @@ auditIssueImages.post("/:issueId/images", async (context) => {
       await discardAuditIssueImageReservation(
         context.env.DB,
         reservation.objectId,
+        reservation.uploadToken,
       );
       return context.json({ error: upload.error }, upload.status);
     }
@@ -73,6 +116,7 @@ auditIssueImages.post("/:issueId/images", async (context) => {
       await discardAuditIssueImageReservation(
         context.env.DB,
         reservation.objectId,
+        reservation.uploadToken,
       );
       return context.json({ error: validation.error }, validation.status);
     }
@@ -80,32 +124,40 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     await discardAuditIssueImageReservation(
       context.env.DB,
       reservation.objectId,
+      reservation.uploadToken,
     );
     throw cause;
   }
-  const { bytes, imageType } = validation;
-
+  const { imageType, stream } = validation;
   const filename = normalizedImageFilename(
     upload.filename,
     imageType.extension,
   );
-  await persistAuditIssueImage(context.env, bytes, {
-    contentType: imageType.contentType,
-    filename,
-    issueId: issue.id,
-    objectId: reservation.objectId,
-    objectKey: reservation.objectKey,
-    organizationId,
-  });
+  try {
+    await persistAuditIssueImage(context.env, stream, {
+      contentType: imageType.contentType,
+      filename,
+      issueId,
+      objectId: reservation.objectId,
+      objectKey: reservation.objectKey,
+      organizationId,
+      uploadToken: reservation.uploadToken,
+    });
+  } catch (cause) {
+    if (cause instanceof AuditIssueImageUploadError) {
+      return context.json({ error: cause.message }, cause.status);
+    }
+    throw cause;
+  }
   const image = await findAuditIssueImage(
     context.env.DB,
     organizationId,
-    issue.id,
+    issueId,
     reservation.imageId,
   );
   if (!image) throw new Error("Uploaded issue image could not be loaded.");
   return context.json({ image: toAuditIssueImage(image) }, 201);
-});
+}
 
 interface AuditIssueImageInsert {
   contentType: string;
@@ -114,12 +166,14 @@ interface AuditIssueImageInsert {
   objectId: string;
   objectKey: string;
   organizationId: string;
+  uploadToken: string;
 }
 
 interface AuditIssueImageReservation {
   imageId: string;
   objectId: string;
   objectKey: string;
+  uploadToken: string;
 }
 
 async function reserveAuditIssueImage(
@@ -132,17 +186,30 @@ async function reserveAuditIssueImage(
   const createdAt = new Date().toISOString();
   const imageId = crypto.randomUUID();
   const objectId = crypto.randomUUID();
+  const uploadToken = crypto.randomUUID();
+  const uploadLeaseExpiresAt = new Date(
+    Date.now() + pendingUploadGraceMilliseconds,
+  ).toISOString();
   const objectKey = `organizations/${organizationId}/audit-issues/${issueId}/${objectId}/image`;
   const filename = normalizeFilename(requestedFilename ?? "", "issue-image");
   await database
     .prepare(
       `INSERT INTO objects
        (id, organization_id, object_key, filename, content_type, size,
-        created_at, kind, deletion_pending)
+        created_at, kind, deletion_pending, upload_token,
+        upload_lease_expires_at)
        VALUES (?, ?, ?, ?, 'application/octet-stream', 0, ?,
-               'audit_issue_image', 1)`,
+               'audit_issue_image', 1, ?, ?)`,
     )
-    .bind(objectId, organizationId, objectKey, filename, createdAt)
+    .bind(
+      objectId,
+      organizationId,
+      objectKey,
+      filename,
+      createdAt,
+      uploadToken,
+      uploadLeaseExpiresAt,
+    )
     .run();
   let reserved: { id: string } | null;
   try {
@@ -176,19 +243,20 @@ async function reserveAuditIssueImage(
       )
       .first<{ id: string }>();
   } catch (cause) {
-    await discardAuditIssueImageReservation(database, objectId);
+    await discardAuditIssueImageReservation(database, objectId, uploadToken);
     throw cause;
   }
   if (reserved === null) {
-    await discardAuditIssueImageReservation(database, objectId);
+    await discardAuditIssueImageReservation(database, objectId, uploadToken);
     return null;
   }
-  return { imageId, objectId, objectKey };
+  return { imageId, objectId, objectKey, uploadToken };
 }
 
 async function discardAuditIssueImageReservation(
   database: D1Database,
   objectId: string,
+  uploadToken: string,
 ) {
   await database.batch([
     database
@@ -198,16 +266,18 @@ async function discardAuditIssueImageReservation(
            SELECT 1 FROM objects
            WHERE id = ? AND kind = 'audit_issue_image'
              AND deletion_pending = 1 AND cleanup_token IS NULL
+             AND upload_token = ?
          )`,
       )
-      .bind(objectId, objectId),
+      .bind(objectId, objectId, uploadToken),
     database
       .prepare(
         `DELETE FROM objects
          WHERE id = ? AND kind = 'audit_issue_image'
-           AND deletion_pending = 1 AND cleanup_token IS NULL`,
+           AND deletion_pending = 1 AND cleanup_token IS NULL
+           AND upload_token = ?`,
       )
-      .bind(objectId),
+      .bind(objectId, uploadToken),
   ]);
 }
 
@@ -220,38 +290,136 @@ function normalizedImageFilename(filename: string, extension: string) {
   return `${trimmedStem}${suffix}`;
 }
 
+class AuditIssueImageUploadError extends Error {
+  constructor(
+    message: string,
+    readonly status: 400 | 413,
+  ) {
+    super(message);
+  }
+}
+
+async function abandonAuditIssueImageUpload(
+  database: D1Database,
+  objectId: string,
+  uploadToken: string,
+) {
+  await database
+    .prepare(
+      `UPDATE objects
+       SET upload_token = NULL, upload_lease_expires_at = NULL
+       WHERE id = ? AND kind = 'audit_issue_image'
+         AND deletion_pending = 1 AND upload_token = ?`,
+    )
+    .bind(objectId, uploadToken)
+    .run();
+}
+
 async function persistAuditIssueImage(
   environment: Pick<Bindings, "DB" | "STORAGE">,
-  bytes: ArrayBuffer,
+  stream: ReadableStream<Uint8Array>,
+  image: AuditIssueImageInsert,
+) {
+  await refreshAuditIssueImageUploadLease(environment.DB, image);
+  const normalizedSize = await writeNormalizedAuditIssueImage(
+    environment,
+    stream,
+    image,
+  );
+  try {
+    const activated = await environment.DB.prepare(
+      `UPDATE objects
+       SET size = ?, deletion_pending = 0, upload_token = NULL,
+           upload_lease_expires_at = NULL
+       WHERE id = ? AND kind = 'audit_issue_image'
+         AND deletion_pending = 1 AND cleanup_token IS NULL
+         AND upload_token = ?`,
+    )
+      .bind(normalizedSize, image.objectId, image.uploadToken)
+      .run();
+    if (Number(activated.meta.changes) !== 1) {
+      throw new Error("Issue image reservation could not be activated.");
+    }
+  } catch (cause) {
+    await abandonAndCleanupAuditIssueImage(environment, image);
+    throw cause;
+  }
+}
+
+async function refreshAuditIssueImageUploadLease(
+  database: D1Database,
   image: AuditIssueImageInsert,
 ) {
   // The pending object and image row already reserve a unique per-issue slot.
   // Fill in the validated metadata before writing bytes so any later failure
   // leaves a complete durable cleanup tombstone.
   try {
-    const metadata = await environment.DB.prepare(
-      `UPDATE objects
-       SET filename = ?, content_type = ?, size = ?
+    const metadata = await database
+      .prepare(
+        `UPDATE objects
+       SET filename = ?, content_type = ?, upload_lease_expires_at = ?
        WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'
-         AND deletion_pending = 1 AND cleanup_token IS NULL`,
-    )
+         AND deletion_pending = 1 AND cleanup_token IS NULL
+         AND upload_token = ?`,
+      )
       .bind(
         image.filename,
         image.contentType,
-        bytes.byteLength,
+        new Date(Date.now() + pendingUploadGraceMilliseconds).toISOString(),
         image.objectId,
         image.organizationId,
+        image.uploadToken,
       )
       .run();
     if (Number(metadata.meta.changes) !== 1) {
       throw new Error("Issue image reservation is no longer available.");
     }
   } catch (cause) {
-    await discardAuditIssueImageReservation(environment.DB, image.objectId);
+    await discardAuditIssueImageReservation(
+      database,
+      image.objectId,
+      image.uploadToken,
+    );
     throw cause;
   }
+}
+
+async function abandonAndCleanupAuditIssueImage(
+  environment: Pick<Bindings, "DB" | "STORAGE">,
+  image: AuditIssueImageInsert,
+) {
+  await abandonAuditIssueImageUpload(
+    environment.DB,
+    image.objectId,
+    image.uploadToken,
+  );
+  await attemptPendingObjectCleanup(environment, image.objectId);
+}
+
+async function writeNormalizedAuditIssueImage(
+  environment: Pick<Bindings, "DB" | "STORAGE">,
+  stream: ReadableStream<Uint8Array>,
+  image: AuditIssueImageInsert,
+) {
+  let normalizedSize = 0;
+  let normalizedTooLarge = false;
+  const limitedStream = stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        normalizedSize += chunk.byteLength;
+        if (normalizedSize > maxImageBytes) {
+          normalizedTooLarge = true;
+          controller.error(
+            new Error("normalized image exceeded the upload limit"),
+          );
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    }),
+  );
   try {
-    await environment.STORAGE.put(image.objectKey, bytes, {
+    await environment.STORAGE.put(image.objectKey, limitedStream, {
       httpMetadata: { contentType: image.contentType },
       customMetadata: {
         filename: image.filename,
@@ -260,24 +428,23 @@ async function persistAuditIssueImage(
       },
     });
   } catch (cause) {
-    await attemptPendingObjectCleanup(environment, image.objectId);
-    throw cause;
-  }
-  try {
-    const activated = await environment.DB.prepare(
-      `UPDATE objects SET deletion_pending = 0
-       WHERE id = ? AND kind = 'audit_issue_image'
-         AND deletion_pending = 1 AND cleanup_token IS NULL`,
-    )
-      .bind(image.objectId)
-      .run();
-    if (Number(activated.meta.changes) !== 1) {
-      throw new Error("Issue image reservation could not be activated.");
+    await abandonAndCleanupAuditIssueImage(environment, image);
+    if (normalizedTooLarge) {
+      throw new AuditIssueImageUploadError(
+        "Normalized images must be 10 MB or smaller.",
+        413,
+      );
     }
-  } catch (cause) {
-    await attemptPendingObjectCleanup(environment, image.objectId);
     throw cause;
   }
+  if (normalizedSize === 0) {
+    await abandonAndCleanupAuditIssueImage(environment, image);
+    throw new AuditIssueImageUploadError(
+      "The uploaded image could not be normalized safely.",
+      400,
+    );
+  }
+  return normalizedSize;
 }
 
 async function parseImageUpload(
@@ -399,19 +566,30 @@ async function deletePendingAuditIssueObject(
   abandonedClaimCutoff = new Date(
     Date.now() - pendingUploadGraceMilliseconds,
   ).toISOString(),
+  uploadLeaseCutoff = new Date().toISOString(),
 ) {
   const cleanupToken = crypto.randomUUID();
+  const claimedAt = new Date().toISOString();
   const claimed = await environment.DB.prepare(
-    `UPDATE objects SET cleanup_token = ?, cleanup_claimed_at = ?
+    `UPDATE objects
+     SET cleanup_token = ?, cleanup_claimed_at = ?, upload_token = NULL,
+         upload_lease_expires_at = NULL
      WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1
        AND (cleanup_token IS NULL OR datetime(cleanup_claimed_at) <= datetime(?))
+       AND (
+         upload_token IS NULL OR (
+           upload_lease_expires_at IS NOT NULL
+           AND datetime(upload_lease_expires_at) <= datetime(?)
+         )
+       )
      RETURNING object_key`,
   )
     .bind(
       cleanupToken,
-      new Date().toISOString(),
+      claimedAt,
       object.id,
       abandonedClaimCutoff,
+      uploadLeaseCutoff,
     )
     .first<{ object_key: string }>();
   if (!claimed) return false;
@@ -450,16 +628,23 @@ async function attemptPendingObjectCleanup(
 export async function purgePendingAuditIssueImages(
   environment: Pick<Bindings, "DB" | "STORAGE">,
   cutoff = new Date(Date.now() - pendingUploadGraceMilliseconds).toISOString(),
+  uploadLeaseCutoff = new Date().toISOString(),
 ) {
   const result = await environment.DB.prepare(
     `SELECT id FROM objects
      WHERE kind = 'audit_issue_image' AND deletion_pending = 1
        AND datetime(created_at) <= datetime(?)
        AND (cleanup_token IS NULL OR datetime(cleanup_claimed_at) <= datetime(?))
+       AND (
+         upload_token IS NULL OR (
+           upload_lease_expires_at IS NOT NULL
+           AND datetime(upload_lease_expires_at) <= datetime(?)
+         )
+       )
      ORDER BY created_at ASC, id ASC
      LIMIT ?`,
   )
-    .bind(cutoff, cutoff, pendingCleanupBatchSize)
+    .bind(cutoff, cutoff, uploadLeaseCutoff, pendingCleanupBatchSize)
     .all<PendingAuditIssueObject>();
   let firstFailure: unknown;
   let purged = 0;
@@ -469,6 +654,7 @@ export async function purgePendingAuditIssueImages(
         environment,
         object,
         cutoff,
+        uploadLeaseCutoff,
       );
       if (deleted) purged += 1;
     } catch (cause) {
@@ -495,7 +681,8 @@ auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
     context.env.DB.prepare(
       `UPDATE objects
        SET deletion_pending = 1, cleanup_token = NULL,
-           cleanup_claimed_at = NULL
+           cleanup_claimed_at = NULL, upload_token = NULL,
+           upload_lease_expires_at = NULL
        WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
     ).bind(row.object_id, organizationId),
     context.env.DB.prepare(
@@ -638,25 +825,9 @@ async function validateImage(images: ImagesBinding, bytes: ArrayBuffer) {
         status: 400,
       } as const;
     }
-    const normalizedBytes = await readBodyWithLimit(
-      normalized.image(),
-      maxImageBytes,
-    );
-    if (normalizedBytes === null) {
-      return {
-        error: "Normalized images must be 10 MB or smaller.",
-        status: 413,
-      } as const;
-    }
-    if (normalizedBytes.byteLength === 0) {
-      return {
-        error: "The uploaded image could not be normalized safely.",
-        status: 400,
-      } as const;
-    }
     return {
-      bytes: normalizedBytes,
       imageType: normalizedImageType,
+      stream: normalized.image(),
     } as const;
   } catch {
     return {
