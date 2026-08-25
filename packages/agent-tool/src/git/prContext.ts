@@ -416,23 +416,6 @@ export function resolvePr(): PrMergeIdentity {
   };
 }
 
-/** HTTPS URL for a GitHub repository; callers authenticate through `gh`. */
-export function repositoryHttpsUrl(repo: string): string {
-  const url = run("gh", [
-    "repo",
-    "view",
-    repo,
-    "--json",
-    "url",
-    "--jq",
-    ".url",
-  ]);
-  if (url.length === 0) {
-    throw new Error(`Could not determine an HTTPS URL for '${repo}'.`);
-  }
-  return url;
-}
-
 /**
  * PR identity plus a base ref that `git diff` can resolve locally, for a review
  * that may run *before* the branch has a PR.

@@ -3,10 +3,8 @@ import { spawnSync } from "node:child_process";
 import {
   type PrMergeIdentity,
   prState,
-  repositoryHttpsUrl,
   resolveFreshBaseRef,
   resolvePr,
-  run,
   spawnExitCode,
 } from "../git/prContext";
 import { appendPrNumberSuffix, stripPrNumberSuffix } from "./prNumberSuffix";
@@ -107,7 +105,7 @@ export function assertReviewedAncestry(status: number | null): void {
   );
 }
 
-/** Refuse to use a direct atomic push to bypass GitHub's PR requirements. */
+/** Fail early with an actionable reason; GitHub re-enforces this on merge. */
 export function assertMergeRequirements(pr: PrMergeIdentity): void {
   if (pr.isDraft) {
     throw new Error("The PR is a draft and cannot be merged.");
@@ -145,76 +143,12 @@ function assertSameMergeTarget(
   }
 }
 
-/** Build a squash commit with the reviewed base as its sole parent. */
-export function buildReviewedCommitArgs(
-  treeSha: string,
-  expectedBaseSha: string,
-): string[] {
-  return ["commit-tree", treeSha, "-p", expectedBaseSha];
-}
-
 /**
- * Build an exact compare-and-swap push. Both leases are checked by the remote
- * as one atomic transaction, closing races on either reviewed ref.
+ * Squash through GitHub's policy-enforcing merge API. The API atomically binds
+ * the reviewed head; the reviewed base is fetched, ancestry-checked, and
+ * required to remain GitHub's current base immediately before the mutation.
  */
-export function buildAtomicPushArgs(
-  repositoryUrl: string,
-  mergeCommitSha: string,
-  baseRefName: string,
-  expectedBaseSha: string,
-  headRefName: string,
-  expectedHeadSha: string,
-): string[] {
-  const baseRef = `refs/heads/${baseRefName}`;
-  const headRef = `refs/heads/${headRefName}`;
-  return [
-    "-c",
-    "credential.helper=",
-    "-c",
-    "credential.helper=!gh auth git-credential",
-    "push",
-    "--porcelain",
-    "--atomic",
-    `--force-with-lease=${baseRef}:${expectedBaseSha}`,
-    `--force-with-lease=${headRef}:${expectedHeadSha}`,
-    repositoryUrl,
-    `${mergeCommitSha}:${baseRef}`,
-    `${mergeCommitSha}:${headRef}`,
-  ];
-}
-
-function createReviewedMergeCommit(
-  finalSubject: string,
-  expectedHeadSha: string,
-  expectedBaseSha: string,
-): { exitCode: number; mergeCommitSha: string } {
-  const localHead = run("git", ["rev-parse", "--verify", "HEAD^{commit}"]);
-  assertExpectedHeadCommit(expectedHeadSha, localHead);
-  const treeSha = run("git", [
-    "rev-parse",
-    "--verify",
-    `${expectedHeadSha}^{tree}`,
-  ]);
-  const result = spawnSync(
-    "git",
-    buildReviewedCommitArgs(treeSha, expectedBaseSha),
-    {
-      input: `${finalSubject}\n`,
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "inherit"],
-    },
-  );
-  const exitCode = spawnExitCode("git commit-tree", result);
-  return { exitCode, mergeCommitSha: result.stdout?.trim() ?? "" };
-}
-
-/**
- * Squash the reviewed graph with a server-side compare-and-swap on both refs.
- * Moving the feature ref to the same one-parent commit as the base keeps the
- * PR head reachable (so GitHub marks the PR merged) without turning the squash
- * into a merge commit. This is used whenever ship-pr supplies both guards.
- */
-function atomicReviewedMerge(
+function guardedReviewedMerge(
   pr: ReturnType<typeof resolvePr>,
   finalSubject: string,
   expectedHeadSha: string,
@@ -225,17 +159,8 @@ function atomicReviewedMerge(
   if (pr.baseRefName.length === 0) {
     throw new Error("Could not determine the PR base branch.");
   }
-  if (pr.headRefName.length === 0 || pr.headRepository.length === 0) {
-    throw new Error("Could not determine the PR head branch and repository.");
-  }
-  if (pr.headRepository !== pr.repo) {
-    throw new Error(
-      "Guarded atomic merges require the PR head and base to be in the same repository.",
-    );
-  }
-
-  // Fetch from the PR's repository and require that it still agrees with the
-  // GitHub PR snapshot. The later lease remains the atomic race-closing gate.
+  // Require the reviewed head to include the reviewed base so the policy-
+  // checked API never merges a stale, unintegrated candidate.
   resolveFreshBaseRef(pr.repo, pr.baseRefName, expectedBaseSha);
   const ancestry = spawnSync(
     "git",
@@ -250,45 +175,28 @@ function atomicReviewedMerge(
   }
   assertReviewedAncestry(ancestry.status);
 
-  const { exitCode, mergeCommitSha } = createReviewedMergeCommit(
-    finalSubject,
-    expectedHeadSha,
-    expectedBaseSha,
-  );
-  if (exitCode !== 0) return exitCode;
-  if (!/^[0-9a-f]{40,64}$/.test(mergeCommitSha)) {
-    process.stderr.write("git commit-tree did not return a commit SHA.\n");
-    return 1;
-  }
-
-  // Refresh immediately before the ref transaction. This explicitly enforces
-  // draft, review, mergeability, and required-status policy even when the
-  // authenticated account could bypass those protections with a direct push.
+  // Refresh immediately before asking GitHub to merge. The API performs the
+  // final policy check atomically with its mutation; unlike a direct ref push,
+  // this cannot race a dismissed approval or newly failing required check.
   const freshPr = resolvePr();
   assertSameMergeTarget(pr, freshPr);
   assertExpectedHeadCommit(expectedHeadSha, freshPr.headRefOid);
   assertExpectedBaseCommit(expectedBaseSha, freshPr.baseRefOid);
   assertMergeRequirements(freshPr);
 
-  const pushResult = spawnSync(
-    "git",
-    buildAtomicPushArgs(
-      repositoryHttpsUrl(freshPr.repo),
-      mergeCommitSha,
-      freshPr.baseRefName,
-      expectedBaseSha,
-      freshPr.headRefName,
-      expectedHeadSha,
-    ),
-    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: "inherit" },
+  const mergeResult = spawnSync(
+    "gh",
+    buildSquashMergeArgs(freshPr, finalSubject, expectedHeadSha),
+    { stdio: "inherit" },
   );
-  const pushExitCode = spawnExitCode("atomic reviewed merge push", pushResult);
-  if (pushExitCode !== 0) return pushExitCode;
+  const mergeExitCode = spawnExitCode("gh pr merge", mergeResult);
+  if (mergeExitCode !== 0) return mergeExitCode;
 
   const state = prState(pr.prNumber, pr.repo);
   if (state !== "MERGED") {
     process.stderr.write(
-      `Reviewed merge landed, but PR #${pr.prNumber} is not marked merged (state: ${state || "unknown"}).\n`,
+      `PR #${pr.prNumber} is not merged (state: ${state || "unknown"}). ` +
+        "It may be queued or blocked; the reviewed squash is not complete.\n",
     );
     return 1;
   }
@@ -300,9 +208,9 @@ function atomicReviewedMerge(
  * message — no auto-generated body or extended message. The subject defaults to
  * the PR title when one is not supplied, and is validated against the repo's
  * commitlint rules before the merge runs. When both review SHAs are supplied,
- * the guarded path creates an integration commit from that exact pair and
- * compare-and-swap updates the remote base. Without guards, the compatibility
- * path uses GitHub's ordinary squash merge.
+ * the guarded path checks that exact pair and asks GitHub's merge API to enforce
+ * PR policy while atomically binding the reviewed head. Without guards, the
+ * compatibility path uses the same API without the review/base checks.
  */
 export function squashMerge(
   rootDir: string,
@@ -329,7 +237,7 @@ export function squashMerge(
     expectedBaseSha !== undefined &&
     expectedBaseSha.length > 0
   ) {
-    return atomicReviewedMerge(
+    return guardedReviewedMerge(
       pr,
       finalSubject,
       expectedHeadSha,

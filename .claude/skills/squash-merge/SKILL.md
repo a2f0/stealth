@@ -1,6 +1,6 @@
 ---
 name: squash-merge
-description: Merge the current PR with a subject-only message, atomically binding supplied review SHAs, then return to the PR's base branch, fast-forward it, and delete the merged branch
+description: Merge the current PR with a subject-only message through GitHub's policy gate, binding supplied review SHAs, then return to the PR's base branch, fast-forward it, and delete the merged branch
 ---
 
 # Reviewed Merge (`squash-merge` compatibility)
@@ -22,9 +22,9 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
   `"feat(app): add widget"`.
 - Second argument (optional): the expected PR head SHA.
 - Third argument (optional): the expected PR base SHA. The two SHAs must be
-  supplied together. The guarded path places both in the integration commit and
-  compare-and-swap updates the base with an exact lease, so the remote
-  atomically refuses a moved head or base.
+  supplied together. The guarded path requires the base to remain current and
+  invokes GitHub with an exact expected head, so a moved pair is rejected and
+  repository merge policy is enforced by the final API mutation.
 - `--keep-branch` (optional flag, position-independent): skip the post-merge
   cleanup (step 4) and stay on the feature branch. Use when the branch is still
   needed locally (e.g. to build a follow-up PR on top of it).
@@ -142,17 +142,11 @@ as-is.
    - Appends the PR reference so the subject ends with a space followed by
      `(#<pr>)`, replacing any existing trailing `(#<n>)` (idempotent on
      re-runs), and asserts the suffix is present before merging.
-   - With both reviewed SHAs, creates a subject-only squash commit whose tree is
-     the reviewed head and whose sole parent is the reviewed base, then
-     atomically pushes it to both the base and same-repository feature refs with
-     exact leases on the reviewed base and head SHAs. The HTTPS push uses
-     `gh auth git-credential`; no separate SSH setup is assumed. The remote
-     rejects either intervening update, and moving the feature ref onto the
-     squash commit makes the PR head reachable from the base. Guarded fork PRs
-     stop because refs in two repositories cannot share one atomic push. Just
-     before the transaction, a fresh GitHub snapshot must report a non-draft,
-     mergeable PR with no required review or requested changes and a `CLEAN`
-     merge state, so a bypass-capable credential cannot skip PR policy.
+   - With both reviewed SHAs, fetches and ancestry-checks the reviewed base,
+     requires a fresh GitHub snapshot to report the same head and base, and runs
+     `gh pr merge --squash --match-head-commit <reviewed-head>`. GitHub performs
+     the final head comparison and enforces draft, review, status, mergeability,
+     and repository policy atomically with its merge mutation.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
    - Confirms the PR reached the `MERGED` state.
@@ -255,11 +249,9 @@ as-is.
 - A non-zero exit after `gh pr merge` means the PR did not actually merge (e.g.
   it was queued or blocked); do not report success in that case, and do not clean
   up the branch.
-- Cleanup uses `git branch -D` for compatibility with the unguarded legacy
-  squash path, where the feature tip is not an ancestor of the new base commit.
-  The guarded path does make the reviewed head reachable, but the same deletion
-  command remains safe because it is gated on GitHub reporting `MERGED` and on
-  the base containing the integration commit.
+- Cleanup uses `git branch -D` because a squashed feature tip is not an ancestor
+  of the new base commit. It remains safe because cleanup is gated on GitHub
+  reporting `MERGED` and on the base containing GitHub's merge commit.
 - The tool itself does not delete the branch or change the checkout, and knows
   nothing of `--keep-branch`; step 4 of this skill owns all of that. A caller that
   invokes the tool directly gets the merge **without** the cleanup.

@@ -100,21 +100,14 @@ The subject is validated against the repository's own commitlint setup (the same
 `@commitlint/cli` binary and `commitlint.config.mts` the commit-msg hook uses),
 so conventional-commit syntax and the 50-char header limit are enforced
 identically. The two review SHAs must be supplied together. With both present,
-the tool creates a subject-only squash commit whose sole parent is the reviewed
-base and whose tree is the reviewed head. For same-repository PRs it atomically
-updates both the base and feature refs to that commit, with exact leases on the
-reviewed base and head SHAs. The push uses HTTPS with `gh auth git-credential`,
-so it does not assume separate SSH credentials. That two-ref compare-and-swap
-rejects either a changed base or head, while moving the PR head onto the squash
-commit so GitHub marks it merged.
-Immediately before that transaction, the tool refreshes the PR and requires it
-to be non-draft, mergeable, free of requested changes or required reviews, and
-in GitHub's `CLEAN` merge state. This prevents a bypass-capable push credential
-from skipping the review and required-status policy that the normal merge API
-would enforce.
-Guarded fork PRs stop because Git cannot atomically update refs across two
-repositories. The unguarded form remains a normal GitHub squash merge for
-manual use. Backs the `squash-merge` compatibility skill.
+the tool fetches and ancestry-checks the reviewed base, refreshes the PR, and
+requires the same base and head immediately before invoking GitHub's squash
+merge API with `--match-head-commit`. GitHub atomically binds the reviewed head
+and enforces draft, approval, required-status, mergeability, and other repository
+policy as part of the final mutation. A moved base is rejected by the fresh
+preflight and must be synced and re-reviewed. The unguarded form uses the same
+GitHub squash API without the review/base checks for manual use. Backs the
+`squash-merge` compatibility skill.
 
 The tool only merges. Returning to the base branch, fast-forwarding it, and
 deleting the merged branch live in the `squash-merge` skill *around* this call —
@@ -127,8 +120,8 @@ The `ship-pr` skill commits the work on a feature branch, hands it to
 `cross-agent-review` — which reviews the local commits (or the pushed head when
 a PR is already open), repairs blocking findings in up to two rounds by default,
 and re-reviews every head it changes — then opens or resumes the PR with a
-single push and atomically merges only the reviewed head/base pair that review
-reports back.
+single push and merges through GitHub only after re-verifying the reviewed head
+and base that review reports back.
 Opening the PR after the review is what keeps the branch to a single push
 through the pre-push hook. It finishes by handing off to `reset`, which returns
 the checkout to the default branch and reinstalls the repo's git hooks, so a

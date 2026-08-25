@@ -1,6 +1,6 @@
 ---
 name: ship-pr
-description: Ship current work end-to-end — commit on a feature branch, cross-agent review and repair it, open or resume its PR with a single push after the review, atomically merge the exact reviewed head/base pair, then return to the base branch, delete the merged branch, and reset the checkout
+description: Ship current work end-to-end — commit on a feature branch, cross-agent review and repair it, open or resume its PR with a single push after the review, merge the verified reviewed candidate through GitHub's policy gate, then return to the base branch, delete the merged branch, and reset the checkout
 ---
 
 # Ship PR
@@ -236,9 +236,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    Then invoke the `squash-merge` compatibility skill, passing
    `REVIEWED_SHA` as its **second (head-SHA) argument** and
    `REVIEWED_BASE_SHA` as its **third (base-SHA) argument**. The guarded merge
-   commit names both reviewed commits as parents and one atomic push updates the
-   same-repository base and feature refs with exact leases on both reviewed
-   SHAs, so GitHub refuses either a different head or an intervening base update.
+   requires the reviewed base to remain current and invokes GitHub's squash API
+   with an exact expected head. GitHub performs the final head check and enforces
+   repository merge policy atomically with the merge mutation.
 
    That skill also owns the post-merge cleanup: once GitHub confirms `MERGED`, it
    returns to the PR's base branch, fast-forwards it, verifies it contains the
@@ -253,11 +253,8 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    `bun "$AGENT_TOOL" squashMerge …` merges the PR and silently skips the cleanup,
    leaving the feature branch checked out and undeleted.
 
-   The guarded tool path binds both reviewed SHAs into one integration commit
-   and atomically updates the base and feature refs with exact leases on both.
-   That server-side transaction rejects either race. Because the
-   head and base SHAs are the **second and third** positionals, pass an empty
-   first argument to default the subject to the PR title:
+   Because the head and base SHAs are the **second and third** positionals, pass
+   an empty first argument to default the subject to the PR title:
 
    ```text
    squash-merge '' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
@@ -321,9 +318,10 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
   interpreted.
 - **The merged head and base are the reviewed pair** — `cross-agent-review`
   reports the exact head and base it reviewed. This skill re-verifies both once
-  the PR is open and immediately before merge; `squash-merge` binds both into
-  the integration commit and compare-and-swap base update. A head or base
-  change therefore sends the flow back through sync and review. (A message-only
+  the PR is open and immediately before merge; `squash-merge` gives GitHub the
+  reviewed head as an atomic match condition and requires the reviewed base to
+  remain current at its final preflight. A head or base change therefore sends
+  the flow back through sync and review. (A message-only
   co-author strip keeps it: step 3 checks tree and merge-base identity, then
   re-pins `REVIEWED_SHA`.) The lone exception
   is an explicit `--merge-anyway` over a could-not-run verdict, where the bound

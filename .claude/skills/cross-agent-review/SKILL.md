@@ -20,7 +20,8 @@ branch as it will actually merge, not a stale snapshot. Repairs are bounded by
 `--repair-rounds` (default `2`); each round changes the branch once and is
 followed by a fresh review of the new head, so the reported head is always a head
 that was itself reviewed. Pass `--repair-rounds 0` for a report-only review that
-changes nothing — the base sync included.
+changes nothing; report-only mode requires the branch to already contain the
+freshly fetched base so its reported base/head pair is actually shippable.
 
 ## Arguments
 
@@ -111,10 +112,11 @@ Require a clean worktree before fetching or snapshotting anything:
    - `claude` → Claude Code (self-review)
    - otherwise → Codex (default for Claude Code invoking this skill)
 
-   Then set `REPAIR_ROUND=0`. **This happens once, here — never inside the loop.**
-   Steps 2–5 form a loop that re-enters at step 2, so a counter initialized there
-   would reset on every repair, the `--repair-rounds` bound would never advance,
-   and the loop could commit and push without limit.
+   Then set `REPAIR_ROUNDS` to the parsed maximum (default `2`) and
+   `REPAIR_ROUND=0`. **This happens once, here — never inside the loop.** Steps
+   2–5 form a loop that re-enters at step 2, so a counter initialized there would
+   reset on every repair, the `--repair-rounds` bound would never advance, and
+   the loop could commit and push without limit.
 
 2. **Sync with the base, then snapshot the candidate head**: before reviewing,
    bring the branch up to date with its base, so the review — and the head that
@@ -137,6 +139,9 @@ Require a clean worktree before fetching or snapshotting anything:
    git fetch "$BASE_URL" "$BASE_REF" || { echo "Error: could not fetch $BASE_REF from $BASE_URL" >&2; exit 1; }
    FETCHED_BASE=$(git rev-parse 'FETCH_HEAD^{commit}') || { echo "Error: fetched base commit is unavailable" >&2; exit 1; }
    [ -z "$BASE_OID" ] || [ "$FETCHED_BASE" = "$BASE_OID" ] || { echo "Error: fetched $FETCHED_BASE but PR base snapshot was $BASE_OID; retry" >&2; exit 1; }
+   if [ "$REPAIR_ROUNDS" -eq 0 ]; then
+     git merge-base --is-ancestor "$FETCHED_BASE" HEAD || { echo "Error: report-only review cannot ship a branch behind $BASE_REF; sync it and run a fresh review" >&2; exit 1; }
+   fi
    ```
 
    **When a PR is open**, confirm the local head is already the pushed head
@@ -375,7 +380,9 @@ Require a clean worktree before fetching or snapshotting anything:
   was reviewed.
 - **The reported base is the reviewed base.** `REVIEWED_BASE_SHA` is the exact
   fetched commit merged before the final review. A caller must re-sync and
-  re-review if the PR base moves away from it before merge.
+  re-review if the PR base moves away from it before merge. Report-only mode
+  refuses to review when that fetched base is not already an ancestor of the
+  candidate, so it cannot report a knowingly unshippable pair.
 - **A failed review is not a clean review.** If every agent and fallback fails,
   the verdict is *could-not-run* and no repair happens — repairing against absent
   findings would be inventing work.
@@ -396,7 +403,8 @@ Require a clean worktree before fetching or snapshotting anything:
   the pre-push checks, not after the merge. The merge (never a rebase, so no
   force push) is local when there is no PR and pushed when there is; a conflict
   aborts and stops for the user. `--repair-rounds 0` skips it, keeping
-  report-only inert.
+  report-only inert, and refuses to proceed unless the current head already
+  contains the freshly fetched base.
 - Both reviewers get the prompt/diff via stdin (not argv) to avoid
   "Argument list too long" failures on large PRs.
 - The Claude reviewer runs in `--bare --safe-mode`, disabling project hooks,
