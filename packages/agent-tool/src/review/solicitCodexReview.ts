@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -62,6 +69,30 @@ export function reviewerEnvironment(env: ReviewerEnv): ReviewerEnv {
   );
 }
 
+/** Resolve the command path and symlink target the sandbox helper must execute. */
+export function reviewerRuntimePaths(env: ReviewerEnv): string[] {
+  const searchPath = env.PATH ?? "";
+  for (const directory of searchPath.split(path.delimiter)) {
+    if (!path.isAbsolute(directory)) continue;
+    const candidate = path.join(directory, "codex");
+    try {
+      accessSync(candidate, constants.X_OK);
+      return [...new Set([candidate, realpathSync(candidate)])];
+    } catch {
+      // Keep searching PATH for an executable Codex installation.
+    }
+  }
+  return [];
+}
+
+function reviewerFilesystemConfig(runtimePaths: readonly string[]): string {
+  const runtimeEntries = runtimePaths
+    .map((runtimePath) => `${JSON.stringify(runtimePath)}="read"`)
+    .join(",");
+  const suffix = runtimeEntries.length > 0 ? `,${runtimeEntries}` : "";
+  return `permissions.agent-tool-review.filesystem={":minimal"="read",":workspace_roots"={"."="read"}${suffix}}`;
+}
+
 /**
  * Build the `codex exec` argv. `exec`, not `review`: `codex review` writes its
  * own prompt, so it carries no verdict line to gate on and interleaves its
@@ -95,6 +126,7 @@ export function buildCodexReviewArgs(
   effort: ReviewEffort,
   lastMessageFile: string,
   reviewRoot: string,
+  runtimePaths: readonly string[] = [],
 ): string[] {
   return [
     "exec",
@@ -116,7 +148,7 @@ export function buildCodexReviewArgs(
     "-c",
     'default_permissions="agent-tool-review"',
     "-c",
-    'permissions.agent-tool-review.filesystem={":minimal"="read",":workspace_roots"={"."="read"}}',
+    reviewerFilesystemConfig(runtimePaths),
     "-c",
     'shell_environment_policy.inherit="none"',
     "-c",
@@ -160,6 +192,7 @@ export function spawnCodexReview(
 ): number {
   const outDir = mkdtempSync(path.join(tmpdir(), "agent-tool-codex-"));
   const checkoutDir = path.join(outDir, "checkout");
+  const runtimePaths = reviewerRuntimePaths(env);
   let attempt = 0;
   try {
     materializeTrackedCheckout(repositoryRoot, checkoutDir);
@@ -170,7 +203,7 @@ export function spawnCodexReview(
       const lastMessageFile = path.join(outDir, `review-${attempt}.md`);
       const result = spawnSync(
         "codex",
-        buildCodexReviewArgs(effort, lastMessageFile, outDir),
+        buildCodexReviewArgs(effort, lastMessageFile, outDir, runtimePaths),
         {
           stdio: ["pipe", "pipe", "pipe"],
           input: prompt,

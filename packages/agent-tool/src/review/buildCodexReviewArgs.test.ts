@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildCodexReviewArgs,
   reviewerEnvironment,
+  reviewerRuntimePaths,
 } from "./solicitCodexReview";
 
 describe("buildCodexReviewArgs", () => {
@@ -93,5 +94,17 @@ describe("buildCodexReviewArgs", () => {
       HOME: "/home/reviewer",
       OPENAI_API_KEY: "review-auth",
     });
+  });
+
+  test("allows the sandbox helper to execute the installed Codex runtime", () => {
+    expect(reviewerRuntimePaths({ PATH: "/definitely/missing" })).toEqual([]);
+    const config = buildCodexReviewArgs("high", "/tmp/x/review.md", "/tmp/x", [
+      "/opt/homebrew/bin/codex",
+      "/opt/homebrew/Caskroom/codex/bin/codex",
+    ]).find((arg) =>
+      arg.startsWith("permissions.agent-tool-review.filesystem="),
+    );
+    expect(config).toContain('"/opt/homebrew/bin/codex"="read"');
+    expect(config).toContain('"/opt/homebrew/Caskroom/codex/bin/codex"="read"');
   });
 });

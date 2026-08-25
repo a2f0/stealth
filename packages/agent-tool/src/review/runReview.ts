@@ -3,7 +3,9 @@ import { writeSync } from "node:fs";
 import { reviewOutputProblem } from "./reviewOutput";
 
 /** The environment a spawned reviewer runs with; it replaces, not extends. */
-export type ReviewerEnv = Record<string, string | undefined>;
+export interface ReviewerEnv extends Record<string, string | undefined> {
+  readonly PATH?: string;
+}
 
 /** One reviewer-CLI run: its exit code and the review text it produced. */
 interface ReviewAttempt {
