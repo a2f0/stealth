@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { uploadIssueImagesSequentially } from "./AuditRunPage";
 import {
+  AuditApiError,
   type AuditTemplate,
   auditIssueImageUrl,
   copyAuditTemplate,
@@ -155,7 +156,7 @@ describe("audit issue API", () => {
     }
   });
 
-  it("preserves rate-limit responses and retries an upload once", async () => {
+  it("preserves rate-limit responses and backs off across repeated 429s", async () => {
     const originalFetch = globalThis.fetch;
     const file = new File([new Uint8Array([1])], "panel.png", {
       type: "image/png",
@@ -164,7 +165,7 @@ describe("audit issue API", () => {
     const waits: number[] = [];
     globalThis.fetch = (async (input) => {
       calls.push(input.toString());
-      if (calls.length === 1) {
+      if (calls.length <= 3) {
         return Response.json(
           { error: "busy" },
           { headers: { "Retry-After": "1" }, status: 429 },
@@ -187,11 +188,43 @@ describe("audit issue API", () => {
       expect(calls).toEqual([
         `${apiUrl}/api/audits/issues/issue%2Fid/images?filename=panel.png`,
         `${apiUrl}/api/audits/issues/issue%2Fid/images?filename=panel.png`,
+        `${apiUrl}/api/audits/issues/issue%2Fid/images?filename=panel.png`,
+        `${apiUrl}/api/audits/issues/issue%2Fid/images?filename=panel.png`,
       ]);
-      expect(waits).toEqual([1_000]);
+      expect(waits).toEqual([1_000, 2_000, 4_000]);
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("stops retrying an image after a bounded 429 backoff window", async () => {
+    const file = new File([new Uint8Array([1])], "panel.png", {
+      type: "image/png",
+    });
+    let calls = 0;
+    const waits: number[] = [];
+    const busy = new AuditApiError(
+      "busy",
+      new Response(null, { headers: { "Retry-After": "1" }, status: 429 }),
+    );
+
+    const failures = await uploadIssueImagesSequentially(
+      "issue/id",
+      [file],
+      async () => {
+        calls += 1;
+        throw busy;
+      },
+      async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    );
+
+    expect(failures).toEqual([busy]);
+    expect(calls).toBe(10);
+    expect(waits).toEqual([
+      1_000, 2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000, 10_000,
+    ]);
   });
 });
 

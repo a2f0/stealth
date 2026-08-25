@@ -699,6 +699,9 @@ type IssueImageUploader = (issueId: string, file: File) => Promise<unknown>;
 
 type WaitForRetry = (milliseconds: number) => Promise<void>;
 
+const maxIssueImageUploadRetries = 9;
+const maxIssueImageRetryDelay = 10_000;
+
 export async function uploadIssueImagesSequentially(
   issueId: string,
   files: File[],
@@ -710,26 +713,29 @@ export async function uploadIssueImagesSequentially(
   // user can select ten 10 MB files, so firing them all at once can exhaust the
   // isolate's shared memory before image normalization completes.
   for (const file of files) {
-    try {
-      await upload(issueId, file);
-    } catch (cause) {
-      const retryDelay = issueImageRetryDelay(cause);
-      if (retryDelay === undefined) {
-        failures.push(cause);
-        continue;
-      }
-      await wait(retryDelay);
+    let retryAttempt = 0;
+    while (true) {
       try {
         await upload(issueId, file);
+        break;
       } catch (retryCause) {
-        failures.push(retryCause);
+        const retryDelay = issueImageRetryDelay(retryCause, retryAttempt);
+        if (
+          retryDelay === undefined ||
+          retryAttempt >= maxIssueImageUploadRetries
+        ) {
+          failures.push(retryCause);
+          break;
+        }
+        retryAttempt += 1;
+        await wait(retryDelay);
       }
     }
   }
   return failures;
 }
 
-function issueImageRetryDelay(cause: unknown) {
+function issueImageRetryDelay(cause: unknown, retryAttempt: number) {
   if (!(cause instanceof AuditApiError) || cause.response.status !== 429) {
     return undefined;
   }
@@ -739,7 +745,14 @@ function issueImageRetryDelay(cause: unknown) {
   const milliseconds =
     seconds === undefined ? Date.parse(header) - Date.now() : seconds * 1_000;
   if (!Number.isFinite(milliseconds)) return undefined;
-  return Math.min(Math.max(milliseconds, 0), 5_000);
+  const exponentialDelay = Math.min(
+    1_000 * 2 ** retryAttempt,
+    maxIssueImageRetryDelay,
+  );
+  return Math.min(
+    Math.max(milliseconds, exponentialDelay),
+    maxIssueImageRetryDelay,
+  );
 }
 
 function waitForRetry(milliseconds: number) {
