@@ -8,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -24,6 +25,20 @@ const runtime: TrustedExecutable = {
   executable: "/trusted/bun/bin/bun",
   readablePaths: ["/trusted/bun/bin", "/trusted/bun/bin/bun"],
 };
+
+function assertExternalServerReachable(host: string, port: number) {
+  return new Promise<void>((resolve, reject) => {
+    const socket = createConnection({ host, port });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve();
+    });
+    socket.once("error", reject);
+    socket.setTimeout(3_000, () => {
+      socket.destroy(new Error("External test address was not reachable."));
+    });
+  });
+}
 
 test("preflight strips credentials and contributor-controlled process options", () => {
   const environment = buildPreflightEnvironment(
@@ -83,7 +98,10 @@ test("preflight denies external network, Git writes, and dependency poisoning", 
     ["/Users/example/repo"],
   );
 
-  expect(profile).toContain("(deny network*)");
+  // The default deny blocks sockets outside the local allowlists. A blanket
+  // explicit deny would override the local socket allowances.
+  expect(profile).not.toContain("(deny network*)");
+  expect(profile).toContain('(import "system.sb")');
   expect(profile).toContain("(allow signal (target children))");
   expect(profile).toContain(
     '(allow network-bind network-outbound (subpath "/private/tmp/preflight-home"))',
@@ -109,8 +127,8 @@ test.skipIf(
   process.platform !== "darwin" ||
     Reflect.get(process.env, "TEARLEADS_PREFLIGHT_OFFLINE") === "1",
 )(
-  "preflight cannot persist ignored files or poison nested dependencies",
-  () => {
+  "preflight isolates files and networking while permitting local sockets",
+  async () => {
     const repositoryRoot = mkdtempSync(
       path.join(tmpdir(), "agent-tool-preflight-source-"),
     );
@@ -127,6 +145,7 @@ test.skipIf(
     const nestedSentinel = path.join(nestedDependencies, "sentinel.txt");
 
     try {
+      await assertExternalServerReachable("1.1.1.1", 80);
       mkdirSync(rootDependencies, { recursive: true });
       mkdirSync(nestedDependencies, { recursive: true });
       writeFileSync(
@@ -147,6 +166,8 @@ test.skipIf(
       writeFileSync(
         path.join(repositoryRoot, "attack.ts"),
         `import { writeFileSync } from "node:fs";\n` +
+          `import { createConnection, createServer } from "node:net";\n` +
+          `import path from "node:path";\n` +
           `writeFileSync(".env", "disposable only\\n");\n` +
           `for (const target of ${JSON.stringify([
             sourceFile,
@@ -154,7 +175,52 @@ test.skipIf(
             nestedSentinel,
           ])}) {\n` +
           `  try { writeFileSync(target, "poisoned\\n"); } catch {}\n` +
-          `}\n`,
+          `}\n` +
+          `const tcpServer = createServer((socket) => socket.end("loopback"));\n` +
+          `await new Promise<void>((resolve, reject) => {\n` +
+          `  tcpServer.once("error", reject);\n` +
+          `  tcpServer.listen(0, "127.0.0.1", resolve);\n` +
+          `});\n` +
+          `const tcpAddress = tcpServer.address();\n` +
+          `if (tcpAddress === null || typeof tcpAddress === "string") throw new Error("No TCP address");\n` +
+          `const tcpReply = await new Promise<string>((resolve, reject) => {\n` +
+          `  let reply = "";\n` +
+          `  const socket = createConnection({ host: "127.0.0.1", port: tcpAddress.port });\n` +
+          `  socket.on("data", (chunk) => { reply += chunk; });\n` +
+          `  socket.once("end", () => resolve(reply));\n` +
+          `  socket.once("error", reject);\n` +
+          `});\n` +
+          `tcpServer.close();\n` +
+          `if (tcpReply !== "loopback") throw new Error("TCP loopback failed");\n` +
+          `const socketPath = path.join(process.env.TMPDIR ?? ".", "provider.sock");\n` +
+          `const unixServer = createServer((socket) => socket.end("unix"));\n` +
+          `await new Promise<void>((resolve, reject) => {\n` +
+          `  unixServer.once("error", reject);\n` +
+          `  unixServer.listen(socketPath, resolve);\n` +
+          `});\n` +
+          `const unixReply = await new Promise<string>((resolve, reject) => {\n` +
+          `  let reply = "";\n` +
+          `  const socket = createConnection(socketPath);\n` +
+          `  socket.on("data", (chunk) => { reply += chunk; });\n` +
+          `  socket.once("end", () => resolve(reply));\n` +
+          `  socket.once("error", reject);\n` +
+          `});\n` +
+          `unixServer.close();\n` +
+          `if (unixReply !== "unix") throw new Error("Unix socket failed");\n` +
+          `const externalConnected = await new Promise<boolean>((resolve) => {\n` +
+          `  let settled = false;\n` +
+          `  const socket = createConnection({ host: "1.1.1.1", port: 80 });\n` +
+          `  const finish = (connected: boolean) => {\n` +
+          `    if (settled) return;\n` +
+          `    settled = true;\n` +
+          `    socket.destroy();\n` +
+          `    resolve(connected);\n` +
+          `  };\n` +
+          `  socket.once("connect", () => finish(true));\n` +
+          `  socket.once("error", () => finish(false));\n` +
+          `  socket.setTimeout(1_000, () => finish(false));\n` +
+          `});\n` +
+          `if (externalConnected) throw new Error("External network was not denied");\n`,
       );
 
       const git = resolveTrustedExecutable("git", process.env, repositoryRoot);

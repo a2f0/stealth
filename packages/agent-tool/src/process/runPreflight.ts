@@ -141,7 +141,6 @@ export function buildPreflightSandboxProfile(
     "(allow network-inbound (local ip))",
     '(allow network-bind (local ip "localhost:*"))',
     '(allow network-outbound (remote ip "localhost:*"))',
-    "(deny network*)",
   ].join("\n");
 }
 
