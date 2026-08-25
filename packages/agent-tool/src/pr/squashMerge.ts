@@ -1,6 +1,13 @@
 import { spawnSync } from "node:child_process";
 
-import { prBaseOid, prState, resolvePr, spawnExitCode } from "../git/prContext";
+import {
+  prState,
+  repositorySshUrl,
+  resolveFreshBaseRef,
+  resolvePr,
+  run,
+  spawnExitCode,
+} from "../git/prContext";
 import { appendPrNumberSuffix, stripPrNumberSuffix } from "./prNumberSuffix";
 import { singleLineSubject } from "./subjectLine";
 import { validateCommitSubject } from "./validateCommitSubject";
@@ -63,13 +70,148 @@ export function assertExpectedBaseCommit(
   }
 }
 
+export function assertExpectedHeadCommit(
+  expectedHeadSha: string,
+  actualHeadSha: string,
+): void {
+  if (expectedHeadSha !== actualHeadSha) {
+    throw new Error(
+      `PR head moved from reviewed commit ${expectedHeadSha} to ${actualHeadSha}; re-review before merging.`,
+    );
+  }
+}
+
+export function assertGuardPair(
+  expectedHeadSha: string | undefined,
+  expectedBaseSha: string | undefined,
+): void {
+  const hasHead = (expectedHeadSha?.length ?? 0) > 0;
+  const hasBase = (expectedBaseSha?.length ?? 0) > 0;
+  if (hasHead !== hasBase) {
+    throw new Error(
+      "A guarded merge requires both the reviewed head SHA and reviewed base SHA.",
+    );
+  }
+}
+
+/** Build a commit whose exact parents prove the reviewed base and head. */
+export function buildReviewedCommitArgs(
+  treeSha: string,
+  expectedBaseSha: string,
+  expectedHeadSha: string,
+): string[] {
+  return ["commit-tree", treeSha, "-p", expectedBaseSha, "-p", expectedHeadSha];
+}
+
+/**
+ * Build an exact compare-and-swap push. The lease is checked by the remote as
+ * it updates the base ref, closing the race between a base query and a merge.
+ */
+export function buildAtomicPushArgs(
+  repositoryUrl: string,
+  mergeCommitSha: string,
+  baseRefName: string,
+  expectedBaseSha: string,
+): string[] {
+  const baseRef = `refs/heads/${baseRefName}`;
+  return [
+    "push",
+    "--porcelain",
+    `--force-with-lease=${baseRef}:${expectedBaseSha}`,
+    repositoryUrl,
+    `${mergeCommitSha}:${baseRef}`,
+  ];
+}
+
+function createReviewedMergeCommit(
+  finalSubject: string,
+  expectedHeadSha: string,
+  expectedBaseSha: string,
+): { exitCode: number; mergeCommitSha: string } {
+  const localHead = run("git", ["rev-parse", "--verify", "HEAD^{commit}"]);
+  assertExpectedHeadCommit(expectedHeadSha, localHead);
+  const treeSha = run("git", [
+    "rev-parse",
+    "--verify",
+    `${expectedHeadSha}^{tree}`,
+  ]);
+  const result = spawnSync(
+    "git",
+    buildReviewedCommitArgs(treeSha, expectedBaseSha, expectedHeadSha),
+    {
+      input: `${finalSubject}\n`,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "inherit"],
+    },
+  );
+  const exitCode = spawnExitCode("git commit-tree", result);
+  return { exitCode, mergeCommitSha: result.stdout?.trim() ?? "" };
+}
+
+/**
+ * Merge the reviewed graph with a server-side compare-and-swap on the base
+ * ref. A two-parent integration commit keeps the reviewed head reachable (so
+ * GitHub marks the PR merged) while its first-parent tree is exactly the
+ * reviewed head. This is used whenever ship-pr supplies both review guards.
+ */
+function atomicReviewedMerge(
+  pr: ReturnType<typeof resolvePr>,
+  finalSubject: string,
+  expectedHeadSha: string,
+  expectedBaseSha: string,
+): number {
+  assertExpectedHeadCommit(expectedHeadSha, pr.headRefOid);
+  assertExpectedBaseCommit(expectedBaseSha, pr.baseRefOid);
+  if (pr.baseRefName.length === 0) {
+    throw new Error("Could not determine the PR base branch.");
+  }
+
+  // Fetch from the PR's repository and require that it still agrees with the
+  // GitHub PR snapshot. The later lease remains the atomic race-closing gate.
+  resolveFreshBaseRef(pr.repo, pr.baseRefName, expectedBaseSha);
+
+  const { exitCode, mergeCommitSha } = createReviewedMergeCommit(
+    finalSubject,
+    expectedHeadSha,
+    expectedBaseSha,
+  );
+  if (exitCode !== 0) return exitCode;
+  if (!/^[0-9a-f]{40,64}$/.test(mergeCommitSha)) {
+    process.stderr.write("git commit-tree did not return a commit SHA.\n");
+    return 1;
+  }
+
+  const pushResult = spawnSync(
+    "git",
+    buildAtomicPushArgs(
+      repositorySshUrl(pr.repo),
+      mergeCommitSha,
+      pr.baseRefName,
+      expectedBaseSha,
+    ),
+    { stdio: "inherit" },
+  );
+  const pushExitCode = spawnExitCode("atomic reviewed merge push", pushResult);
+  if (pushExitCode !== 0) return pushExitCode;
+
+  const state = prState(pr.prNumber, pr.repo);
+  if (state !== "MERGED") {
+    process.stderr.write(
+      `Reviewed merge landed, but PR #${pr.prNumber} is not marked merged (state: ${state || "unknown"}).\n`,
+    );
+    return 1;
+  }
+  return 0;
+}
+
 /**
  * Squash-merge the open PR for the current branch with a subject-only commit
  * message — no auto-generated body or extended message. The subject defaults to
  * the PR title when one is not supplied, and is validated against the repo's
- * commitlint rules before the merge runs. When `expectedHeadSha` is supplied the
- * merge is bound to that commit via `--match-head-commit`; when an expected
- * base SHA is supplied, the merge stops if the PR base moved after review.
+ * commitlint rules before the merge runs. When both review SHAs are supplied,
+ * the guarded path creates an integration commit from that exact pair and
+ * compare-and-swap updates the remote base. Without guards, the compatibility
+ * path uses GitHub's ordinary squash merge.
  */
 export function squashMerge(
   rootDir: string,
@@ -88,9 +230,20 @@ export function squashMerge(
   const baseSubject = stripPrNumberSuffix(subject);
   validateCommitSubject(rootDir, baseSubject);
   const finalSubject = appendPrNumberSuffix(baseSubject, pr.prNumber);
+  assertGuardPair(expectedHeadSha, expectedBaseSha);
 
-  if (expectedBaseSha !== undefined && expectedBaseSha.length > 0) {
-    assertExpectedBaseCommit(expectedBaseSha, prBaseOid(pr.prNumber, pr.repo));
+  if (
+    expectedHeadSha !== undefined &&
+    expectedHeadSha.length > 0 &&
+    expectedBaseSha !== undefined &&
+    expectedBaseSha.length > 0
+  ) {
+    return atomicReviewedMerge(
+      pr,
+      finalSubject,
+      expectedHeadSha,
+      expectedBaseSha,
+    );
   }
 
   const result = spawnSync(

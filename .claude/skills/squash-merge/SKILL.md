@@ -1,14 +1,14 @@
 ---
 name: squash-merge
-description: Squash-merge the current PR with a subject-only commit message validated against the repo's commitlint rules, then return to the PR's base branch, fast-forward it, and delete the merged branch
+description: Merge the current PR with a subject-only message, atomically binding supplied review SHAs, then return to the PR's base branch, fast-forward it, and delete the merged branch
 ---
 
-# Squash Merge
+# Reviewed Merge (`squash-merge` compatibility)
 
-Squash-merge the open PR for the current branch with a **subject-only** commit
+Merge the open PR for the current branch with a **subject-only** commit
 message — no auto-generated body, commit list, or extended message. The subject
 is validated against the repository's own commitlint configuration before the
-merge runs, and the tool appends the PR reference `(#<pr>)` so the squash
+merge runs, and the tool appends the PR reference `(#<pr>)` so the merge
 commit ends with it — the same reference GitHub adds for web/default merges but
 that `gh pr merge --subject` otherwise suppresses.
 
@@ -17,16 +17,14 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
 
 ## Arguments
 
-- First argument (optional): the squash commit subject. When omitted, the PR
+- First argument (optional): the merge commit subject. When omitted, the PR
   title is used. Pass it as a single quoted argument, e.g.
   `"feat(app): add widget"`.
-- Second argument (optional): the expected PR head SHA. When given, the merge
-  adds `--match-head-commit <sha>` so GitHub **atomically refuses** the merge if
-  the PR head has moved off that commit. `ship-pr` uses this to guarantee only
-  the reviewed commit is merged.
-- Third argument (optional): the expected PR base SHA. When given, the tool
-  snapshots the PR immediately before merge and refuses if its base moved away
-  from the reviewed commit.
+- Second argument (optional): the expected PR head SHA.
+- Third argument (optional): the expected PR base SHA. The two SHAs must be
+  supplied together. The guarded path places both in the integration commit and
+  compare-and-swap updates the base with an exact lease, so the remote
+  atomically refuses a moved head or base.
 - `--keep-branch` (optional flag, position-independent): skip the post-merge
   cleanup (step 4) and stay on the feature branch. Use when the branch is still
   needed locally (e.g. to build a follow-up PR on top of it).
@@ -111,7 +109,7 @@ as-is.
    extended message — the squash commit is the subject line only. Do not append
    the `(#<pr>)` reference by hand; the tool adds it (see below).
 
-2. **Run the squash merge**:
+2. **Run the reviewed merge**:
 
    ```bash
    bun "$AGENT_TOOL" squashMerge 'feat(app): add widget'
@@ -129,8 +127,8 @@ as-is.
 
    The tool:
    - Resolves the open PR for the current branch.
-   - Refuses to merge when a supplied reviewed base SHA no longer matches the
-     PR's current base snapshot.
+   - Requires the reviewed head and base SHAs together. The guarded form refuses
+     to merge when either no longer matches the PR snapshot.
    - Rejects a subject that spans multiple lines (upholds the subject-only
      guarantee).
    - Validates the subject — with any trailing `(#<n>)` stripped first — using
@@ -143,10 +141,15 @@ as-is.
    - Appends the PR reference so the subject ends with a space followed by
      `(#<pr>)`, replacing any existing trailing `(#<n>)` (idempotent on
      re-runs), and asserts the suffix is present before merging.
-   - Runs `gh pr merge --squash --subject <subject-with-#pr> --body ""` (adding
-     `--match-head-commit <sha>` when the head SHA argument is given), then
-     confirms the PR reached the `MERGED` state (a merge queue can otherwise exit
-     0 while only queuing the PR).
+   - With both reviewed SHAs, creates a subject-only integration commit whose
+     tree is the reviewed head and whose parents are the reviewed base and head,
+     then compare-and-swap pushes it to the base ref with an exact lease on the
+     reviewed base SHA. The remote atomically rejects any intervening base
+     update, and the reviewed head remains reachable so GitHub marks the PR
+     merged.
+   - Without review guards, runs the legacy manual path:
+     `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
+   - Confirms the PR reached the `MERGED` state.
 
 3. **On a validation failure**: relay commitlint's output, propose a corrected
    subject that satisfies the rules (valid type, ≤50 chars), and re-run with the
@@ -226,7 +229,7 @@ as-is.
    - **`-D`, not `-d`, is required here** — see the note below. The `MERGED` check
      plus the ancestry check above are what make the force safe.
 
-5. **Report results**: state the merged PR number, the final squash subject
+5. **Report results**: state the merged PR number, the final merge subject
    (including the `(#<pr>)` reference), and confirm the merge succeeded. Name the
    base branch returned to, that it was fast-forwarded and verified to contain the
    merge commit, and that the merged branch was deleted (locally, and remotely when
@@ -244,14 +247,11 @@ as-is.
 - A non-zero exit after `gh pr merge` means the PR did not actually merge (e.g.
   it was queued or blocked); do not report success in that case, and do not clean
   up the branch.
-- **A squash merge always requires `git branch -D`.** Squashing creates a *new*
-  commit on the base branch, so the feature branch's tip is never an ancestor of
-  it and `git branch -d` reports the branch as "not fully merged" and refuses.
-  `-d` may appear to work if the branch's remote-tracking ref still exists and
-  matches — git then treats it as merged to its upstream and deletes it with a
-  warning — but that is incidental, and it stops working the moment `--prune`
-  drops that ref. Do not rely on it. Gate the delete on GitHub reporting `MERGED`,
-  which is authoritative, and then force with `-D`.
+- Cleanup uses `git branch -D` for compatibility with the unguarded legacy
+  squash path, where the feature tip is not an ancestor of the new base commit.
+  The guarded path does make the reviewed head reachable, but the same deletion
+  command remains safe because it is gated on GitHub reporting `MERGED` and on
+  the base containing the integration commit.
 - The tool itself does not delete the branch or change the checkout, and knows
   nothing of `--keep-branch`; step 4 of this skill owns all of that. A caller that
   invokes the tool directly gets the merge **without** the cleanup.

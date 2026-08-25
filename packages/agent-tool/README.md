@@ -1,6 +1,6 @@
 # @tearleads/agent-tool
 
-Minimal CLI for cross-agent code review and PR squash-merges.
+Minimal CLI for cross-agent code review and reviewed PR merges.
 
 ## Cross-agent review
 
@@ -31,12 +31,16 @@ Both actions:
 
 Claude reviews in safe mode, with project hooks, plugins, settings, and MCP
 servers disabled and only read-only tools (`Read,Grep,Glob`, no `Bash`). Codex
-reviews via `codex exec` in a **read-only sandbox with the user config ignored**
-(the sandbox confines shell commands, not user-configured MCP tools). It runs
-from a temporary primary workspace so contributor-controlled `AGENTS.md` files
-are not auto-loaded, with the repository added for read access. Only its final
-message — captured with `--output-last-message` — is relayed, so the output is
-the review itself rather than the session's investigative transcript.
+reviews via `codex exec` with the user config ignored and a least-privilege
+filesystem profile. The reviewer gets a temporary snapshot containing only
+committed tracked files; ignored files, untracked secrets, and neighboring
+repositories are unreadable. Shell environment inheritance is disabled, and
+the Codex process itself receives only an auth/transport allowlist. The
+temporary directory is the primary workspace, so contributor-controlled
+`AGENTS.md` files inside the nested checkout are data rather than reviewer
+policy. Only the final message — captured with `--output-last-message` — is
+relayed, so the output is the review itself rather than the investigative
+transcript.
 
 The optional effort argument sets the reviewer's reasoning effort, defaulting to
 **`xhigh` for Claude** and **`high` for Codex**. It is passed as
@@ -76,7 +80,7 @@ repository's default branch. PR lookup matches both the branch name and push
 repository, so a same-named branch from another fork is never selected. Errors
 if a matching open PR already exists. Backs the `open-pr` skill.
 
-## Squash merge
+## Reviewed merge
 
 Squash-merges the current PR with a **subject-only** commit message — no
 auto-generated body or extended message.
@@ -93,10 +97,14 @@ bun packages/agent-tool/src/index.ts squashMerge '' "$REVIEWED_SHA" "$REVIEWED_B
 The subject is validated against the repository's own commitlint setup (the same
 `@commitlint/cli` binary and `commitlint.config.mts` the commit-msg hook uses),
 so conventional-commit syntax and the 50-char header limit are enforced
-identically. An optional reviewed base SHA stops the merge if the PR base has
-moved, and an optional head SHA is passed to GitHub's atomic
-`--match-head-commit` guard. On success it runs a subject-only squash merge.
-Backs the `squash-merge` skill.
+identically. The two review SHAs must be supplied together. With both present,
+the tool creates a subject-only integration commit whose first parent is the
+reviewed base, second parent is the reviewed head, and tree is the reviewed
+head. It then updates the base ref with an exact server-side lease on the
+reviewed base SHA. That compare-and-swap atomically rejects either a changed
+base or changed head, while keeping the reviewed head reachable so GitHub marks
+the PR merged. The unguarded form remains a normal GitHub squash merge for
+manual use. Backs the `squash-merge` compatibility skill.
 
 The tool only merges. Returning to the base branch, fast-forwarding it, and
 deleting the merged branch live in the `squash-merge` skill *around* this call —
@@ -109,7 +117,8 @@ The `ship-pr` skill commits the work on a feature branch, hands it to
 `cross-agent-review` — which reviews the local commits (or the pushed head when
 a PR is already open), repairs blocking findings in up to two rounds by default,
 and re-reviews every head it changes — then opens or resumes the PR with a
-single push and squash-merges only the reviewed commit that review reports back.
+single push and atomically merges only the reviewed head/base pair that review
+reports back.
 Opening the PR after the review is what keeps the branch to a single push
 through the pre-push hook. It finishes by handing off to `reset`, which returns
 the checkout to the default branch and reinstalls the repo's git hooks, so a

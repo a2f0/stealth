@@ -246,8 +246,9 @@ Require a clean worktree before fetching or snapshotting anything:
    (`BLOCKER`, `MAJOR`, `MINOR`, `SUGGESTION`, or `CLEAN`). Both solicit actions
    check for it, retry once when the CLI exits 0 without one (that failure is
    stochastic), and exit nonzero when the retry also fails — so the fallback
-   chain above fires on its own. Codex runs through `codex exec` in a read-only
-   sandbox and only its final message is relayed, so the captured output is the
+   chain above fires on its own. Codex runs through `codex exec` against a
+   tracked-files-only temporary checkout under a least-privilege filesystem
+   profile, and only its final message is relayed, so the captured output is the
    review, never the investigative transcript. The verdict is a
    completion sentinel, not proof of quality — still read the findings before
    repairing from them.
@@ -403,10 +404,13 @@ Require a clean worktree before fetching or snapshotting anything:
   further up the file, a source-shape baseline, the callers a signature change
   breaks. `Bash` is withheld because a review needs no shell, and the session's
   context is a PR diff — attacker-influenceable text.
-  The Codex reviewer is confined by `--sandbox read-only` with MCP servers
-  disabled (the sandbox confines shell commands, not MCP tools). Its primary
-  workspace is a fresh temporary directory, with the repository added only for
-  read access, so feature-branch `AGENTS.md` files are not auto-loaded as policy.
+  The Codex reviewer ignores user config and disables MCP/plugin/app surfaces.
+  Its primary workspace is a fresh temporary directory containing a nested
+  snapshot of committed tracked blobs only. A least-privilege permission profile
+  exposes only minimal runtime paths and that temporary workspace; shell
+  environment inheritance is disabled. Ignored files, untracked secrets, and
+  neighboring repositories are therefore unreadable, and feature-branch
+  `AGENTS.md` files are not auto-loaded as policy.
   The repair rounds run in *this* session, not the reviewer's; the reviewer stays
   read-only no matter how many rounds run.
 - **Why a review can come back empty is not known.** The one observed failure —

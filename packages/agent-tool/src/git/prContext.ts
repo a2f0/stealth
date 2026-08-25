@@ -7,14 +7,17 @@ export interface PrIdentity {
   readonly title: string;
 }
 
+interface PrMergeIdentity extends PrIdentity {
+  readonly baseRefName: string;
+  readonly baseRefOid: string;
+  readonly headRefOid: string;
+}
+
 export interface PrContext extends PrIdentity {
   readonly baseRef: string;
 }
 
-interface PrView extends PrIdentity {
-  readonly baseRefName: string;
-  readonly baseRefOid: string;
-}
+interface PrView extends PrMergeIdentity {}
 
 interface SpawnResult {
   readonly status: number | null;
@@ -135,7 +138,7 @@ export function resolvePushRepository(branch: string): string {
  * fetched commit itself: narrow fetch refspecs are allowed to update only
  * FETCH_HEAD without moving an origin/* remote-tracking ref.
  */
-function resolveFreshBaseRef(
+export function resolveFreshBaseRef(
   repository: string,
   baseRefName: string,
   expectedOid = "",
@@ -324,7 +327,7 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     "view",
     prNumber,
     "--json",
-    "title,baseRefName,baseRefOid",
+    "title,baseRefName,baseRefOid,headRefOid",
     "-R",
     repo,
   ]);
@@ -336,6 +339,7 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     title: stringField(viewRaw, "title"),
     baseRefName: stringField(viewRaw, "baseRefName"),
     baseRefOid: stringField(viewRaw, "baseRefOid"),
+    headRefOid: stringField(viewRaw, "headRefOid"),
   };
 }
 
@@ -363,23 +367,35 @@ export function prState(prNumber: string, repo: string): string {
   );
 }
 
-/** Current base commit of a PR, read immediately before a guarded merge. */
-export function prBaseOid(prNumber: string, repo: string): string {
-  return stringField(
-    run("gh", ["pr", "view", prNumber, "--json", "baseRefOid", "-R", repo]),
-    "baseRefOid",
-  );
-}
-
 /** Identity of the open PR for the current branch (no base-ref resolution). */
-export function resolvePr(): PrIdentity {
+export function resolvePr(): PrMergeIdentity {
   const view = fetchPrView();
   return {
     branch: view.branch,
     repo: view.repo,
     prNumber: view.prNumber,
     title: view.title,
+    baseRefName: view.baseRefName,
+    baseRefOid: view.baseRefOid,
+    headRefOid: view.headRefOid,
   };
+}
+
+/** Authenticated SSH URL for a GitHub repository. */
+export function repositorySshUrl(repo: string): string {
+  const url = run("gh", [
+    "repo",
+    "view",
+    repo,
+    "--json",
+    "sshUrl",
+    "--jq",
+    ".sshUrl",
+  ]);
+  if (url.length === 0) {
+    throw new Error(`Could not determine an SSH URL for '${repo}'.`);
+  }
+  return url;
 }
 
 /**

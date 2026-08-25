@@ -1,13 +1,14 @@
 ---
 name: ship-pr
-description: Ship current work end-to-end — commit on a feature branch, cross-agent review and repair it, open or resume its PR with a single push after the review, squash-merge the exact reviewed commit, then return to the base branch, delete the merged branch, and reset the checkout
+description: Ship current work end-to-end — commit on a feature branch, cross-agent review and repair it, open or resume its PR with a single push after the review, atomically merge the exact reviewed head/base pair, then return to the base branch, delete the merged branch, and reset the checkout
 ---
 
 # Ship PR
 
 Run the full ship flow for the current work: **commit the work on a feature
 branch**, get a **cross-agent review** that repairs its own blocking findings,
-**open or resume its PR**, then **squash-merge** and clean up. The PR is opened
+**open or resume its PR**, then **merge the reviewed pair** and clean up. The PR
+is opened
 *after* the review, so a fresh branch is pushed **once** — through the pre-push
 hook once — instead of once at open time and again for each repair round.
 Delegate PR creation, the review-and-repair loop, and the final merge to the
@@ -29,7 +30,7 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 ## Arguments
 
 - First argument (optional): the conventional-commit title (`type(scope): …`,
-  ≤50 chars), single-quoted. For a new PR, it is the PR title and default squash
+  ≤50 chars), single-quoted. For a new PR, it is the PR title and default merge
   subject. For an existing PR, retain that PR's title. When omitted for a new
   PR, default to the branch's latest commit subject. **To supply a later
   positional argument while defaulting the title, pass an empty string `''`.**
@@ -83,7 +84,7 @@ AGENT_TOOL="$ROOT_DIR/packages/agent-tool/src/index.ts"
 Run the wrapped skills in order. Stop on operational failures, an unresolved
 blocking verdict, or an overridden-head mismatch. Let each wrapped skill own its
 mechanics: quoting, commitlint validation, the review fallback chain and repair
-loop, subject-only squash, and `MERGED`-state verification.
+loop, subject-only reviewed merge, and `MERGED`-state verification.
 
 1. **Commit the work on a feature branch — no push, no PR yet**: reach a state
    where the intended work is committed on a feature branch and, in the fresh
@@ -219,11 +220,12 @@ loop, subject-only squash, and `MERGED`-state verification.
    REVIEWED_SHA=$(git rev-parse HEAD)
    ```
 
-   GitHub squashes from the merge base — changed ancestry could merge a diff
+   The merge tree is derived from the reviewed head — changed ancestry could
+   merge a diff
    no review read even with equal trees. The message diff must remove only
    `Co-authored-by` lines; anything else keeps the rule above.
 
-4. **Squash-merge and clean up (bound to the reviewed head and base)** — query
+4. **Merge and clean up (bound to the reviewed head and base)** — query
    the PR base once more and return to step 2 if it differs from
    `REVIEWED_BASE_SHA`:
 
@@ -231,13 +233,12 @@ loop, subject-only squash, and `MERGED`-state verification.
    test "$REVIEWED_BASE_SHA" = "$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid)"
    ```
 
-   Then invoke the `squash-merge` skill, passing
+   Then invoke the `squash-merge` compatibility skill, passing
    `REVIEWED_SHA` as its **second (head-SHA) argument** and
-   `REVIEWED_BASE_SHA` as its **third (base-SHA) argument**. The merge runs with
-   `--match-head-commit`, so GitHub
-   **atomically** refuses to merge anything but the reviewed head commit. This
-   closes the head-movement window at GitHub; the explicit base checks prevent a
-   known newer base from bypassing re-review.
+   `REVIEWED_BASE_SHA` as its **third (base-SHA) argument**. The guarded merge
+   commit names both reviewed commits as parents and the remote ref update uses
+   an exact lease on the reviewed base, so GitHub atomically refuses either a
+   different reviewed head or an intervening base update.
 
    That skill also owns the post-merge cleanup: once GitHub confirms `MERGED`, it
    returns to the PR's base branch, fast-forwards it, verifies it contains the
@@ -252,10 +253,11 @@ loop, subject-only squash, and `MERGED`-state verification.
    `bun "$AGENT_TOOL" squashMerge …` merges the PR and silently skips the cleanup,
    leaving the feature branch checked out and undeleted.
 
-   The tool also snapshots the current PR base immediately before invoking the
-   merge and refuses when it differs from the reviewed base. Because the head
-   and base SHAs are the **second and third** positionals, pass an empty first
-   argument to default the subject to the PR title:
+   The guarded tool path binds both reviewed SHAs into one integration commit
+   and compare-and-swap updates the base ref with an exact lease on the reviewed
+   base. That server-side ref update atomically rejects a base race. Because the
+   head and base SHAs are the **second and third** positionals, pass an empty
+   first argument to default the subject to the PR title:
 
    ```text
    squash-merge '' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
@@ -290,7 +292,7 @@ loop, subject-only squash, and `MERGED`-state verification.
    continue to step 6.
 
 6. **Report results**: the PR URL, review agent and fallback status, repair rounds
-   performed, findings fixed or waived, and the final squash subject including
+   performed, findings fixed or waived, and the final merge subject including
    its `(#<pr>)` reference. Note that the branch was pushed once, at open time
    (or, on the resume path, that it was already open). Confirm the merge reached
    `MERGED`, and state the branch returned to, that the merged branch was
@@ -319,8 +321,8 @@ loop, subject-only squash, and `MERGED`-state verification.
   interpreted.
 - **The merged head and base are the reviewed pair** — `cross-agent-review`
   reports the exact head and base it reviewed. This skill re-verifies both once
-  the PR is open and immediately before merge; `squash-merge` checks the base
-  snapshot again and binds the head with `--match-head-commit`. A head or base
+  the PR is open and immediately before merge; `squash-merge` binds both into
+  the integration commit and compare-and-swap base update. A head or base
   change therefore sends the flow back through sync and review. (A message-only
   co-author strip keeps it: step 3 checks tree and merge-base identity, then
   re-pins `REVIEWED_SHA`.) The lone exception

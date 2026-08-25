@@ -10,6 +10,7 @@ import {
   run,
   spawnExitCode,
 } from "../git/prContext";
+import { materializeTrackedCheckout } from "./materializeTrackedCheckout";
 import {
   DEFAULT_CODEX_EFFORT,
   type ReviewEffort,
@@ -24,6 +25,42 @@ import { type ReviewerEnv, relayReviewWithRetry } from "./runReview";
 
 /** How much transcript tail to relay when a codex attempt fails outright. */
 const TRANSCRIPT_TAIL_CHARS = 2000;
+
+const REVIEWER_ENV_ALLOWLIST = new Set([
+  "ALL_PROXY",
+  "CODEX_HOME",
+  "HOME",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "LANG",
+  "LC_ALL",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_PROXY",
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "PATH",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "all_proxy",
+  "https_proxy",
+  "http_proxy",
+  "no_proxy",
+]);
+
+const REVIEWER_SHELL_PATH =
+  "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin";
+
+/** Keep only values the Codex process may need for auth and transport. */
+export function reviewerEnvironment(env: ReviewerEnv): ReviewerEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      ([key, value]) => REVIEWER_ENV_ALLOWLIST.has(key) && value !== undefined,
+    ),
+  );
+}
 
 /**
  * Build the `codex exec` argv. `exec`, not `review`: `codex review` writes its
@@ -47,34 +84,45 @@ const TRANSCRIPT_TAIL_CHARS = 2000;
  * `--disable plugins/hooks/apps` closes the remaining gaps: plugin-provided
  * MCP servers, trusted hooks, and app connectors all live outside
  * `config.toml`, so ignoring the config alone would leave them active.
- * The primary workspace is a fresh temporary directory, with the repository
- * added only for read access, so contributor-controlled `AGENTS.md` files are
- * not auto-loaded as reviewer policy.
+ * The primary workspace is a fresh temporary directory containing a
+ * tracked-files-only snapshot. A least-privilege permission profile allows
+ * reads only from minimal runtime paths and that temporary workspace, while
+ * shell environment inheritance is disabled. Contributor-controlled
+ * `AGENTS.md` files are nested data rather than workspace policy, and ignored,
+ * untracked, and neighboring files are outside the reviewer's filesystem.
  */
 export function buildCodexReviewArgs(
   effort: ReviewEffort,
   lastMessageFile: string,
-  repositoryRoot: string,
   reviewRoot: string,
 ): string[] {
   return [
     "exec",
     "--ignore-user-config",
+    "--ignore-rules",
+    "--ephemeral",
+    "--strict-config",
     "--disable",
     "plugins",
     "--disable",
     "hooks",
     "--disable",
     "apps",
-    "--sandbox",
-    "read-only",
     "--cd",
     reviewRoot,
-    "--add-dir",
-    repositoryRoot,
     "--skip-git-repo-check",
     "-c",
     `model_reasoning_effort="${effort}"`,
+    "-c",
+    'default_permissions="agent-tool-review"',
+    "-c",
+    'permissions.agent-tool-review.filesystem={":minimal"="read",":workspace_roots"={"."="read"}}',
+    "-c",
+    'shell_environment_policy.inherit="none"',
+    "-c",
+    "shell_environment_policy.experimental_use_profile=false",
+    "-c",
+    `shell_environment_policy.set={PATH="${REVIEWER_SHELL_PATH}"}`,
     "--color",
     "never",
     "--output-last-message",
@@ -111,8 +159,10 @@ export function spawnCodexReview(
   repositoryRoot = process.cwd(),
 ): number {
   const outDir = mkdtempSync(path.join(tmpdir(), "agent-tool-codex-"));
+  const checkoutDir = path.join(outDir, "checkout");
   let attempt = 0;
   try {
+    materializeTrackedCheckout(repositoryRoot, checkoutDir);
     return relayReviewWithRetry("codex", () => {
       // A fresh file per attempt, so a retry that crashes before writing can
       // never be read as the previous attempt's stale message.
@@ -120,13 +170,13 @@ export function spawnCodexReview(
       const lastMessageFile = path.join(outDir, `review-${attempt}.md`);
       const result = spawnSync(
         "codex",
-        buildCodexReviewArgs(effort, lastMessageFile, repositoryRoot, outDir),
+        buildCodexReviewArgs(effort, lastMessageFile, outDir),
         {
           stdio: ["pipe", "pipe", "pipe"],
           input: prompt,
           encoding: "utf8",
           maxBuffer: MAX_BUFFER_BYTES,
-          env,
+          env: reviewerEnvironment(env),
         },
       );
       const exitCode = spawnExitCode("codex", result);
@@ -162,7 +212,7 @@ export function solicitCodexReview(
     context,
     diff,
     reviewInstructions: readReviewInstructions(rootDir, context.baseRef),
-    accessNote: `${CODEX_ACCESS_NOTE}. Repository root: ${rootDir}`,
+    accessNote: `${CODEX_ACCESS_NOTE}. The committed files are in the tracked checkout/ directory`,
   });
 
   return spawnCodexReview(prompt, effort, process.env, rootDir);

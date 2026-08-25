@@ -72,12 +72,7 @@ describe("buildClaudeReviewArgs", () => {
 
 describe("buildCodexReviewArgs", () => {
   test("pins the effort via a TOML-quoted config override", () => {
-    const args = buildCodexReviewArgs(
-      "high",
-      "/tmp/x/review-1.md",
-      "/repo",
-      "/tmp/x",
-    );
+    const args = buildCodexReviewArgs("high", "/tmp/x/review-1.md", "/tmp/x");
     const overrides = args.filter((_, i) => i > 0 && args[i - 1] === "-c");
     expect(overrides).toContain('model_reasoning_effort="high"');
   });
