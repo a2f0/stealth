@@ -10,6 +10,7 @@ import {
 import { audits } from "./audits";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
+import { purgeDeletedObjects } from "./deletedObjectCleanup";
 import type { Bindings } from "./types";
 
 interface TemplateResponse {
@@ -1103,6 +1104,93 @@ describe("audits", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("retains R2 cleanup after an organization is hard-deleted", async () => {
+    const fixture = await createFixture();
+    const now = "2026-08-25T12:00:00.000Z";
+    fixture.database
+      .query(
+        `INSERT INTO audits
+         (id, organization_id, template_name, definition, responses, status,
+          started_by, created_at, updated_at)
+         VALUES ('purged-audit', 'org_user-1', 'Purged audit', '{}', '{}',
+                 'in_progress', 'user-1', ?, ?)`,
+      )
+      .run(now, now);
+    fixture.database
+      .query(
+        `INSERT INTO audit_issues
+         (id, organization_id, audit_id, item_id, title, created_by,
+          created_at, updated_at)
+         VALUES ('purged-issue', 'org_user-1', 'purged-audit', 'item-1',
+                 'Purged issue', 'user-1', ?, ?)`,
+      )
+      .run(now, now);
+    fixture.database
+      .query(
+        `INSERT INTO objects
+         (id, organization_id, object_key, filename, content_type, size,
+          created_at, kind, deletion_pending)
+         VALUES ('purged-object', 'org_user-1', 'purged/image', 'image.png',
+                 'image/png', 3, ?, 'audit_issue_image', 0)`,
+      )
+      .run(now);
+    fixture.database
+      .query(
+        `INSERT INTO audit_issue_images
+         (id, issue_id, object_id, uploaded_by, slot, created_at)
+         VALUES ('purged-image', 'purged-issue', 'purged-object', 'user-1',
+                 1, ?)`,
+      )
+      .run(now);
+    fixture.stored.set("purged/image", Uint8Array.from([1, 2, 3]));
+    fixture.database.exec("PRAGMA foreign_keys = ON");
+
+    fixture.database
+      .query(`DELETE FROM organization WHERE id = 'org_user-1'`)
+      .run();
+
+    expect(
+      fixture.database
+        .query(`SELECT id FROM objects WHERE id = 'purged-object'`)
+        .get(),
+    ).toBeNull();
+    expect(
+      fixture.database
+        .query(
+          `SELECT id, object_key FROM deleted_object_cleanup
+           WHERE id = 'purged-object'`,
+        )
+        .get(),
+    ).toEqual({ id: "purged-object", object_key: "purged/image" });
+    expect(fixture.stored.has("purged/image")).toBe(true);
+
+    fixture.storageControl.failNextDelete = true;
+    await expect(purgeDeletedObjects(fixture.bindings, now)).rejects.toThrow(
+      "Transient R2 delete failure",
+    );
+    expect(
+      fixture.database
+        .query(
+          `SELECT cleanup_token FROM deleted_object_cleanup
+           WHERE id = 'purged-object'`,
+        )
+        .get(),
+    ).toEqual({ cleanup_token: expect.any(String) });
+    expect(fixture.stored.has("purged/image")).toBe(true);
+
+    expect(
+      await purgeDeletedObjects(fixture.bindings, "9999-12-31T23:59:59.999Z"),
+    ).toBe(1);
+    expect(fixture.stored.has("purged/image")).toBe(false);
+    expect(
+      fixture.database
+        .query(
+          `SELECT id FROM deleted_object_cleanup WHERE id = 'purged-object'`,
+        )
+        .get(),
+    ).toBeNull();
+  });
+
   it("keeps every saved template version immutable", async () => {
     const fixture = await createFixture();
     const created = await jsonRequest<TemplateResponse>(
@@ -1454,6 +1542,7 @@ async function createFixture() {
   await applyMigration(database, "0027_claim_object_cleanup.sql");
   await applyMigration(database, "0028_lease_audit_image_uploads.sql");
   await applyMigration(database, "0029_tombstone_cascaded_audit_images.sql");
+  await applyMigration(database, "0030_queue_deleted_objects.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,
