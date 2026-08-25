@@ -554,61 +554,11 @@ function IssueCard({
   onChange: () => Promise<void>;
   onError: (error: string | undefined) => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const assignedMemberIsMissing =
-    Boolean(issue.assignedTo) &&
-    !members.some((member) => member.id === issue.assignedTo);
-
-  async function update(update: {
-    assignedTo?: string | null;
-    status?: "open" | "resolved";
-  }) {
-    setBusy(true);
-    onError(undefined);
-    try {
-      await updateAuditIssue(issue.id, update);
-      await onChange();
-    } catch (cause) {
-      onError(messageFrom(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function attach(files: File[]) {
-    const selected = validateImageFiles(
-      files,
-      maxIssueImages - issue.images.length,
-    );
-    if (typeof selected === "string") {
-      onError(selected);
-      return;
-    }
-    setBusy(true);
-    onError(undefined);
-    try {
-      const [failure] = await uploadIssueImagesSequentially(issue.id, selected);
-      if (failure !== undefined) onError(messageFrom(failure));
-      await onChange();
-    } catch (cause) {
-      onError(messageFrom(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function removeImage(imageId: string) {
-    setBusy(true);
-    onError(undefined);
-    try {
-      await deleteAuditIssueImage(issue.id, imageId);
-      await onChange();
-    } catch (cause) {
-      onError(messageFrom(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { attach, busy, removeImage, update } = useIssueCardActions({
+    issue,
+    onChange,
+    onError,
+  });
 
   return (
     <article>
@@ -625,44 +575,123 @@ function IssueCard({
           onRemove={removeImage}
         />
       </div>
-      <div className="auditIssueActions">
-        <label>
-          <span>Assignee</span>
-          <select
-            disabled={busy}
-            onChange={(event) =>
-              void update({ assignedTo: event.target.value || null })
-            }
-            value={issue.assignedTo ?? ""}
-          >
-            <option value="">Unassigned</option>
-            {assignedMemberIsMissing && (
-              <option disabled value={issue.assignedTo ?? ""}>
-                {issue.assigneeName ?? issue.assigneeEmail ?? "Former member"} ·
-                no longer a member
-              </option>
-            )}
-            {members.map((member) => (
-              <option key={member.id} value={member.id}>
-                {member.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          disabled={busy}
-          onClick={() =>
-            void update({
-              status: issue.status === "open" ? "resolved" : "open",
-            })
-          }
-          type="button"
-        >
-          {issue.status === "open" ? "Resolve" : "Reopen"}
-        </button>
-      </div>
+      <IssueCardActions
+        busy={busy}
+        issue={issue}
+        members={members}
+        onUpdate={update}
+      />
     </article>
   );
+}
+
+function IssueCardActions({
+  busy,
+  issue,
+  members,
+  onUpdate,
+}: {
+  busy: boolean;
+  issue: AuditIssue;
+  members: OrganizationMember[];
+  onUpdate: (update: {
+    assignedTo?: string | null;
+    status?: "open" | "resolved";
+  }) => Promise<void>;
+}) {
+  const assignedMemberIsMissing =
+    Boolean(issue.assignedTo) &&
+    !members.some((member) => member.id === issue.assignedTo);
+  return (
+    <div className="auditIssueActions">
+      <label>
+        <span>Assignee</span>
+        <select
+          disabled={busy}
+          onChange={(event) =>
+            void onUpdate({ assignedTo: event.target.value || null })
+          }
+          value={issue.assignedTo ?? ""}
+        >
+          <option value="">Unassigned</option>
+          {assignedMemberIsMissing && (
+            <option disabled value={issue.assignedTo ?? ""}>
+              {issue.assigneeName ?? issue.assigneeEmail ?? "Former member"} ·
+              no longer a member
+            </option>
+          )}
+          {members.map((member) => (
+            <option key={member.id} value={member.id}>
+              {member.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        disabled={busy}
+        onClick={() =>
+          void onUpdate({
+            status: issue.status === "open" ? "resolved" : "open",
+          })
+        }
+        type="button"
+      >
+        {issue.status === "open" ? "Resolve" : "Reopen"}
+      </button>
+    </div>
+  );
+}
+
+function useIssueCardActions({
+  issue,
+  onChange,
+  onError,
+}: {
+  issue: AuditIssue;
+  onChange: () => Promise<void>;
+  onError: (error: string | undefined) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true);
+    onError(undefined);
+    try {
+      await action();
+      await onChange();
+    } catch (cause) {
+      onError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return {
+    attach: async (files: File[]) => {
+      const selected = validateImageFiles(
+        files,
+        maxIssueImages - issue.images.length,
+      );
+      if (typeof selected === "string") {
+        onError(selected);
+        return;
+      }
+      await run(async () => {
+        const [failure] = await uploadIssueImagesSequentially(
+          issue.id,
+          selected,
+        );
+        if (failure !== undefined) onError(messageFrom(failure));
+      });
+    },
+    busy,
+    removeImage: (imageId: string) =>
+      run(() => deleteAuditIssueImage(issue.id, imageId)),
+    update: (update: {
+      assignedTo?: string | null;
+      status?: "open" | "resolved";
+    }) => run(() => updateAuditIssue(issue.id, update)),
+  };
 }
 
 async function uploadIssueImagesSequentially(issueId: string, files: File[]) {
