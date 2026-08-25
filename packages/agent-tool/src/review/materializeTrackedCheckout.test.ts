@@ -29,14 +29,19 @@ describe("materializeTrackedCheckout", () => {
   test("writes committed symlinks as inert regular files", () => {
     const root = mkdtempSync(path.join(tmpdir(), "agent-tool-checkout-"));
     const checkout = path.join(root, "checkout");
+    let listedTreeish = "";
     const reader: TrackedCheckoutReader = {
-      listTree: () => "120000 blob abc123\tlink\0",
+      listTree: (_repositoryRoot, treeish) => {
+        listedTreeish = treeish;
+        return "120000 blob abc123\tlink\0";
+      },
       readBlob: () => Buffer.from("../../.env"),
     };
 
     try {
-      materializeTrackedCheckout("/unused", checkout, reader);
+      materializeTrackedCheckout("/unused", checkout, "head-1", reader);
       const target = path.join(checkout, "link");
+      expect(listedTreeish).toBe("head-1");
       expect(lstatSync(target).isSymbolicLink()).toBe(false);
       expect(readFileSync(target, "utf8")).toBe("../../.env");
     } finally {

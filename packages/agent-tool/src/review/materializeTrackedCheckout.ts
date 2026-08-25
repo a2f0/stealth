@@ -12,15 +12,15 @@ interface TrackedTreeEntry {
 }
 
 export interface TrackedCheckoutReader {
-  readonly listTree: (repositoryRoot: string) => string;
+  readonly listTree: (repositoryRoot: string, treeish: string) => string;
   readonly readBlob: (repositoryRoot: string, oid: string) => Buffer;
 }
 
 const gitReader: TrackedCheckoutReader = {
-  listTree(repositoryRoot) {
+  listTree(repositoryRoot, treeish) {
     return execFileSync(
       "git",
-      ["-C", repositoryRoot, "ls-tree", "-rz", "--full-tree", "-r", "HEAD"],
+      ["-C", repositoryRoot, "ls-tree", "-rz", "--full-tree", "-r", treeish],
       { encoding: "utf8", maxBuffer: MAX_BUFFER_BYTES },
     );
   },
@@ -81,7 +81,8 @@ export function trackedDestination(
 }
 
 /**
- * Materialize exactly the blobs committed at HEAD into a fresh review tree.
+ * Materialize exactly the blobs committed at `treeish` into a fresh review
+ * tree.
  * This deliberately does not use checkout/archive extraction: a committed
  * symlink is written as an inert regular file containing its target, so it can
  * never redirect a later write or read outside the isolated tree. Submodules
@@ -90,10 +91,14 @@ export function trackedDestination(
 export function materializeTrackedCheckout(
   repositoryRoot: string,
   checkoutRoot: string,
+  treeish = "HEAD",
   reader: TrackedCheckoutReader = gitReader,
 ): void {
   mkdirSync(checkoutRoot, { recursive: true });
-  const records = reader.listTree(repositoryRoot).split("\0").filter(Boolean);
+  const records = reader
+    .listTree(repositoryRoot, treeish)
+    .split("\0")
+    .filter(Boolean);
 
   for (const record of records) {
     const entry = parseTrackedTreeEntry(record);

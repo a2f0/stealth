@@ -23,15 +23,17 @@ and re-fetch that exact base after the reviewer exits successfully. This lets a
 wrapper prove that the reviewed and reported base are identical. Both actions:
 
 1. Resolve the review base from git + `gh` — the PR's base when the branch has an
-   open PR, the repository's default branch when it does not.
+   open PR, the repository's default branch when it does not — and snapshot the
+   exact local head, requiring it to match an open PR's pushed head.
 2. Load `REVIEW.md` or `AGENTS.md` from that trusted base commit, never from the
    contributor-controlled feature worktree, and verify there are changes.
-3. Build the repo's verdict-gated review prompt over the diff and hand it to the
-   target agent's CLI on stdin.
+3. Build the verdict-gated prompt and tracked-only checkout from that exact
+   base/head pair, then hand the prompt to the target agent's CLI on stdin.
 4. Relay the review to stdout and gate it: a usable review carries a
    `VERDICT: BLOCKER|MAJOR|MINOR|SUGGESTION|CLEAN` line. An exit-0 run without
    one is retried once (the observed failure mode is stochastic), then reported
-   as a nonzero exit.
+   as a nonzero exit. Afterward, re-resolve both local and pushed heads and
+   reject the result if either changed while the reviewer was running.
 
 Claude reviews in bare safe mode, with project hooks, plugins, settings, MCP,
 keychain access, and persistence disabled and only read-only tools

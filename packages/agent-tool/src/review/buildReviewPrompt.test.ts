@@ -15,6 +15,7 @@ describe("buildReviewPrompt", () => {
     prNumber: "42",
     title: "feat: example change",
     baseRef: "main",
+    headRef: "head-1",
   };
 
   /** Shared params; tests override what they exercise. */
@@ -31,6 +32,7 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain("Branch: feat/example");
     expect(prompt).toContain("PR: #42");
     expect(prompt).toContain("Base: main");
+    expect(prompt).toContain("Head: head-1");
     expect(prompt).toContain("PROJECT GUIDELINES");
     expect(prompt).toContain("diff --git a/x.ts b/x.ts");
   });

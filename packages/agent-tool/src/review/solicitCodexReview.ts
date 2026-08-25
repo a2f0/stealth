@@ -198,13 +198,14 @@ export function spawnCodexReview(
   effort: ReviewEffort,
   env: ReviewerEnv = process.env,
   repositoryRoot = process.cwd(),
+  headRef = "HEAD",
 ): number {
   const outDir = mkdtempSync(path.join(tmpdir(), "agent-tool-codex-"));
   const checkoutDir = path.join(outDir, "checkout");
   const runtimePaths = reviewerRuntimePaths(env);
   let attempt = 0;
   try {
-    materializeTrackedCheckout(repositoryRoot, checkoutDir);
+    materializeTrackedCheckout(repositoryRoot, checkoutDir, headRef);
     return relayReviewWithRetry("codex", () => {
       // A fresh file per attempt, so a retry that crashes before writing can
       // never be read as the previous attempt's stale message.
@@ -248,9 +249,9 @@ export function solicitCodexReview(
 ): number {
   const effort = resolveReviewEffort(effortArg, DEFAULT_CODEX_EFFORT);
   const context = resolveReviewContext(expectedBaseRef);
-  ensureChanges(context.baseRef);
+  ensureChanges(context.baseRef, context.headRef);
 
-  const diff = run("git", ["diff", `${context.baseRef}...HEAD`]);
+  const diff = run("git", ["diff", `${context.baseRef}...${context.headRef}`]);
   const prompt = buildReviewPrompt({
     context,
     diff,
@@ -258,7 +259,13 @@ export function solicitCodexReview(
     accessNote: `${CODEX_ACCESS_NOTE}. The committed files are in the tracked checkout/ directory`,
   });
 
-  const exitCode = spawnCodexReview(prompt, effort, process.env, rootDir);
+  const exitCode = spawnCodexReview(
+    prompt,
+    effort,
+    process.env,
+    rootDir,
+    context.headRef,
+  );
   if (exitCode !== 0) return exitCode;
   assertSameReviewContext(context, resolveReviewContext(context.baseRef));
   return 0;

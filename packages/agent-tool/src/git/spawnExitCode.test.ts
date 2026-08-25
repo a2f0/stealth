@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   assertCleanReviewWorktree,
   assertFetchedCommit,
+  assertPrHeadMatchesLocal,
   assertSameReviewContext,
   assertSpawnSucceeded,
   selectOpenPrNumber,
@@ -22,6 +23,7 @@ describe("assertSameReviewContext", () => {
   const context = {
     baseRef: "base-1",
     branch: "feat/widget",
+    headRef: "head-1",
     prNumber: "12",
     repo: "a2f0/stealth",
     title: "feat: widget",
@@ -31,10 +33,22 @@ describe("assertSameReviewContext", () => {
     expect(() => assertSameReviewContext(context, context)).not.toThrow();
     expect(() =>
       assertSameReviewContext(context, { ...context, baseRef: "base-2" }),
-    ).toThrow("pinned base changed");
+    ).toThrow("pinned base, or pinned head changed");
     expect(() =>
       assertSameReviewContext(context, { ...context, prNumber: "13" }),
-    ).toThrow("pinned base changed");
+    ).toThrow("pinned base, or pinned head changed");
+    expect(() =>
+      assertSameReviewContext(context, { ...context, headRef: "head-2" }),
+    ).toThrow("pinned base, or pinned head changed");
+  });
+});
+
+describe("assertPrHeadMatchesLocal", () => {
+  test("rejects a local checkout that differs from the PR head", () => {
+    expect(() => assertPrHeadMatchesLocal("head-1", "head-1")).not.toThrow();
+    expect(() => assertPrHeadMatchesLocal("head-1", "head-2")).toThrow(
+      "does not match the PR head",
+    );
   });
 });
 

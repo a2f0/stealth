@@ -38,6 +38,7 @@ ${reviewInstructions}
 Branch: ${context.branch}
 ${prLine}
 Base: ${context.baseRef}
+Head: ${context.headRef}
 
 ## Diff
 ${diff}

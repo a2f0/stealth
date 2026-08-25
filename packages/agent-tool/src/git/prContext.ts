@@ -21,6 +21,7 @@ export interface PrMergeIdentity extends PrIdentity {
 
 export interface PrContext extends PrIdentity {
   readonly baseRef: string;
+  readonly headRef: string;
 }
 
 interface PrView extends PrMergeIdentity {}
@@ -224,10 +225,22 @@ export function assertSameReviewContext(
     expected.branch !== actual.branch ||
     expected.repo !== actual.repo ||
     expected.prNumber !== actual.prNumber ||
-    expected.baseRef !== actual.baseRef
+    expected.baseRef !== actual.baseRef ||
+    expected.headRef !== actual.headRef
   ) {
     throw new Error(
-      "The review branch, PR, or pinned base changed while the reviewer was running.",
+      "The review branch, PR, pinned base, or pinned head changed while the reviewer was running.",
+    );
+  }
+}
+
+export function assertPrHeadMatchesLocal(
+  localHeadRef: string,
+  prHeadRef: string,
+): void {
+  if (localHeadRef !== prHeadRef) {
+    throw new Error(
+      `The local review head ${localHeadRef} does not match the PR head ${prHeadRef}. Push or switch to the exact PR head before reviewing.`,
     );
   }
 }
@@ -249,10 +262,12 @@ export function assertSpawnSucceeded(
   }
 }
 
-export function ensureChanges(baseRef: string): void {
-  const result = spawnSync("git", ["diff", "--quiet", `${baseRef}...HEAD`], {
-    stdio: "ignore",
-  });
+export function ensureChanges(baseRef: string, headRef = "HEAD"): void {
+  const result = spawnSync(
+    "git",
+    ["diff", "--quiet", `${baseRef}...${headRef}`],
+    { stdio: "ignore" },
+  );
   if (result.error) {
     throw result.error;
   }
@@ -466,6 +481,7 @@ export function resolveReviewContext(expectedBaseRef = ""): PrContext {
   assertCleanReviewWorktree(
     run("git", ["status", "--porcelain", "--untracked-files=all"]),
   );
+  const headRef = run("git", ["rev-parse", "--verify", "HEAD^{commit}"]);
 
   const prNumber = findOpenPrNumber(branch, repo);
   if (prNumber.length === 0) {
@@ -483,6 +499,7 @@ export function resolveReviewContext(expectedBaseRef = ""): PrContext {
       prNumber: "",
       title: "",
       baseRef: resolveFreshBaseRef(repo, defaultBranch, expectedBaseRef),
+      headRef,
     };
   }
 
@@ -490,6 +507,7 @@ export function resolveReviewContext(expectedBaseRef = ""): PrContext {
   if (view.baseRefName.length === 0) {
     throw new Error("Could not determine base branch from GitHub.");
   }
+  assertPrHeadMatchesLocal(headRef, view.headRefOid);
   return {
     branch,
     repo,
@@ -500,5 +518,6 @@ export function resolveReviewContext(expectedBaseRef = ""): PrContext {
       view.baseRefName,
       expectedBaseRef || view.baseRefOid,
     ),
+    headRef,
   };
 }
