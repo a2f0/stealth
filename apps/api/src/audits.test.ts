@@ -95,6 +95,80 @@ describe("audits", () => {
     expect(timedOutStreamCancelled).toBe(true);
   });
 
+  it("bounds concurrent maximum-size image upload memory", async () => {
+    const fixture = await createFixture();
+    const now = "2026-08-25T12:00:00.000Z";
+    for (const [suffix, organizationId, userId] of [
+      ["one", "org_user-1", "user-1"],
+      ["two", "org_user-2", "user-2"],
+    ] as const) {
+      fixture.database
+        .query(
+          `INSERT INTO audits
+           (id, organization_id, template_name, definition, responses, status,
+            started_by, created_at, updated_at)
+           VALUES (?, ?, 'Memory test', '{}', '{}', 'in_progress', ?, ?, ?)`,
+        )
+        .run(`memory-audit-${suffix}`, organizationId, userId, now, now);
+      fixture.database
+        .query(
+          `INSERT INTO audit_issues
+           (id, organization_id, audit_id, item_id, title, created_by,
+            created_at, updated_at)
+           VALUES (?, ?, ?, 'item', 'Memory test issue', ?, ?, ?)`,
+        )
+        .run(
+          `memory-issue-${suffix}`,
+          organizationId,
+          `memory-audit-${suffix}`,
+          userId,
+          now,
+          now,
+        );
+    }
+    const maximumImage = new Uint8Array(10 * 1024 * 1024);
+    maximumImage.set(pngBytes());
+    let processing = 0;
+    let releaseProcessing: (() => void) | undefined;
+    const processingGate = new Promise<void>((resolve) => {
+      releaseProcessing = resolve;
+    });
+    fixture.bindings.IMAGES = imagesFor({
+      expectedBytes: maximumImage,
+      normalizedBytes: pngBytes(),
+      onInfo: async () => {
+        processing += 1;
+        if (processing === 2) queueMicrotask(() => releaseProcessing?.());
+        await processingGate;
+      },
+    });
+
+    const uploads = await Promise.all([
+      fixture.app.request(
+        "/issues/memory-issue-one/images?filename=one-a.png",
+        imageUpload(maximumImage),
+        fixture.bindings,
+      ),
+      fixture.app.request(
+        "/issues/memory-issue-one/images?filename=one-b.png",
+        imageUpload(maximumImage),
+        fixture.bindings,
+      ),
+      fixture.app.request(
+        "/issues/memory-issue-two/images?filename=two.png",
+        imageUpload(maximumImage, "image/png", {
+          "x-test-organization-id": "org_user-2",
+          "x-test-user-id": "user-2",
+        }),
+        fixture.bindings,
+      ),
+    ]);
+
+    expect(uploads.filter(({ status }) => status === 201)).toHaveLength(2);
+    expect(uploads.filter(({ status }) => status === 429)).toHaveLength(1);
+    expect(processing).toBe(2);
+  });
+
   it("migrates existing templates and audit provenance into version one", async () => {
     const database = await createLegacyDatabase();
     const definition: AuditDefinition = {
@@ -1432,10 +1506,14 @@ function toD1(
   } as unknown as D1Database;
 }
 
-function imageUpload(bytes: BodyInit, contentType = "image/png"): RequestInit {
+function imageUpload(
+  bytes: BodyInit,
+  contentType = "image/png",
+  headers: Record<string, string> = {},
+): RequestInit {
   return {
     body: bytes,
-    headers: { "content-type": contentType },
+    headers: { "content-type": contentType, ...headers },
     method: "POST",
   };
 }
@@ -1451,16 +1529,17 @@ function pngBytes() {
 
 function imagesFor(
   dimensions: {
+    expectedBytes?: Uint8Array;
     height?: number;
     normalizedBytes?: Uint8Array;
-    onInfo?: () => void;
+    onInfo?: () => Promise<void> | void;
     onTransform?: (options: Record<string, unknown>) => void;
     width?: number;
   } = {},
 ) {
   const readValidPng = async (stream: ReadableStream<Uint8Array>) => {
     const actual = new Uint8Array(await new Response(stream).arrayBuffer());
-    const expected = pngBytes();
+    const expected = dimensions.expectedBytes ?? pngBytes();
     if (
       actual.length !== expected.length ||
       !actual.every((byte, index) => byte === expected[index])
@@ -1471,7 +1550,7 @@ function imagesFor(
   };
   return {
     info: async (stream: ReadableStream<Uint8Array>) => {
-      dimensions.onInfo?.();
+      await dimensions.onInfo?.();
       const actual = await readValidPng(stream);
       return {
         fileSize: actual.length,

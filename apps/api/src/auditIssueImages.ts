@@ -16,7 +16,10 @@ const maxImageBytes = 10 * 1024 * 1024;
 const maxImageDimension = 12_000;
 const maxImagePixels = 40_000_000;
 const maxImagesPerIssue = 10;
-const maxConcurrentImageUploads = 3;
+// A maximum-size request can briefly retain its 10 MB input buffer, the
+// immutable Blob consumed by Images, and a 10 MB normalized R2 body. Keep two
+// such pipelines well below Workers' shared 128 MB isolate memory limit.
+const maxConcurrentImageUploads = 2;
 const maxConcurrentImageUploadsPerOrganization = 2;
 const maxImageReadMilliseconds = 60_000;
 const pendingUploadGraceMilliseconds = 15 * 60 * 1000;
@@ -111,8 +114,9 @@ async function uploadReservedAuditIssueImage(
   issueId: string,
   reservation: AuditIssueImageReservation,
 ) {
-  let upload: Awaited<ReturnType<typeof parseImageUpload>>;
+  let upload: Awaited<ReturnType<typeof parseImageUpload>> | undefined;
   let validation: Awaited<ReturnType<typeof validateImage>>;
+  let requestedFilename: string;
   try {
     upload = await parseImageUpload(
       context.req.raw,
@@ -126,7 +130,9 @@ async function uploadReservedAuditIssueImage(
       );
       return context.json({ error: upload.error }, upload.status);
     }
+    requestedFilename = upload.filename;
     validation = await validateImage(context.env.IMAGES, upload.bytes);
+    upload = undefined;
     if ("error" in validation) {
       await discardAuditIssueImageReservation(
         context.env.DB,
@@ -145,7 +151,7 @@ async function uploadReservedAuditIssueImage(
   }
   const { imageType, stream } = validation;
   const filename = normalizedImageFilename(
-    upload.filename,
+    requestedFilename,
     imageType.extension,
   );
   try {
@@ -894,8 +900,9 @@ function supportedImageType(format: string) {
 
 async function validateImage(images: ImagesBinding, bytes: Uint8Array) {
   let imageInfo: ImageInfoResponse;
+  const input = new Blob([bytes]);
   try {
-    imageInfo = await images.info(new Blob([bytes]).stream());
+    imageInfo = await images.info(input.stream());
   } catch {
     return {
       error: "The uploaded file is not a valid image.",
@@ -927,7 +934,7 @@ async function validateImage(images: ImagesBinding, bytes: Uint8Array) {
   }
   try {
     const normalized = await images
-      .input(new Blob([bytes]).stream())
+      .input(input.stream())
       .output({ anim: false, format: imageType.contentType });
     const normalizedImageType = supportedImageType(normalized.contentType());
     if (normalizedImageType?.contentType !== imageType.contentType) {
