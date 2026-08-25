@@ -59,7 +59,7 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 - `git` and `gh` (authenticated) on `PATH`.
 - The trusted `@tearleads/agent-tool` setup required by the delegated
   `cross-agent-review`, `open-pr`, and `squash-merge` skills.
-- `node_modules` installed (`bun install`) so the commitlint CLI is available.
+- `node_modules` installed (`bun install`) so repository checks and hooks run.
 - The worktree contains only changes intended for this PR. A PR may already be
   open; this is how a prior gated run resumes after fixes.
 

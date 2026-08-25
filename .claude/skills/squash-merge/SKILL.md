@@ -47,7 +47,7 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
 - The `@tearleads/agent-tool` package in the PR's base commit. During the
   package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
   independently trusted installation outside the repository checkout.
-- `node_modules` installed (`bun install`) so the commitlint CLI is available.
+- `node_modules` installed (`bun install`) so repository checks and hooks run.
 - An open, mergeable PR on the current branch.
 
 ## Setup
@@ -161,12 +161,13 @@ as-is.
    - Rejects a subject that spans multiple lines (upholds the subject-only
      guarantee).
    - Validates the subject — with any trailing `(#<n>)` stripped first — using
-     the repo's commitlint setup (the same `@commitlint/cli` binary and
-     `commitlint.config.mts` the commit-msg hook uses). Conventional-commit
-     syntax and the 50-character header limit are enforced on the human-authored
-     subject; the appended PR reference is excluded from that limit, exactly as
-     GitHub's server-side suffix is. If validation fails it prints commitlint's
-     report and exits non-zero **without merging**.
+     the trusted tool snapshot's side-effect-free copy of the repository's
+     commitlint header policy. It never loads the feature checkout's executable
+     `commitlint.config.mts`. Conventional-commit syntax and the 50-character
+     header limit are enforced on the human-authored subject; the appended PR
+     reference is excluded from that limit, exactly as GitHub's server-side
+     suffix is. If validation fails it prints the policy report and exits
+     non-zero **without merging**.
    - Appends the PR reference so the subject ends with a space followed by
      `(#<pr>)`, replacing any existing trailing `(#<n>)` (idempotent on
      re-runs), and asserts the suffix is present before merging.

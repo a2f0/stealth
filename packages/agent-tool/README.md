@@ -83,13 +83,14 @@ EOF
 bun packages/agent-tool/src/index.ts openPr </dev/null
 ```
 
-The title is validated with the repository's commitlint setup (see below) before
-the PR is created, so conventional-commit syntax and the 50-char header limit
-apply. The body is read from stdin (empty when none is piped), the head is the
-current branch's resolved GitHub push repository, and the base defaults to the
-repository's default branch. PR lookup matches both the branch name and push
-repository, so a same-named branch from another fork is never selected. Errors
-if a matching open PR already exists. Backs the `open-pr` skill.
+The title is validated with the trusted tool snapshot's side-effect-free copy
+of the repository's commitlint header policy, so conventional-commit syntax and
+the 50-char header limit apply without executing feature-checkout
+configuration. The body is read from stdin (empty when none is piped), the head
+is the current branch's resolved GitHub push repository, and the base defaults
+to the repository's default branch. PR lookup matches both the branch name and
+push repository, so a same-named branch from another fork is never selected.
+Errors if a matching open PR already exists. Backs the `open-pr` skill.
 
 ## Reviewed merge
 
@@ -105,14 +106,15 @@ bun packages/agent-tool/src/index.ts squashMerge
 bun packages/agent-tool/src/index.ts squashMerge '' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
 ```
 
-The subject is validated against the repository's own commitlint setup (the same
-`@commitlint/cli` binary and `commitlint.config.mts` the commit-msg hook uses),
-so conventional-commit syntax and the 50-char header limit are enforced
-identically. The two review SHAs must be supplied together. With both present,
-the tool fetches and ancestry-checks the reviewed base, refreshes the PR, and
-inspects GitHub's effective branch policy. An unprotected branch has no policy
-to bypass, so the tool creates a one-parent squash commit and atomically updates
-the base and head refs with exact leases on both reviewed SHAs. A protected
+The subject is validated against the trusted tool snapshot's side-effect-free
+copy of the repository's commitlint header policy, so conventional-commit
+syntax and the 50-char header limit are enforced without executing
+feature-checkout configuration. The two review SHAs must be supplied together.
+With both present, the tool fetches and ancestry-checks the reviewed base,
+refreshes the PR, and inspects GitHub's effective branch policy. An unprotected
+branch has no policy to bypass, so the tool creates a one-parent squash commit
+and atomically updates the base and head refs with exact leases on both reviewed
+SHAs. A protected
 branch merges immediately through GitHub's policy-enforcing API only when strict
 up-to-date checks close the base race and every requirement is already clean.
 The guarded path never enables delayed auto-merge, because a later writer push

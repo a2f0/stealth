@@ -29,7 +29,7 @@ PR **title must conform to the repository's commitlint rules**
 - The `@tearleads/agent-tool` package in the fetched base commit. During the
   package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
   independently trusted installation outside the repository checkout.
-- `node_modules` installed (`bun install`) so the commitlint CLI is available.
+- `node_modules` installed (`bun install`) so repository checks and hooks run.
 - The working tree contains only changes intended for this PR. Stop and ask
   before carrying unrelated changes onto a new branch or committing them.
 - Before `openPr` runs, the feature branch must be pushed and have commits ahead
@@ -233,10 +233,10 @@ fi
    - Resolves the current branch and repo, and errors if an open PR already
      exists for the branch.
    - Rejects a multi-line title.
-   - Validates the title with the repo's commitlint setup (the same
-     `@commitlint/cli` binary and `commitlint.config.mts` the commit-msg hook
-     uses). If validation fails it prints commitlint's report and exits non-zero
-     **without creating the PR**.
+   - Validates the title with the trusted tool snapshot's side-effect-free copy
+     of the repository's commitlint header policy. It never loads the feature
+     checkout's executable `commitlint.config.mts`. If validation fails it
+     prints the policy report and exits non-zero **without creating the PR**.
    - Rejects a body carrying Claude Code branding — the "Generated with Claude
      Code" attribution, its `claude.com/claude-code` or `claude.ai/code` links,
      or a Claude co-author trailer — and exits non-zero **without creating the
