@@ -1215,16 +1215,16 @@ function storageFor(
     },
     put: async (
       key: string,
-      value: ArrayBuffer | ReadableStream<Uint8Array>,
+      value: ArrayBuffer | ReadableStream<Uint8Array> | Uint8Array,
     ) => {
       const beforePut = control.beforeNextPut;
       delete control.beforeNextPut;
       await beforePut?.();
-      const bytes =
-        value instanceof ReadableStream
-          ? await new Response(value).arrayBuffer()
-          : value;
-      stored.set(key, new Uint8Array(bytes));
+      if (value instanceof ReadableStream) {
+        throw new Error("R2 put requires a body with a known length");
+      }
+      const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+      stored.set(key, bytes.slice());
     },
   } as unknown as R2Bucket;
 }

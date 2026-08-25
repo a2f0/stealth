@@ -16,7 +16,7 @@ const maxImageBytes = 10 * 1024 * 1024;
 const maxImageDimension = 12_000;
 const maxImagePixels = 40_000_000;
 const maxImagesPerIssue = 10;
-const maxConcurrentImageUploads = 4;
+const maxConcurrentImageUploads = 3;
 const maxConcurrentImageUploadsPerOrganization = 2;
 const maxImageReadMilliseconds = 60_000;
 const pendingUploadGraceMilliseconds = 15 * 60 * 1000;
@@ -308,7 +308,7 @@ function normalizedImageFilename(filename: string, extension: string) {
 class AuditIssueImageUploadError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 413,
+    readonly status: 400 | 408 | 413,
   ) {
     super(message);
   }
@@ -479,25 +479,41 @@ async function writeNormalizedAuditIssueImage(
   stream: ReadableStream<Uint8Array>,
   image: AuditIssueImageInsert,
 ) {
-  let normalizedSize = 0;
-  let normalizedTooLarge = false;
-  const limitedStream = stream.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        normalizedSize += chunk.byteLength;
-        if (normalizedSize > maxImageBytes) {
-          normalizedTooLarge = true;
-          controller.error(
-            new Error("normalized image exceeded the upload limit"),
-          );
-          return;
-        }
-        controller.enqueue(chunk);
-      },
-    }),
-  );
+  let normalizedBytes: Uint8Array | null;
   try {
-    await environment.STORAGE.put(image.objectKey, limitedStream, {
+    normalizedBytes = await readBodyWithLimit(
+      stream,
+      maxImageBytes,
+      maxImageReadMilliseconds,
+    );
+  } catch (cause) {
+    await abandonAndCleanupAuditIssueImage(environment, image);
+    if (cause instanceof ImageUploadReadTimeoutError) {
+      throw new AuditIssueImageUploadError(
+        "Image processing must finish within 60 seconds.",
+        408,
+      );
+    }
+    throw cause;
+  }
+  if (normalizedBytes === null) {
+    await abandonAndCleanupAuditIssueImage(environment, image);
+    throw new AuditIssueImageUploadError(
+      "Normalized images must be 10 MB or smaller.",
+      413,
+    );
+  }
+  if (normalizedBytes.byteLength === 0) {
+    await abandonAndCleanupAuditIssueImage(environment, image);
+    throw new AuditIssueImageUploadError(
+      "The uploaded image could not be normalized safely.",
+      400,
+    );
+  }
+  try {
+    // R2 requires a body with a known length. A Uint8Array preserves the
+    // bounded byte length; a generic TransformStream is rejected by workerd.
+    await environment.STORAGE.put(image.objectKey, normalizedBytes, {
       httpMetadata: { contentType: image.contentType },
       customMetadata: {
         filename: image.filename,
@@ -507,22 +523,9 @@ async function writeNormalizedAuditIssueImage(
     });
   } catch (cause) {
     await abandonAndCleanupAuditIssueImage(environment, image);
-    if (normalizedTooLarge) {
-      throw new AuditIssueImageUploadError(
-        "Normalized images must be 10 MB or smaller.",
-        413,
-      );
-    }
     throw cause;
   }
-  if (normalizedSize === 0) {
-    await abandonAndCleanupAuditIssueImage(environment, image);
-    throw new AuditIssueImageUploadError(
-      "The uploaded image could not be normalized safely.",
-      400,
-    );
-  }
-  return normalizedSize;
+  return normalizedBytes.byteLength;
 }
 
 async function parseImageUpload(
