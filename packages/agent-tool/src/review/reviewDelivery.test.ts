@@ -4,6 +4,8 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { writeReviewFully } from "./runReview";
+
 /**
  * `spawnClaudeReview` has two jobs: judge the review, and relay it. The exit-code
  * tests cover judging. This covers relaying, and it has to spend a real
@@ -27,6 +29,17 @@ function buildLargeReview(): string {
 }
 
 describe("review delivery", () => {
+  test("retries partial synchronous writes until every byte is relayed", () => {
+    const chunks: Uint8Array[] = [];
+    const review = "Finding: café.\n\nVERDICT: CLEAN\n";
+    writeReviewFully(review, (buffer, offset, length) => {
+      const written = Math.min(length, 3);
+      chunks.push(buffer.slice(offset, offset + written));
+      return written;
+    });
+    expect(Buffer.concat(chunks).toString("utf8")).toBe(review);
+  });
+
   test("relays a review larger than the pipe buffer without truncating it", () => {
     const review = buildLargeReview();
     expect(review.length).toBeGreaterThan(64 * 1024);

@@ -455,6 +455,7 @@ function IssueImagePicker({
             }
             onError(undefined);
             onChange(selected);
+            event.target.value = "";
           }}
           type="file"
         />

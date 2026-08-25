@@ -13,6 +13,29 @@ interface ReviewAttempt {
   readonly review: string;
 }
 
+type SynchronousWriter = (
+  buffer: Uint8Array,
+  offset: number,
+  length: number,
+) => number;
+
+/** Relay every UTF-8 byte even when the underlying descriptor writes partly. */
+export function writeReviewFully(
+  review: string,
+  write: SynchronousWriter = (buffer, offset, length) =>
+    writeSync(1, buffer, offset, length),
+) {
+  const buffer = Buffer.from(review);
+  let offset = 0;
+  while (offset < buffer.byteLength) {
+    const written = write(buffer, offset, buffer.byteLength - offset);
+    if (!Number.isInteger(written) || written <= 0) {
+      throw new Error("Review output could not be written completely.");
+    }
+    offset += written;
+  }
+}
+
 /**
  * Attempts per review. Two, not more: the degenerate-output failure this
  * guards — a reviewer exiting 0 having produced no verdict-signed review — is
@@ -47,18 +70,18 @@ export function relayReviewWithRetry(
   for (let attempt = 1; attempt <= MAX_REVIEW_ATTEMPTS; attempt += 1) {
     last = runAttempt();
     if (last.exitCode !== 0) {
-      writeSync(1, last.review);
+      writeReviewFully(last.review);
       return last.exitCode;
     }
     const problem = reviewOutputProblem(last.review);
     if (problem === null) {
-      writeSync(1, last.review);
+      writeReviewFully(last.review);
       return 0;
     }
     process.stderr.write(
       `${command} exited 0 but produced no usable review (attempt ${attempt}/${MAX_REVIEW_ATTEMPTS}): ${problem}\n`,
     );
   }
-  writeSync(1, last.review);
+  writeReviewFully(last.review);
   return 1;
 }

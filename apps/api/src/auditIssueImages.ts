@@ -39,59 +39,69 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     .bind(issueId, organizationId)
     .first<{ id: string }>();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
-  if (await issueHasMaximumImages(context.env.DB, issue.id)) {
+
+  const reservation = await reserveAuditIssueImage(
+    context.env.DB,
+    organizationId,
+    issue.id,
+    context.get("authSession").user.id,
+    context.req.query("filename"),
+  );
+  if (reservation === null) {
     return context.json(
       { error: `Issues are limited to ${maxImagesPerIssue} images.` },
       409,
     );
   }
 
-  const upload = await parseImageUpload(
-    context.req.raw,
-    context.req.query("filename"),
-  );
-  if ("error" in upload) {
-    return context.json({ error: upload.error }, upload.status);
-  }
-  const validation = await validateImage(context.env.IMAGES, upload.bytes);
-  if ("error" in validation) {
-    return context.json({ error: validation.error }, validation.status);
+  let upload: Awaited<ReturnType<typeof parseImageUpload>>;
+  let validation: Awaited<ReturnType<typeof validateImage>>;
+  try {
+    upload = await parseImageUpload(
+      context.req.raw,
+      context.req.query("filename"),
+    );
+    if ("error" in upload) {
+      await discardAuditIssueImageReservation(
+        context.env.DB,
+        reservation.objectId,
+      );
+      return context.json({ error: upload.error }, upload.status);
+    }
+    validation = await validateImage(context.env.IMAGES, upload.bytes);
+    if ("error" in validation) {
+      await discardAuditIssueImageReservation(
+        context.env.DB,
+        reservation.objectId,
+      );
+      return context.json({ error: validation.error }, validation.status);
+    }
+  } catch (cause) {
+    await discardAuditIssueImageReservation(
+      context.env.DB,
+      reservation.objectId,
+    );
+    throw cause;
   }
   const { bytes, imageType } = validation;
 
-  const id = crypto.randomUUID();
-  const objectId = crypto.randomUUID();
   const filename = normalizedImageFilename(
     upload.filename,
     imageType.extension,
   );
-  const objectKey =
-    `organizations/${organizationId}/audit-issues/${issue.id}/` +
-    `${objectId}/${filename}`;
-  const userId = context.get("authSession").user.id;
-  const createdAt = new Date().toISOString();
-  const persisted = await persistAuditIssueImage(context.env, bytes, {
+  await persistAuditIssueImage(context.env, bytes, {
     contentType: imageType.contentType,
-    createdAt,
     filename,
-    id,
     issueId: issue.id,
-    objectId,
-    objectKey,
+    objectId: reservation.objectId,
+    objectKey: reservation.objectKey,
     organizationId,
-    userId,
   });
-  if (!persisted) {
-    return context.json(
-      { error: `Issues are limited to ${maxImagesPerIssue} images.` },
-      409,
-    );
-  }
   const image = await findAuditIssueImage(
     context.env.DB,
     organizationId,
     issue.id,
-    id,
+    reservation.imageId,
   );
   if (!image) throw new Error("Uploaded issue image could not be loaded.");
   return context.json({ image: toAuditIssueImage(image) }, 201);
@@ -99,14 +109,106 @@ auditIssueImages.post("/:issueId/images", async (context) => {
 
 interface AuditIssueImageInsert {
   contentType: string;
-  createdAt: string;
   filename: string;
-  id: string;
   issueId: string;
   objectId: string;
   objectKey: string;
   organizationId: string;
-  userId: string;
+}
+
+interface AuditIssueImageReservation {
+  imageId: string;
+  objectId: string;
+  objectKey: string;
+}
+
+async function reserveAuditIssueImage(
+  database: D1Database,
+  organizationId: string,
+  issueId: string,
+  userId: string,
+  requestedFilename: string | undefined,
+): Promise<AuditIssueImageReservation | null> {
+  const createdAt = new Date().toISOString();
+  const imageId = crypto.randomUUID();
+  const objectId = crypto.randomUUID();
+  const objectKey = `organizations/${organizationId}/audit-issues/${issueId}/${objectId}/image`;
+  const filename = normalizeFilename(requestedFilename ?? "", "issue-image");
+  await database
+    .prepare(
+      `INSERT INTO objects
+       (id, organization_id, object_key, filename, content_type, size,
+        created_at, kind, deletion_pending)
+       VALUES (?, ?, ?, ?, 'application/octet-stream', 0, ?,
+               'audit_issue_image', 1)`,
+    )
+    .bind(objectId, organizationId, objectKey, filename, createdAt)
+    .run();
+  let reserved: { id: string } | null;
+  try {
+    reserved = await database
+      .prepare(
+        `WITH RECURSIVE slots(slot) AS (
+           VALUES (1)
+           UNION ALL
+           SELECT slot + 1 FROM slots WHERE slot < ?
+         )
+         INSERT INTO audit_issue_images
+         (id, issue_id, object_id, uploaded_by, created_at, slot)
+         SELECT ?, ?, ?, ?, ?, slots.slot
+         FROM slots
+         WHERE NOT EXISTS (
+           SELECT 1 FROM audit_issue_images AS existing
+           WHERE existing.issue_id = ? AND existing.slot = slots.slot
+         )
+         ORDER BY slots.slot ASC
+         LIMIT 1
+         RETURNING id`,
+      )
+      .bind(
+        maxImagesPerIssue,
+        imageId,
+        issueId,
+        objectId,
+        userId,
+        createdAt,
+        issueId,
+      )
+      .first<{ id: string }>();
+  } catch (cause) {
+    await discardAuditIssueImageReservation(database, objectId);
+    throw cause;
+  }
+  if (reserved === null) {
+    await discardAuditIssueImageReservation(database, objectId);
+    return null;
+  }
+  return { imageId, objectId, objectKey };
+}
+
+async function discardAuditIssueImageReservation(
+  database: D1Database,
+  objectId: string,
+) {
+  await database.batch([
+    database
+      .prepare(
+        `DELETE FROM audit_issue_images
+         WHERE object_id = ? AND EXISTS (
+           SELECT 1 FROM objects
+           WHERE id = ? AND kind = 'audit_issue_image'
+             AND deletion_pending = 1 AND cleanup_token IS NULL
+         )`,
+      )
+      .bind(objectId, objectId),
+    database
+      .prepare(
+        `DELETE FROM objects
+         WHERE id = ? AND kind = 'audit_issue_image'
+           AND deletion_pending = 1 AND cleanup_token IS NULL`,
+      )
+      .bind(objectId),
+  ]);
 }
 
 function normalizedImageFilename(filename: string, extension: string) {
@@ -123,24 +225,31 @@ async function persistAuditIssueImage(
   bytes: ArrayBuffer,
   image: AuditIssueImageInsert,
 ) {
-  // Record ownership before writing bytes. The pending row is a durable cleanup
-  // tombstone if R2 succeeds but the later image/slot transaction does not.
-  await environment.DB.prepare(
-    `INSERT INTO objects
-     (id, organization_id, object_key, filename, content_type, size,
-      created_at, kind, deletion_pending)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'audit_issue_image', 1)`,
-  )
-    .bind(
-      image.objectId,
-      image.organizationId,
-      image.objectKey,
-      image.filename,
-      image.contentType,
-      bytes.byteLength,
-      image.createdAt,
+  // The pending object and image row already reserve a unique per-issue slot.
+  // Fill in the validated metadata before writing bytes so any later failure
+  // leaves a complete durable cleanup tombstone.
+  try {
+    const metadata = await environment.DB.prepare(
+      `UPDATE objects
+       SET filename = ?, content_type = ?, size = ?
+       WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'
+         AND deletion_pending = 1 AND cleanup_token IS NULL`,
     )
-    .run();
+      .bind(
+        image.filename,
+        image.contentType,
+        bytes.byteLength,
+        image.objectId,
+        image.organizationId,
+      )
+      .run();
+    if (Number(metadata.meta.changes) !== 1) {
+      throw new Error("Issue image reservation is no longer available.");
+    }
+  } catch (cause) {
+    await discardAuditIssueImageReservation(environment.DB, image.objectId);
+    throw cause;
+  }
   try {
     await environment.STORAGE.put(image.objectKey, bytes, {
       httpMetadata: { contentType: image.contentType },
@@ -155,52 +264,20 @@ async function persistAuditIssueImage(
     throw cause;
   }
   try {
-    await environment.DB.batch([
-      environment.DB.prepare(
-        `INSERT INTO audit_issue_images
-         (id, issue_id, object_id, uploaded_by, created_at, slot)
-         VALUES (
-           ?, ?,
-           (SELECT id FROM objects
-            WHERE id = ? AND kind = 'audit_issue_image'
-              AND deletion_pending = 1 AND cleanup_token IS NULL),
-           ?, ?,
-           (WITH RECURSIVE slots(slot) AS (
-              VALUES (1)
-              UNION ALL
-              SELECT slot + 1 FROM slots WHERE slot < ?
-            )
-            SELECT slot FROM slots
-            WHERE NOT EXISTS (
-              SELECT 1 FROM audit_issue_images AS existing
-              WHERE existing.issue_id = ? AND existing.slot = slots.slot
-            )
-            ORDER BY slot ASC
-            LIMIT 1)
-         )`,
-      ).bind(
-        image.id,
-        image.issueId,
-        image.objectId,
-        image.userId,
-        image.createdAt,
-        maxImagesPerIssue,
-        image.issueId,
-      ),
-      environment.DB.prepare(
-        `UPDATE objects SET deletion_pending = 0
-         WHERE id = ? AND kind = 'audit_issue_image'
-           AND deletion_pending = 1 AND cleanup_token IS NULL`,
-      ).bind(image.objectId),
-    ]);
+    const activated = await environment.DB.prepare(
+      `UPDATE objects SET deletion_pending = 0
+       WHERE id = ? AND kind = 'audit_issue_image'
+         AND deletion_pending = 1 AND cleanup_token IS NULL`,
+    )
+      .bind(image.objectId)
+      .run();
+    if (Number(activated.meta.changes) !== 1) {
+      throw new Error("Issue image reservation could not be activated.");
+    }
   } catch (cause) {
     await attemptPendingObjectCleanup(environment, image.objectId);
-    if (await issueHasMaximumImages(environment.DB, image.issueId)) {
-      return false;
-    }
     throw cause;
   }
-  return true;
 }
 
 async function parseImageUpload(
@@ -312,17 +389,6 @@ auditIssueImages.get("/:issueId/images/:imageId", async (context) => {
   return new Response(object.body, { headers });
 });
 
-async function issueHasMaximumImages(database: D1Database, issueId: string) {
-  const count = await database
-    .prepare(
-      `SELECT COUNT(*) AS image_count
-       FROM audit_issue_images WHERE issue_id = ?`,
-    )
-    .bind(issueId)
-    .first<{ image_count: number }>();
-  return Number(count?.image_count ?? 0) >= maxImagesPerIssue;
-}
-
 interface PendingAuditIssueObject {
   id: string;
 }
@@ -350,13 +416,21 @@ async function deletePendingAuditIssueObject(
     .first<{ object_key: string }>();
   if (!claimed) return false;
   await environment.STORAGE.delete(claimed.object_key);
-  await environment.DB.prepare(
-    `DELETE FROM objects
-     WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1
-       AND cleanup_token = ?`,
-  )
-    .bind(object.id, cleanupToken)
-    .run();
+  await environment.DB.batch([
+    environment.DB.prepare(
+      `DELETE FROM audit_issue_images
+       WHERE object_id = ? AND EXISTS (
+         SELECT 1 FROM objects
+         WHERE id = ? AND kind = 'audit_issue_image'
+           AND deletion_pending = 1 AND cleanup_token = ?
+       )`,
+    ).bind(object.id, object.id, cleanupToken),
+    environment.DB.prepare(
+      `DELETE FROM objects
+       WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1
+         AND cleanup_token = ?`,
+    ).bind(object.id, cleanupToken),
+  ]);
   return true;
 }
 

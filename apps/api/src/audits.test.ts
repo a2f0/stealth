@@ -319,7 +319,7 @@ describe("audits", () => {
       filename: "electrical-panel.png",
     });
 
-    fixture.databaseControl.failNextImageInsert = true;
+    fixture.databaseControl.failNextImageActivation = true;
     fixture.storageControl.failNextDelete = true;
     const failedUploadCleanup = await fixture.app.request(
       `/issues/${issue.body.issueId}/images?filename=cleanup-retry.png`,
@@ -367,6 +367,12 @@ describe("audits", () => {
     ).toBe(1);
     expect(fixture.stored.size).toBe(1);
 
+    let processedConcurrentUploads = 0;
+    fixture.bindings.IMAGES = imagesFor({
+      onInfo: () => {
+        processedConcurrentUploads += 1;
+      },
+    });
     const concurrentUploads = await Promise.all(
       Array.from({ length: 10 }, (_, index) =>
         fixture.app.request(
@@ -382,6 +388,7 @@ describe("audits", () => {
     expect(
       concurrentUploads.filter(({ status }) => status === 409),
     ).toHaveLength(1);
+    expect(processedConcurrentUploads).toBe(9);
     expect(fixture.stored.size).toBe(10);
     expect(
       fixture.database
@@ -518,10 +525,7 @@ describe("audits", () => {
     expect(retainedImage.status).toBe(200);
 
     const uploadedObject = fixture.database
-      .query(
-        `SELECT id FROM objects
-         WHERE object_key LIKE '%/electrical-panel.png'`,
-      )
+      .query(`SELECT id FROM objects WHERE filename = 'electrical-panel.png'`)
       .get() as { id: string };
     fixture.storageControl.failNextDelete = true;
     const failedImageDelete = await fixture.app.request(
@@ -941,7 +945,7 @@ async function createFixture() {
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,
-    failNextImageInsert: false,
+    failNextImageActivation: false,
     failNextPendingUpdate: false,
   };
   const storageControl = { failNextDelete: false };
@@ -1043,7 +1047,7 @@ function bindingsFor(
   storageControl = { failNextDelete: false },
   databaseControl = {
     activateBeforeCleanupClaim: false,
-    failNextImageInsert: false,
+    failNextImageActivation: false,
     failNextPendingUpdate: false,
   },
 ): Bindings {
@@ -1090,7 +1094,7 @@ function toD1(
   database: Database,
   control = {
     activateBeforeCleanupClaim: false,
-    failNextImageInsert: false,
+    failNextImageActivation: false,
     failNextPendingUpdate: false,
   },
 ) {
@@ -1124,11 +1128,11 @@ function toD1(
       let values: SQLQueryBindings[] = [];
       const runSync = () => {
         if (
-          control.failNextImageInsert &&
-          query.includes("INSERT INTO audit_issue_images")
+          control.failNextImageActivation &&
+          query.includes("UPDATE objects SET deletion_pending = 0")
         ) {
-          control.failNextImageInsert = false;
-          throw new Error("Transient D1 image insert failure");
+          control.failNextImageActivation = false;
+          throw new Error("Transient D1 image activation failure");
         }
         if (
           control.failNextPendingUpdate &&
@@ -1198,6 +1202,7 @@ function pngBytes() {
 function imagesFor(
   dimensions: {
     height?: number;
+    onInfo?: () => void;
     onTransform?: (options: Record<string, unknown>) => void;
     width?: number;
   } = {},
@@ -1215,6 +1220,7 @@ function imagesFor(
   };
   return {
     info: async (stream: ReadableStream<Uint8Array>) => {
+      dimensions.onInfo?.();
       const actual = await readValidPng(stream);
       return {
         fileSize: actual.length,
