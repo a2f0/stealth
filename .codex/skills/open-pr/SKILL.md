@@ -7,8 +7,8 @@ description: "Prepare a branch from the updated default branch when needed, then
 
 Prepare a pull-request branch and open its PR. When invoked on the repository's
 default branch, first preserve the intended work, fast-forward the default
-branch from its tracking remote, create a feature branch, and restore the work
-there. The
+branch from the GitHub base repository, create a feature branch, and restore
+the work there. The
 PR **title must conform to the repository's commitlint rules**
 (conventional-commit syntax and the 50-char header limit, e.g.
 `fix(app): whatever`); it is validated before the PR is created.
@@ -39,10 +39,14 @@ PR **title must conform to the repository's commitlint rules**
 ```bash
 ROOT_DIR=$(git rev-parse --show-toplevel)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef -q .defaultBranchRef.name)
+BASE_URL=$(gh repo view "$REPO" --json url -q .url)
 AGENT_TOOL="$ROOT_DIR/packages/agent-tool/src/index.ts"
 [ -f "$AGENT_TOOL" ] || { echo "Error: agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
+[ -n "$REPO" ] || { echo "Error: repository identity is unavailable" >&2; exit 1; }
 [ -n "$DEFAULT_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
+[ -n "$BASE_URL" ] || { echo "Error: repository fetch URL is unavailable" >&2; exit 1; }
 
 resolve_push_remote() {
   branch_name=$1
@@ -61,22 +65,16 @@ resolve_push_remote() {
   fi
 }
 
-resolve_fetch_remote() {
-  branch_name=$1
-  remote_name=$(git config --get "branch.$branch_name.remote" || true)
-  if [ -n "$remote_name" ] && [ "$remote_name" != "." ]; then
-    printf '%s\n' "$remote_name"
-  elif git remote get-url origin >/dev/null 2>&1; then
-    printf '%s\n' origin
-  elif [ "$(git remote | wc -l | tr -d ' ')" = 1 ]; then
-    git remote
-  fi
-}
-
-BASE_REMOTE=$(resolve_fetch_remote "$DEFAULT_BRANCH")
 PUSH_REMOTE=$(resolve_push_remote "$BRANCH")
-[ -n "$BASE_REMOTE" ] || { echo "Error: base remote is ambiguous" >&2; exit 1; }
 [ -n "$PUSH_REMOTE" ] || { echo "Error: push remote is ambiguous" >&2; exit 1; }
+git fetch --quiet "$BASE_URL" "$DEFAULT_BRANCH" || {
+  echo "Error: could not fetch $DEFAULT_BRANCH from $BASE_URL" >&2
+  exit 1
+}
+BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
+  echo "Error: fetched base commit is unavailable" >&2
+  exit 1
+}
 ```
 
 ## Workflow
@@ -107,8 +105,7 @@ PUSH_REMOTE=$(resolve_push_remote "$BRANCH")
      ```bash
      FEATURE_REMOTE=$(resolve_push_remote "$NEW_BRANCH")
      [ -n "$FEATURE_REMOTE" ] || { echo "Error: feature push remote is ambiguous" >&2; exit 1; }
-     git fetch "$BASE_REMOTE" "$DEFAULT_BRANCH"
-     if ! git merge-base --is-ancestor HEAD "$BASE_REMOTE/$DEFAULT_BRANCH"; then
+     if ! git merge-base --is-ancestor HEAD "$BASE_HEAD"; then
        echo "Error: local $DEFAULT_BRANCH has unique or diverged commits" >&2
        exit 1
      fi
@@ -133,7 +130,7 @@ PUSH_REMOTE=$(resolve_push_remote "$BRANCH")
    - Fast-forward the local default branch and create the new branch:
 
      ```bash
-     git merge --ff-only "$BASE_REMOTE/$DEFAULT_BRANCH"
+     git merge --ff-only "$BASE_HEAD"
      git switch -c "$NEW_BRANCH"
      BRANCH=$(git branch --show-current)
      PUSH_REMOTE=$(resolve_push_remote "$BRANCH")
@@ -177,7 +174,7 @@ PUSH_REMOTE=$(resolve_push_remote "$BRANCH")
    valid conventional subject — and never with a `Co-authored-by` trailer,
    which the pre-push hook rejects. Use separate commits for distinct changes
    when useful. Confirm the branch has commits ahead of
-   `$BASE_REMOTE/$DEFAULT_BRANCH`, then push without force to the resolved
+   `$BASE_HEAD`, then push without force to the resolved
    feature remote:
 
    ```bash
