@@ -70,6 +70,14 @@ describe("reviewOutputProblem", () => {
     ).toContain("VERDICT");
   });
 
+  test("rejects an embedded verdict followed by more output", () => {
+    expect(
+      reviewOutputProblem(
+        "VERDICT: CLEAN\n\nI still need to inspect the remaining files.",
+      ),
+    ).toContain("did not end");
+  });
+
   test("rejects an unknown verdict word", () => {
     expect(reviewOutputProblem("VERDICT: MAYBE")).toContain("VERDICT");
   });

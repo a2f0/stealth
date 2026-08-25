@@ -1,6 +1,33 @@
 import { describe, expect, test } from "bun:test";
 
-import { assertSpawnSucceeded, spawnExitCode } from "./prContext";
+import {
+  assertCleanReviewWorktree,
+  assertFetchedCommit,
+  assertSpawnSucceeded,
+  spawnExitCode,
+} from "./prContext";
+
+describe("assertCleanReviewWorktree", () => {
+  test("accepts an empty status and rejects unreviewed files", () => {
+    expect(() => assertCleanReviewWorktree("")).not.toThrow();
+    expect(() => assertCleanReviewWorktree(" M src/a.ts\n?? src/b.ts")).toThrow(
+      "Review worktree is not clean",
+    );
+  });
+});
+
+describe("assertFetchedCommit", () => {
+  test("accepts the expected commit and an unspecified expectation", () => {
+    expect(() => assertFetchedCommit("main", "abc", "abc")).not.toThrow();
+    expect(() => assertFetchedCommit("main", "", "abc")).not.toThrow();
+  });
+
+  test("rejects a base that changed after the PR snapshot", () => {
+    expect(() => assertFetchedCommit("main", "abc", "def")).toThrow(
+      "GitHub reported abc",
+    );
+  });
+});
 
 describe("assertSpawnSucceeded", () => {
   test("accepts a successful command", () => {

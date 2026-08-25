@@ -13,6 +13,7 @@ export interface PrContext extends PrIdentity {
 
 interface PrView extends PrIdentity {
   readonly baseRefName: string;
+  readonly baseRefOid: string;
 }
 
 interface SpawnResult {
@@ -80,20 +81,61 @@ function firstPrNumber(source: string | null): string {
  * fetched commit itself: narrow fetch refspecs are allowed to update only
  * FETCH_HEAD without moving an origin/* remote-tracking ref.
  */
-function resolveFreshBaseRef(baseRefName: string): string {
+function resolveFreshBaseRef(
+  repository: string,
+  baseRefName: string,
+  expectedOid = "",
+): string {
+  const repositoryRaw = run("gh", [
+    "repo",
+    "view",
+    repository,
+    "--json",
+    "url",
+  ]);
+  const repositoryUrl = stringField(repositoryRaw, "url");
+  if (repositoryUrl.length === 0) {
+    throw new Error(`Could not resolve a fetch URL for '${repository}'.`);
+  }
   const fetchResult = spawnSync(
     "git",
-    ["fetch", "--quiet", "origin", baseRefName],
+    ["fetch", "--quiet", repositoryUrl, baseRefName],
     {
       stdio: "ignore",
     },
   );
-  assertSpawnSucceeded(`git fetch origin ${baseRefName}`, fetchResult);
+  assertSpawnSucceeded(
+    `git fetch ${repositoryUrl} ${baseRefName}`,
+    fetchResult,
+  );
+  let fetchedOid: string;
   try {
-    return run("git", ["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
+    fetchedOid = run("git", ["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
   } catch {
     throw new Error(
       `Could not resolve the commit fetched for base ref '${baseRefName}'.`,
+    );
+  }
+  assertFetchedCommit(baseRefName, expectedOid, fetchedOid);
+  return fetchedOid;
+}
+
+export function assertFetchedCommit(
+  baseRefName: string,
+  expectedOid: string,
+  fetchedOid: string,
+) {
+  if (expectedOid.length > 0 && fetchedOid !== expectedOid) {
+    throw new Error(
+      `Fetched base '${baseRefName}' at ${fetchedOid}, but GitHub reported ${expectedOid}. Retry with a fresh PR snapshot.`,
+    );
+  }
+}
+
+export function assertCleanReviewWorktree(status: string) {
+  if (status.trim().length > 0) {
+    throw new Error(
+      "Review worktree is not clean. Commit intended and untracked files before reviewing.",
     );
   }
 }
@@ -228,7 +270,7 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     "view",
     prNumber,
     "--json",
-    "title,baseRefName",
+    "title,baseRefName,baseRefOid",
     "-R",
     repo,
   ]);
@@ -239,6 +281,7 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     prNumber,
     title: stringField(viewRaw, "title"),
     baseRefName: stringField(viewRaw, "baseRefName"),
+    baseRefOid: stringField(viewRaw, "baseRefOid"),
   };
 }
 
@@ -291,6 +334,9 @@ export function resolvePr(): PrIdentity {
  */
 export function resolveReviewContext(): PrContext {
   const { branch, repo, defaultBranch } = resolveRepoContext();
+  assertCleanReviewWorktree(
+    run("git", ["status", "--porcelain", "--untracked-files=all"]),
+  );
 
   const prNumber = findOpenPrNumber(branch, repo);
   if (prNumber.length === 0) {
@@ -307,7 +353,7 @@ export function resolveReviewContext(): PrContext {
       repo,
       prNumber: "",
       title: "",
-      baseRef: resolveFreshBaseRef(defaultBranch),
+      baseRef: resolveFreshBaseRef(repo, defaultBranch),
     };
   }
 
@@ -320,6 +366,6 @@ export function resolveReviewContext(): PrContext {
     repo,
     prNumber,
     title: view.title,
-    baseRef: resolveFreshBaseRef(view.baseRefName),
+    baseRef: resolveFreshBaseRef(repo, view.baseRefName, view.baseRefOid),
   };
 }

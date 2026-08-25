@@ -57,8 +57,10 @@ commit, repair rounds produce new commits to read.
   or may not** exist: with an open PR, local `HEAD` must equal the pushed PR
   head, and repairs are pushed to it; with no PR, the branch is reviewed against
   the repository's default branch and repairs stay local until the PR is opened.
-- Unless `--repair-rounds 0` is given: the worktree contains only changes
-  intended for this branch, since repair rounds stage and commit from it.
+- The worktree is clean, including untracked files. Reviews inspect committed
+  `base...HEAD` content only; allowing local changes would let `open-pr` commit
+  and push content that the reviewer never saw. Commit intended changes before
+  invoking this skill, including in report-only mode.
 
 ## Setup
 
@@ -82,6 +84,12 @@ command above stops rather than reading a transient `gh` error as "no PR", which
 would silently reroute the review to the wrong base and skip the pushed-head
 checks. `--jq '… // ""'` yields an empty string only on a successful empty result.
 
+Require a clean worktree before fetching or snapshotting anything:
+
+```bash
+[ -z "$(git status --porcelain --untracked-files=all)" ] || { echo "Error: worktree has uncommitted or untracked changes; commit intended review content first" >&2; git status --short; exit 1; }
+```
+
 ## Workflow
 
 1. **Determine agent and initialize the loop**: Parse the argument:
@@ -103,11 +111,17 @@ checks. `--jq '… // ""'` yields an empty string only on a successful empty res
 
    ```bash
    if [ -n "$PR_NUMBER" ]; then
-     BASE_REF=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName -R "$REPO")
+     BASE_INFO=$(gh pr view "$PR_NUMBER" --json baseRefName,baseRefOid -q '.baseRefName + " " + .baseRefOid' -R "$REPO")
+     BASE_REF=${BASE_INFO%% *}
+     BASE_OID=${BASE_INFO##* }
    else
      BASE_REF="$DEFAULT_BRANCH"
+     BASE_OID=""
    fi
-   git fetch origin "$BASE_REF" || { echo "Error: could not fetch origin/$BASE_REF" >&2; exit 1; }
+   BASE_URL=$(gh repo view "$REPO" --json url -q .url) || { echo "Error: could not resolve the base repository URL" >&2; exit 1; }
+   git fetch "$BASE_URL" "$BASE_REF" || { echo "Error: could not fetch $BASE_REF from $BASE_URL" >&2; exit 1; }
+   FETCHED_BASE=$(git rev-parse 'FETCH_HEAD^{commit}') || { echo "Error: fetched base commit is unavailable" >&2; exit 1; }
+   [ -z "$BASE_OID" ] || [ "$FETCHED_BASE" = "$BASE_OID" ] || { echo "Error: fetched $FETCHED_BASE but PR base snapshot was $BASE_OID; retry" >&2; exit 1; }
    ```
 
    **When a PR is open**, confirm the local head is already the pushed head
@@ -119,13 +133,13 @@ checks. `--jq '… // ""'` yields an empty string only on a successful empty res
    [ -z "$PR_NUMBER" ] || test "$(git rev-parse HEAD)" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)" || { echo "Error: local HEAD is not the pushed head of PR #$PR_NUMBER; reconcile before reviewing" >&2; exit 1; }
    ```
 
-   Then **merge** the fetched base in — merge `FETCH_HEAD`, which the fetch always
-   sets, rather than `origin/$BASE_REF`, which a narrow or single-branch clone may
-   not update:
+   Then **merge** the exact fetched base in — merge `$FETCHED_BASE`, which was
+   validated against the PR snapshot when a PR is open, rather than an ambient
+   remote-tracking ref that may belong to a stale fork:
 
    ```bash
    PRE_SYNC_HEAD=$(git rev-parse HEAD)
-   git merge --no-edit FETCH_HEAD || {
+   git merge --no-edit "$FETCHED_BASE" || {
      git merge --abort
      echo "Error: merging the latest $BASE_REF into $BRANCH conflicts — resolve it and re-run" >&2
      exit 1
@@ -239,18 +253,11 @@ checks. `--jq '… // ""'` yields an empty string only on a successful empty res
    exceed prompt limits and cause partial/failed reviews. Interrogate GitHub and
    review file-by-file:
 
-   a. Resolve and **fetch** the base ref, then diff against the fetched SHA so the
-      file list is the branch's own work even when the local base ref is stale —
-      the PR's base with a PR, the default branch without one:
+   a. Reuse the exact base SHA fetched and validated in step 2, so the file list
+      is the branch's own work even when an ambient remote-tracking ref is stale:
 
       ```bash
-      if [ -n "$PR_NUMBER" ]; then
-        BASE_REF=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName -R "$REPO")
-      else
-        BASE_REF="$DEFAULT_BRANCH"
-      fi
-      git fetch origin "$BASE_REF" || { echo "Error: could not fetch origin/$BASE_REF" >&2; exit 1; }
-      BASE=$(git rev-parse FETCH_HEAD)
+      BASE="$FETCHED_BASE"
       git diff --name-only "$BASE"...HEAD
       ```
 

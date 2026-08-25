@@ -557,6 +557,9 @@ function IssueCard({
   onError: (error: string | undefined) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const assignedMemberIsMissing =
+    Boolean(issue.assignedTo) &&
+    !members.some((member) => member.id === issue.assignedTo);
 
   async function update(update: {
     assignedTo?: string | null;
@@ -640,6 +643,12 @@ function IssueCard({
             value={issue.assignedTo ?? ""}
           >
             <option value="">Unassigned</option>
+            {assignedMemberIsMissing && (
+              <option disabled value={issue.assignedTo ?? ""}>
+                {issue.assigneeName ?? issue.assigneeEmail ?? "Former member"} ·
+                no longer a member
+              </option>
+            )}
             {members.map((member) => (
               <option key={member.id} value={member.id}>
                 {member.name}

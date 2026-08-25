@@ -39,7 +39,7 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
 
 ## Prerequisites
 
-- `git` and `gh` (authenticated) on `PATH`.
+- `git`, `gh` (authenticated), and POSIX `awk` on `PATH`.
 - The `@tearleads/agent-tool` package: `packages/agent-tool/src/index.ts`.
 - `node_modules` installed (`bun install`) so the commitlint CLI is available.
 - An open, mergeable PR on the current branch.
@@ -73,6 +73,13 @@ PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].nu
 # The branch to return to is the PR's base — NOT necessarily the default branch.
 BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName -R "$REPO")
 [ -n "$BASE_BRANCH" ] || { echo "Error: could not resolve base branch for PR #$PR_NUMBER" >&2; exit 1; }
+
+# Keep the feature branch's push remote separate from the base branch's pull
+# remote. On a fork these are different repositories.
+FEATURE_REMOTE=$(git config --get "branch.$BRANCH.pushRemote" || git config --get remote.pushDefault || git config --get "branch.$BRANCH.remote" || true)
+[ -n "$FEATURE_REMOTE" ] && [ "$FEATURE_REMOTE" != "." ] || { echo "Error: feature branch has no deletion-safe remote" >&2; exit 1; }
+PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")
+[ -n "$PR_HEAD_SHA" ] || { echo "Error: could not resolve PR head SHA" >&2; exit 1; }
 ```
 
 Pass `-R "$REPO"` to every `gh` call here, as the tool does internally. On a fork
@@ -172,18 +179,20 @@ as-is.
    # Pull from the remote the base branch actually tracks; on a fork, `origin` is
    # the fork and the merge landed upstream, so a hardcoded `origin` pulls a stale
    # branch and reports success.
-   REMOTE=$(git config "branch.$BASE_BRANCH.remote" 2>/dev/null || echo origin)
+   BASE_REMOTE=$(git config "branch.$BASE_BRANCH.remote" 2>/dev/null || echo origin)
 
    git switch "$BASE_BRANCH" || { echo "Error: could not switch to $BASE_BRANCH" >&2; exit 1; }
-   git pull --ff-only "$REMOTE" "$BASE_BRANCH" || { echo "Error: $BASE_BRANCH could not fast-forward; skipping delete" >&2; exit 1; }
-   git fetch "$REMOTE" --prune || { echo "Error: prune failed; skipping delete" >&2; exit 1; }
+   git pull --ff-only "$BASE_REMOTE" "$BASE_BRANCH" || { echo "Error: $BASE_BRANCH could not fast-forward; skipping delete" >&2; exit 1; }
+   git fetch "$BASE_REMOTE" --prune || { echo "Error: prune failed; skipping delete" >&2; exit 1; }
 
    # The real gate on the delete: prove this branch now contains the squash commit.
    [ -n "$MERGE_COMMIT" ] || { echo "Error: could not resolve merge commit; skipping delete" >&2; exit 1; }
    git merge-base --is-ancestor "$MERGE_COMMIT" HEAD || { echo "Error: $BASE_BRANCH does not contain merge commit $MERGE_COMMIT; skipping delete" >&2; exit 1; }
 
-   if git ls-remote --exit-code --heads "$REMOTE" "$MERGED_BRANCH" >/dev/null 2>&1; then
-     git push "$REMOTE" --delete "$MERGED_BRANCH" || { echo "Error: could not delete remote $MERGED_BRANCH" >&2; exit 1; }
+   REMOTE_BRANCH_SHA=$(git ls-remote --heads "$FEATURE_REMOTE" "$MERGED_BRANCH" | awk 'NR == 1 { print $1 }')
+   if [ -n "$REMOTE_BRANCH_SHA" ]; then
+     [ "$REMOTE_BRANCH_SHA" = "$PR_HEAD_SHA" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH is $REMOTE_BRANCH_SHA, not PR head $PR_HEAD_SHA; refusing remote delete" >&2; exit 1; }
+     git push "$FEATURE_REMOTE" --delete "$MERGED_BRANCH" || { echo "Error: could not delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }
    fi
    git branch -D "$MERGED_BRANCH" || { echo "Error: could not delete local $MERGED_BRANCH" >&2; exit 1; }
    ```
@@ -199,10 +208,11 @@ as-is.
      branch you just pulled genuinely contains the squashed work, catching a pull
      from the wrong remote, a stale fork, or a base that never received the merge
      — none of which the `MERGED` state alone can detect.
-   - **`--prune`** drops the remote-tracking ref for a branch GitHub already
-     deleted on merge. The `ls-remote` guard covers repos where that auto-delete
-     is off, and skips the push when the branch is already gone rather than
-     failing on it — so both settings work without asserting which is in force.
+   - **Remote deletion uses the feature branch's own remote, never the base
+     branch's remote.** Before deletion, its branch SHA must equal the PR head
+     captured before merge. This prevents a fork PR from deleting an unrelated
+     same-named branch in the upstream repository. An empty lookup means GitHub
+     already deleted the feature branch and is treated as success.
    - **`-D`, not `-d`, is required here** — see the note below. The `MERGED` check
      plus the ancestry check above are what make the force safe.
 

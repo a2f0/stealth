@@ -25,18 +25,12 @@ export const REVIEW_VERDICTS = [
  * of its output can write the line without having reviewed anything. It is the
  * right instrument anyway, because the failure it guards is a cooperative model
  * that got *stopped*, and anything that cuts generation short takes a trailing
- * sentinel with it. Strictness is load-bearing: loosen the match and
- * "I'll review this and end with VERDICT: CLEAN" starts passing.
- *
- * The verdict is looked for anywhere, not pinned to the last line, which does
- * admit a review that signs off and is then cut off mid-sentence. That is the
- * cheaper error to make: such a review had already reached its conclusion, while
- * pinning would discard a real one that adds a trailing aside after signing off
- * — and a discarded review costs a fresh multi-minute run.
+ * sentinel with it. Strictness is load-bearing: loosen the match and embedded
+ * prompt text or "I'll review this and end with VERDICT: CLEAN" starts passing.
+ * The verdict must therefore be the final non-empty line.
  */
 const VERDICT_PATTERN = new RegExp(
-  `^\\s*VERDICT:\\s*(${REVIEW_VERDICTS.join("|")})\\s*$`,
-  "m",
+  `^VERDICT:\\s*(${REVIEW_VERDICTS.join("|")})$`,
 );
 
 /** First line of `output`, clipped so error messages stay readable. */
@@ -55,8 +49,9 @@ export function reviewOutputProblem(output: string): string | null {
   if (trimmed.length === 0) {
     return "the reviewer wrote nothing to stdout";
   }
-  if (!VERDICT_PATTERN.test(trimmed)) {
-    return `the reviewer never emitted a 'VERDICT:' line, so it did not finish a review (output began: ${preview(trimmed)})`;
+  const finalLine = trimmed.split(/\r?\n/).at(-1)?.trim() ?? "";
+  if (!VERDICT_PATTERN.test(finalLine)) {
+    return `the reviewer did not end with a valid 'VERDICT:' line, so it did not finish a review (output began: ${preview(trimmed)})`;
   }
   return null;
 }
