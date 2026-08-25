@@ -781,36 +781,13 @@ function SelectedIssueImages({
   return (
     <div className="auditSelectedImages">
       {files.map((file) => (
-        <SelectedIssueImage
-          file={file}
-          key={`${file.name}-${file.lastModified}`}
-          onRemove={onRemove}
-        />
+        <div key={`${file.name}-${file.size}-${file.lastModified}`}>
+          <span title={file.name}>{file.name}</span>
+          <button onClick={() => onRemove(file)} type="button">
+            Remove
+          </button>
+        </div>
       ))}
-    </div>
-  );
-}
-
-function SelectedIssueImage({
-  file,
-  onRemove,
-}: {
-  file: File;
-  onRemove: (file: File) => void;
-}) {
-  const [url, setUrl] = useState<string>();
-  useEffect(() => {
-    const nextUrl = URL.createObjectURL(file);
-    setUrl(nextUrl);
-    return () => URL.revokeObjectURL(nextUrl);
-  }, [file]);
-  return (
-    <div>
-      {url && <img alt={file.name} src={url} />}
-      <span>{file.name}</span>
-      <button onClick={() => onRemove(file)} type="button">
-        Remove
-      </button>
     </div>
   );
 }

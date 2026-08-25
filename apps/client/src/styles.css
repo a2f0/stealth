@@ -2561,10 +2561,15 @@ button:disabled {
   font-size: 9px;
 }
 
-.auditSelectedImages,
 .auditIssueImageGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.auditSelectedImages {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 10px;
 }
 
@@ -2575,7 +2580,6 @@ button:disabled {
   gap: 5px;
 }
 
-.auditSelectedImages img,
 .auditIssueImageGrid img {
   width: 100%;
   height: 86px;
