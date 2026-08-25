@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { uploadIssueImagesSequentially } from "./AuditRunPage";
 import {
   type AuditTemplate,
   auditIssueImageUrl,
@@ -149,6 +150,45 @@ describe("audit issue API", () => {
       expect(auditIssueImageUrl("issue/id", "image/id", "thumbnail")).toBe(
         `${apiUrl}/api/audits/issues/issue%2Fid/images/image%2Fid?variant=thumbnail`,
       );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("preserves rate-limit responses and retries an upload once", async () => {
+    const originalFetch = globalThis.fetch;
+    const file = new File([new Uint8Array([1])], "panel.png", {
+      type: "image/png",
+    });
+    const calls: string[] = [];
+    const waits: number[] = [];
+    globalThis.fetch = (async (input) => {
+      calls.push(input.toString());
+      if (calls.length === 1) {
+        return Response.json(
+          { error: "busy" },
+          { headers: { "Retry-After": "1" }, status: 429 },
+        );
+      }
+      return Response.json({ image: {} });
+    }) as typeof fetch;
+
+    try {
+      const failures = await uploadIssueImagesSequentially(
+        "issue/id",
+        [file],
+        uploadAuditIssueImage,
+        async (milliseconds) => {
+          waits.push(milliseconds);
+        },
+      );
+
+      expect(failures).toEqual([]);
+      expect(calls).toEqual([
+        `${apiUrl}/api/audits/issues/issue%2Fid/images?filename=panel.png`,
+        `${apiUrl}/api/audits/issues/issue%2Fid/images?filename=panel.png`,
+      ]);
+      expect(waits).toEqual([1_000]);
     } finally {
       globalThis.fetch = originalFetch;
     }

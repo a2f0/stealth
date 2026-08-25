@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  assertTrackedCheckoutWithinLimits,
   materializeTrackedCheckout,
   parseTrackedTreeEntry,
   type TrackedCheckoutReader,
@@ -12,18 +13,20 @@ import {
 
 describe("materializeTrackedCheckout", () => {
   test("parses tracked blobs and rejects path traversal", () => {
-    expect(parseTrackedTreeEntry("100644 blob abc123\tsrc/a.ts")).toEqual({
+    expect(parseTrackedTreeEntry("100644 blob abc123 12\tsrc/a.ts")).toEqual({
       mode: "100644",
       type: "blob",
       oid: "abc123",
+      size: 12,
       filePath: "src/a.ts",
     });
     expect(
-      parseTrackedTreeEntry("100644 blob def456\tsrc/line\nbreak.ts"),
+      parseTrackedTreeEntry("100644 blob def456 10\tsrc/line\nbreak.ts"),
     ).toEqual({
       filePath: "src/line\nbreak.ts",
       mode: "100644",
       oid: "def456",
+      size: 10,
       type: "blob",
     });
     expect(() => trackedDestination("/tmp/review", "../.env")).toThrow(
@@ -41,7 +44,7 @@ describe("materializeTrackedCheckout", () => {
     const reader: TrackedCheckoutReader = {
       listTree: (_repositoryRoot, treeish) => {
         listedTreeish = treeish;
-        return "120000 blob abc123\tlink\0";
+        return "120000 blob abc123 10\tlink\0";
       },
       readBlob: () => Buffer.from("../../.env"),
     };
@@ -62,7 +65,7 @@ describe("materializeTrackedCheckout", () => {
     const checkout = path.join(root, "checkout");
     const filePath = "src/line\nbreak.ts";
     const reader: TrackedCheckoutReader = {
-      listTree: () => `100644 blob abc123\t${filePath}\0`,
+      listTree: () => `100644 blob abc123 11\t${filePath}\0`,
       readBlob: () => Buffer.from("export {};\n"),
     };
 
@@ -74,5 +77,51 @@ describe("materializeTrackedCheckout", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("rejects cumulative file and byte limits before creating a checkout", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-tool-limits-"));
+    const checkout = path.join(root, "checkout");
+    let blobReads = 0;
+    const reader: TrackedCheckoutReader = {
+      listTree: () =>
+        "100644 blob abc123 6\tone.txt\0" + "100644 blob def456 6\ttwo.txt\0",
+      readBlob: () => {
+        blobReads += 1;
+        return Buffer.from("123456");
+      },
+    };
+
+    try {
+      expect(() =>
+        materializeTrackedCheckout("/unused", checkout, "HEAD", reader, {
+          maxBytes: 10,
+          maxFiles: 10,
+        }),
+      ).toThrow("materialization limit");
+      expect(blobReads).toBe(0);
+      expect(() => lstatSync(checkout)).toThrow();
+
+      expect(() =>
+        materializeTrackedCheckout("/unused", checkout, "HEAD", reader, {
+          maxBytes: 100,
+          maxFiles: 1,
+        }),
+      ).toThrow("2 files");
+      expect(blobReads).toBe(0);
+      expect(() => lstatSync(checkout)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("counts submodule marker bytes during checkout preflight", () => {
+    const entry = parseTrackedTreeEntry("160000 commit abc123 -\tdependency");
+    expect(() =>
+      assertTrackedCheckoutWithinLimits([entry], {
+        maxBytes: 10,
+        maxFiles: 1,
+      }),
+    ).toThrow("materialization limit");
   });
 });

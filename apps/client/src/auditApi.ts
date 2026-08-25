@@ -110,6 +110,16 @@ export interface AuditDetail {
   members: OrganizationMember[];
 }
 
+export class AuditApiError extends Error {
+  readonly response: Response;
+
+  constructor(message: string, response: Response) {
+    super(message);
+    this.name = "AuditApiError";
+    this.response = response;
+  }
+}
+
 export async function listAuditTemplates() {
   const body = await request<{ templates: AuditTemplate[] }>("/templates");
   return body.templates;
@@ -280,7 +290,8 @@ async function request<T>(path: string, init?: RequestInit) {
   const body = (await response.json().catch(() => null)) as {
     error?: string;
   } | null;
-  throw new Error(
+  throw new AuditApiError(
     body?.error ?? `Request failed with status ${response.status}.`,
+    response,
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AuditApiError,
   type AuditDefinition,
   type AuditDetail,
   type AuditIssue,
@@ -694,19 +695,55 @@ function useIssueCardActions({
   };
 }
 
-async function uploadIssueImagesSequentially(issueId: string, files: File[]) {
+type IssueImageUploader = (issueId: string, file: File) => Promise<unknown>;
+
+type WaitForRetry = (milliseconds: number) => Promise<void>;
+
+export async function uploadIssueImagesSequentially(
+  issueId: string,
+  files: File[],
+  upload: IssueImageUploader = uploadAuditIssueImage,
+  wait: WaitForRetry = waitForRetry,
+) {
   const failures: unknown[] = [];
   // Keep at most one decoded upload in a Worker isolate for this browser. A
   // user can select ten 10 MB files, so firing them all at once can exhaust the
   // isolate's shared memory before image normalization completes.
   for (const file of files) {
     try {
-      await uploadAuditIssueImage(issueId, file);
+      await upload(issueId, file);
     } catch (cause) {
-      failures.push(cause);
+      const retryDelay = issueImageRetryDelay(cause);
+      if (retryDelay === undefined) {
+        failures.push(cause);
+        continue;
+      }
+      await wait(retryDelay);
+      try {
+        await upload(issueId, file);
+      } catch (retryCause) {
+        failures.push(retryCause);
+      }
     }
   }
   return failures;
+}
+
+function issueImageRetryDelay(cause: unknown) {
+  if (!(cause instanceof AuditApiError) || cause.response.status !== 429) {
+    return undefined;
+  }
+  const header = cause.response.headers.get("retry-after");
+  if (header === null) return undefined;
+  const seconds = /^\d+$/.test(header) ? Number(header) : undefined;
+  const milliseconds =
+    seconds === undefined ? Date.parse(header) - Date.now() : seconds * 1_000;
+  if (!Number.isFinite(milliseconds)) return undefined;
+  return Math.min(Math.max(milliseconds, 0), 5_000);
+}
+
+function waitForRetry(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function IssueImages({

@@ -9,8 +9,19 @@ interface TrackedTreeEntry {
   readonly mode: string;
   readonly type: "blob" | "commit";
   readonly oid: string;
+  readonly size: number | null;
   readonly filePath: string;
 }
+
+interface TrackedCheckoutLimits {
+  readonly maxBytes: number;
+  readonly maxFiles: number;
+}
+
+const DEFAULT_TRACKED_CHECKOUT_LIMITS: TrackedCheckoutLimits = {
+  maxBytes: 64 * 1024 * 1024,
+  maxFiles: 20_000,
+};
 
 export interface TrackedCheckoutReader {
   readonly listTree: (repositoryRoot: string, treeish: string) => string;
@@ -21,7 +32,7 @@ const gitReader: TrackedCheckoutReader = {
   listTree(repositoryRoot, treeish) {
     return execFileSync(
       toolExecutable("git"),
-      ["-C", repositoryRoot, "ls-tree", "-rz", "--full-tree", "-r", treeish],
+      ["-C", repositoryRoot, "ls-tree", "-rzl", "--full-tree", "-r", treeish],
       {
         encoding: "utf8",
         env: toolEnvironment(),
@@ -46,18 +57,58 @@ export function parseTrackedTreeEntry(record: string): TrackedTreeEntry {
   const separator = record.indexOf("\t");
   const header = separator < 0 ? record : record.slice(0, separator);
   const filePath = separator < 0 ? "" : record.slice(separator + 1);
-  const match = /^([0-7]{6}) (blob|commit) ([0-9a-f]+)$/.exec(header);
+  const match = /^([0-7]{6}) (blob|commit) ([0-9a-f]+) +([0-9-]+)$/.exec(
+    header,
+  );
   if (match === null) {
     throw new Error(
       `Could not parse tracked tree entry: ${JSON.stringify(record)}`,
     );
   }
+  const type = (match[2] ?? "") as "blob" | "commit";
+  const rawSize = match[4] ?? "";
+  const size = rawSize === "-" ? null : Number(rawSize);
+  if (
+    (type === "blob" &&
+      (size === null || !Number.isSafeInteger(size) || size < 0)) ||
+    (type === "commit" && size !== null)
+  ) {
+    throw new Error(`Invalid tracked object size: ${JSON.stringify(record)}`);
+  }
   return {
     mode: match[1] ?? "",
-    type: (match[2] ?? "") as "blob" | "commit",
+    type,
     oid: match[3] ?? "",
+    size,
     filePath,
   };
+}
+
+function entryMaterializedBytes(entry: TrackedTreeEntry): number {
+  return entry.type === "blob"
+    ? (entry.size ?? 0)
+    : Buffer.byteLength(`submodule ${entry.oid}\n`);
+}
+
+export function assertTrackedCheckoutWithinLimits(
+  entries: readonly TrackedTreeEntry[],
+  limits: TrackedCheckoutLimits = DEFAULT_TRACKED_CHECKOUT_LIMITS,
+): void {
+  if (entries.length > limits.maxFiles) {
+    throw new Error(
+      `Tracked checkout contains ${entries.length} files; limit is ${limits.maxFiles}.`,
+    );
+  }
+
+  let totalBytes = 0;
+  for (const entry of entries) {
+    totalBytes += entryMaterializedBytes(entry);
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > limits.maxBytes) {
+      throw new Error(
+        `Tracked checkout exceeds the ${limits.maxBytes}-byte materialization limit.`,
+      );
+    }
+  }
 }
 
 /**
@@ -102,15 +153,21 @@ export function materializeTrackedCheckout(
   checkoutRoot: string,
   treeish = "HEAD",
   reader: TrackedCheckoutReader = gitReader,
+  limits: TrackedCheckoutLimits = DEFAULT_TRACKED_CHECKOUT_LIMITS,
 ): void {
-  mkdirSync(checkoutRoot, { recursive: true });
-  const records = reader
+  const entries = reader
     .listTree(repositoryRoot, treeish)
     .split("\0")
-    .filter(Boolean);
+    .filter(Boolean)
+    .map(parseTrackedTreeEntry);
 
-  for (const record of records) {
-    const entry = parseTrackedTreeEntry(record);
+  for (const entry of entries) {
+    trackedDestination(checkoutRoot, entry.filePath);
+  }
+  assertTrackedCheckoutWithinLimits(entries, limits);
+  mkdirSync(checkoutRoot, { recursive: true });
+
+  for (const entry of entries) {
     const destination = trackedDestination(checkoutRoot, entry.filePath);
     mkdirSync(path.dirname(destination), { recursive: true });
 
@@ -120,6 +177,11 @@ export function materializeTrackedCheckout(
     }
 
     const contents = reader.readBlob(repositoryRoot, entry.oid);
+    if (contents.byteLength !== entry.size) {
+      throw new Error(
+        `Tracked blob size changed while materializing ${JSON.stringify(entry.filePath)}.`,
+      );
+    }
     // Mode 120000 is a Git symlink. Always materialize it as a regular file.
     const executable = entry.mode === "100755";
     writeFileSync(destination, contents, { mode: executable ? 0o755 : 0o644 });
