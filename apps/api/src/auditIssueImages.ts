@@ -14,6 +14,8 @@ const maxImageRequestBytes = maxImageBytes + maxMultipartOverheadBytes;
 const maxImageDimension = 12_000;
 const maxImagePixels = 40_000_000;
 const maxImagesPerIssue = 10;
+const pendingUploadGraceMilliseconds = 15 * 60 * 1000;
+const pendingCleanupBatchSize = 100;
 
 export interface AuditIssueImageRow {
   content_type: string;
@@ -64,27 +66,88 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     `${objectId}/${filename}`;
   const userId = context.get("authSession").user.id;
   const createdAt = new Date().toISOString();
-  await context.env.STORAGE.put(objectKey, bytes, {
-    httpMetadata: { contentType: imageType.contentType },
-    customMetadata: { filename, issueId: issue.id, organizationId },
+  const persisted = await persistAuditIssueImage(context.env, bytes, {
+    contentType: imageType.contentType,
+    createdAt,
+    filename,
+    id,
+    issueId: issue.id,
+    objectId,
+    objectKey,
+    organizationId,
+    userId,
   });
+  if (!persisted) {
+    return context.json(
+      { error: `Issues are limited to ${maxImagesPerIssue} images.` },
+      409,
+    );
+  }
+  const image = await findAuditIssueImage(
+    context.env.DB,
+    organizationId,
+    issue.id,
+    id,
+  );
+  if (!image) throw new Error("Uploaded issue image could not be loaded.");
+  return context.json({ image: toAuditIssueImage(image) }, 201);
+});
+
+interface AuditIssueImageInsert {
+  contentType: string;
+  createdAt: string;
+  filename: string;
+  id: string;
+  issueId: string;
+  objectId: string;
+  objectKey: string;
+  organizationId: string;
+  userId: string;
+}
+
+async function persistAuditIssueImage(
+  environment: Pick<Bindings, "DB" | "STORAGE">,
+  bytes: ArrayBuffer,
+  image: AuditIssueImageInsert,
+) {
+  // Record ownership before writing bytes. The pending row is a durable cleanup
+  // tombstone if R2 succeeds but the later image/slot transaction does not.
+  await environment.DB.prepare(
+    `INSERT INTO objects
+     (id, organization_id, object_key, filename, content_type, size,
+      created_at, kind, deletion_pending)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'audit_issue_image', 1)`,
+  )
+    .bind(
+      image.objectId,
+      image.organizationId,
+      image.objectKey,
+      image.filename,
+      image.contentType,
+      bytes.byteLength,
+      image.createdAt,
+    )
+    .run();
   try {
-    await context.env.DB.batch([
-      context.env.DB.prepare(
-        `INSERT INTO objects
-         (id, organization_id, object_key, filename, content_type, size,
-          created_at, kind)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'audit_issue_image')`,
-      ).bind(
-        objectId,
-        organizationId,
-        objectKey,
-        filename,
-        imageType.contentType,
-        bytes.byteLength,
-        createdAt,
-      ),
-      context.env.DB.prepare(
+    await environment.STORAGE.put(image.objectKey, bytes, {
+      httpMetadata: { contentType: image.contentType },
+      customMetadata: {
+        filename: image.filename,
+        issueId: image.issueId,
+        organizationId: image.organizationId,
+      },
+    });
+  } catch (cause) {
+    await attemptPendingObjectCleanup(
+      environment,
+      image.objectId,
+      image.objectKey,
+    );
+    throw cause;
+  }
+  try {
+    await environment.DB.batch([
+      environment.DB.prepare(
         `INSERT INTO audit_issue_images
          (id, issue_id, object_id, uploaded_by, created_at, slot)
          VALUES (
@@ -103,34 +166,32 @@ auditIssueImages.post("/:issueId/images", async (context) => {
             LIMIT 1)
          )`,
       ).bind(
-        id,
-        issue.id,
-        objectId,
-        userId,
-        createdAt,
+        image.id,
+        image.issueId,
+        image.objectId,
+        image.userId,
+        image.createdAt,
         maxImagesPerIssue,
-        issue.id,
+        image.issueId,
       ),
+      environment.DB.prepare(
+        `UPDATE objects SET deletion_pending = 0
+         WHERE id = ? AND kind = 'audit_issue_image'`,
+      ).bind(image.objectId),
     ]);
   } catch (cause) {
-    await context.env.STORAGE.delete(objectKey);
-    if (await issueHasMaximumImages(context.env.DB, issue.id)) {
-      return context.json(
-        { error: `Issues are limited to ${maxImagesPerIssue} images.` },
-        409,
-      );
+    await attemptPendingObjectCleanup(
+      environment,
+      image.objectId,
+      image.objectKey,
+    );
+    if (await issueHasMaximumImages(environment.DB, image.issueId)) {
+      return false;
     }
     throw cause;
   }
-  const image = await findAuditIssueImage(
-    context.env.DB,
-    organizationId,
-    issue.id,
-    id,
-  );
-  if (!image) throw new Error("Uploaded issue image could not be loaded.");
-  return context.json({ image: toAuditIssueImage(image) }, 201);
-});
+  return true;
+}
 
 async function parseImageUpload(
   request: Request,
@@ -232,6 +293,68 @@ async function issueHasMaximumImages(database: D1Database, issueId: string) {
   return Number(count?.image_count ?? 0) >= maxImagesPerIssue;
 }
 
+interface PendingAuditIssueObject {
+  id: string;
+  object_key: string;
+}
+
+async function deletePendingAuditIssueObject(
+  environment: Pick<Bindings, "DB" | "STORAGE">,
+  object: PendingAuditIssueObject,
+) {
+  await environment.STORAGE.delete(object.object_key);
+  await environment.DB.prepare(
+    `DELETE FROM objects
+     WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1`,
+  )
+    .bind(object.id)
+    .run();
+}
+
+async function attemptPendingObjectCleanup(
+  environment: Pick<Bindings, "DB" | "STORAGE">,
+  id: string,
+  objectKey: string,
+) {
+  try {
+    await deletePendingAuditIssueObject(environment, {
+      id,
+      object_key: objectKey,
+    });
+  } catch (cause) {
+    // The D1 tombstone intentionally remains for the scheduled retry.
+    console.error("Audit issue image cleanup deferred.", cause);
+  }
+}
+
+/** Retry durable R2 cleanup tombstones without racing an in-flight upload. */
+export async function purgePendingAuditIssueImages(
+  environment: Pick<Bindings, "DB" | "STORAGE">,
+  cutoff = new Date(Date.now() - pendingUploadGraceMilliseconds).toISOString(),
+) {
+  const result = await environment.DB.prepare(
+    `SELECT id, object_key FROM objects
+     WHERE kind = 'audit_issue_image' AND deletion_pending = 1
+       AND datetime(created_at) <= datetime(?)
+     ORDER BY created_at ASC, id ASC
+     LIMIT ?`,
+  )
+    .bind(cutoff, pendingCleanupBatchSize)
+    .all<PendingAuditIssueObject>();
+  let firstFailure: unknown;
+  let purged = 0;
+  for (const object of result.results) {
+    try {
+      await deletePendingAuditIssueObject(environment, object);
+      purged += 1;
+    } catch (cause) {
+      firstFailure ??= cause;
+    }
+  }
+  if (firstFailure !== undefined) throw firstFailure;
+  return purged;
+}
+
 auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
   const organizationId = context.get("organizationId");
   const row = await findAuditIssueImage(
@@ -242,22 +365,25 @@ auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
     true,
   );
   if (!row) return context.json({ error: "Issue image not found." }, 404);
-  // Make the image inaccessible before touching R2. If either later operation
-  // fails, the same DELETE remains able to find this pending row and retry both
-  // idempotent cleanup steps without exposing broken metadata to readers.
-  await context.env.DB.prepare(
-    `UPDATE objects SET deletion_pending = 1
-     WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
-  )
-    .bind(row.object_id, organizationId)
-    .run();
-  await context.env.STORAGE.delete(row.object_key);
-  await context.env.DB.prepare(
-    `DELETE FROM objects
-     WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
-  )
-    .bind(row.object_id, organizationId)
-    .run();
+  // Atomically hide the image and release its unique issue slot before R2
+  // cleanup. A failed R2 delete leaves a durable object tombstone for cron.
+  await context.env.DB.batch([
+    context.env.DB.prepare(
+      `UPDATE objects SET deletion_pending = 1
+       WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
+    ).bind(row.object_id, organizationId),
+    context.env.DB.prepare(
+      `DELETE FROM audit_issue_images WHERE id = ? AND object_id = ?`,
+    ).bind(row.id, row.object_id),
+  ]);
+  try {
+    await deletePendingAuditIssueObject(context.env, {
+      id: row.object_id,
+      object_key: row.object_key,
+    });
+  } catch {
+    return context.json({ cleanupPending: true }, 202);
+  }
   return context.body(null, 204);
 });
 

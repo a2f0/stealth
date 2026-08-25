@@ -2,7 +2,10 @@ import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuditDefinition } from "./auditDefinition";
-import { readBodyWithLimit } from "./auditIssueImages";
+import {
+  purgePendingAuditIssueImages,
+  readBodyWithLimit,
+} from "./auditIssueImages";
 import { audits } from "./audits";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
@@ -362,6 +365,31 @@ describe("audits", () => {
       fixture.database.query(`SELECT DISTINCT kind FROM objects`).all(),
     ).toEqual([{ kind: "audit_issue_image" }]);
 
+    fixture.storageControl.failNextDelete = true;
+    const failedUploadCleanup = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images`,
+      { body: pngForm("cleanup-retry.png"), method: "POST" },
+      fixture.bindings,
+    );
+    expect(failedUploadCleanup.status).toBe(409);
+    expect(fixture.stored.size).toBe(11);
+    expect(
+      fixture.database
+        .query(
+          `SELECT COUNT(*) AS count FROM objects
+           WHERE deletion_pending = 1 AND kind = 'audit_issue_image'`,
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(await purgePendingAuditIssueImages(fixture.bindings)).toBe(0);
+    expect(
+      await purgePendingAuditIssueImages(
+        fixture.bindings,
+        "9999-12-31T23:59:59.999Z",
+      ),
+    ).toBe(1);
+    expect(fixture.stored.size).toBe(10);
+
     const hiddenImage = await fixture.app.request(
       `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
       {
@@ -456,37 +484,56 @@ describe("audits", () => {
     );
     expect(retainedImage.status).toBe(200);
 
+    const uploadedObject = fixture.database
+      .query(
+        `SELECT id FROM objects
+         WHERE object_key LIKE '%/electrical-panel.png'`,
+      )
+      .get() as { id: string };
     fixture.storageControl.failNextDelete = true;
     const failedImageDelete = await fixture.app.request(
       `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
       { method: "DELETE" },
       fixture.bindings,
     );
-    expect(failedImageDelete.status).toBe(500);
+    expect(failedImageDelete.status).toBe(202);
     expect(fixture.stored.size).toBe(10);
     expect(
       fixture.database
         .query(
-          `SELECT object.deletion_pending
-           FROM audit_issue_images AS image
-           JOIN objects AS object ON object.id = image.object_id
-           WHERE image.id = ?`,
+          `SELECT deletion_pending FROM objects
+           WHERE id = ? AND kind = 'audit_issue_image'`,
         )
-        .get(uploadedBody.image.id),
+        .get(uploadedObject.id),
     ).toEqual({ deletion_pending: 1 });
+    expect(
+      fixture.database
+        .query(`SELECT id FROM audit_issue_images WHERE id = ?`)
+        .get(uploadedBody.image.id),
+    ).toBeNull();
     const pendingImage = await fixture.app.request(
       `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
       undefined,
       fixture.bindings,
     );
     expect(pendingImage.status).toBe(404);
-    const retriedImageDelete = await fixture.app.request(
-      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
-      { method: "DELETE" },
+    const replacementImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images`,
+      { body: pngForm("replacement.png"), method: "POST" },
       fixture.bindings,
     );
-    expect(retriedImageDelete.status).toBe(204);
-    expect(fixture.stored.size).toBe(9);
+    expect(replacementImage.status).toBe(201);
+    const replacementImageBody =
+      (await replacementImage.json()) as IssueImageResponse;
+    expect(fixture.stored.size).toBe(11);
+    expect(await purgePendingAuditIssueImages(fixture.bindings)).toBe(0);
+    expect(
+      await purgePendingAuditIssueImages(
+        fixture.bindings,
+        "9999-12-31T23:59:59.999Z",
+      ),
+    ).toBe(1);
+    expect(fixture.stored.size).toBe(10);
 
     const deletedImages = await Promise.all(
       (detailBody.issues[0]?.images ?? [])
@@ -500,6 +547,12 @@ describe("audits", () => {
         ),
     );
     expect(deletedImages.every(({ status }) => status === 204)).toBe(true);
+    const deletedReplacement = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${replacementImageBody.image.id}`,
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(deletedReplacement.status).toBe(204);
     expect(fixture.stored.size).toBe(0);
   });
 
