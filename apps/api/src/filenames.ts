@@ -11,7 +11,6 @@ export function normalizeFilename(filename: string, fallback = "upload") {
         : character;
     })
     .join("")
-    .trim()
-    .slice(0, 255);
-  return normalized || fallback;
+    .trim();
+  return [...normalized].slice(0, 255).join("") || fallback;
 }

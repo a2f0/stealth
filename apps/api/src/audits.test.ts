@@ -219,6 +219,24 @@ describe("audits", () => {
       expect(storedImage.status).toBe(200);
       expect(storedImage.headers.get("content-type")).toBe(format.contentType);
     }
+
+    const emojiBytes = pngBytes();
+    fixture.bindings.IMAGES = imagesFor({
+      expectedBytes: emojiBytes,
+      format: "image/png",
+    });
+    const longUnicodeName = `${"😀".repeat(255)}.original`;
+    const unicodeUpload = await fixture.app.request(
+      `/issues/format-issue/images?${new URLSearchParams({
+        filename: longUnicodeName,
+      })}`,
+      imageUpload(emojiBytes, "image/png"),
+      fixture.bindings,
+    );
+    expect(unicodeUpload.status).toBe(201);
+    const unicodeBody = (await unicodeUpload.json()) as IssueImageResponse;
+    expect(unicodeBody.image.filename).toBe(`${"😀".repeat(251)}.png`);
+    expect(() => encodeURIComponent(unicodeBody.image.filename)).not.toThrow();
   });
 
   it("bounds concurrent maximum-size image upload memory", async () => {

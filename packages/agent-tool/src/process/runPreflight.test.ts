@@ -1,8 +1,23 @@
 import { expect, test } from "bun:test";
-import type { TrustedExecutable } from "../review/trustedExecutable";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  resolveTrustedExecutable,
+  type TrustedExecutable,
+} from "../review/trustedExecutable";
 import {
   buildPreflightEnvironment,
   buildPreflightSandboxProfile,
+  runPreflight,
 } from "./runPreflight";
 
 const runtime: TrustedExecutable = {
@@ -61,9 +76,11 @@ test("preflight strips credentials and contributor-controlled process options", 
 
 test("preflight denies external network, Git writes, and dependency poisoning", () => {
   const profile = buildPreflightSandboxProfile(
-    "/Users/example/repo",
+    "/private/tmp/preflight-home/checkout",
     "/private/tmp/preflight-home",
     [runtime],
+    ["/Users/example/repo/apps/api/node_modules"],
+    ["/Users/example/repo"],
   );
 
   expect(profile).toContain("(deny network*)");
@@ -79,9 +96,105 @@ test("preflight denies external network, Git writes, and dependency poisoning", 
   );
   expect(profile).toContain("(allow file-read-metadata)");
   expect(profile).toContain(
-    '(deny file-write* (subpath "/Users/example/repo/.git") (subpath "/Users/example/repo/node_modules"))',
+    '(deny file-write* (subpath "/private/tmp/preflight-home/checkout/.git") (subpath "/Users/example/repo/apps/api/node_modules") (subpath "/Users/example/repo"))',
   );
-  expect(profile).toContain('(subpath "/Users/example/repo")');
+  expect(profile).toContain(
+    '(subpath "/Users/example/repo/apps/api/node_modules")',
+  );
   expect(profile).toContain('(subpath "/private/tmp/preflight-home")');
   expect(profile).not.toContain('(subpath "/Users/example")');
 });
+
+test.skipIf(
+  process.platform !== "darwin" ||
+    Reflect.get(process.env, "TEARLEADS_PREFLIGHT_OFFLINE") === "1",
+)(
+  "preflight cannot persist ignored files or poison nested dependencies",
+  () => {
+    const repositoryRoot = mkdtempSync(
+      path.join(tmpdir(), "agent-tool-preflight-source-"),
+    );
+    const rootDependencies = path.join(repositoryRoot, "node_modules");
+    const nestedDependencies = path.join(
+      repositoryRoot,
+      "apps",
+      "api",
+      "node_modules",
+    );
+    const sourceFile = path.join(repositoryRoot, "source.txt");
+    const ignoredFile = path.join(repositoryRoot, ".env");
+    const rootSentinel = path.join(rootDependencies, "sentinel.txt");
+    const nestedSentinel = path.join(nestedDependencies, "sentinel.txt");
+
+    try {
+      mkdirSync(rootDependencies, { recursive: true });
+      mkdirSync(nestedDependencies, { recursive: true });
+      writeFileSync(
+        path.join(repositoryRoot, ".gitignore"),
+        ".env\nnode_modules\n",
+      );
+      writeFileSync(sourceFile, "original source\n");
+      writeFileSync(rootSentinel, "root dependency\n");
+      writeFileSync(nestedSentinel, "nested dependency\n");
+      writeFileSync(
+        path.join(repositoryRoot, "package.json"),
+        `${JSON.stringify({
+          name: "preflight-mutation-test",
+          private: true,
+          scripts: { attack: "bun attack.ts" },
+        })}\n`,
+      );
+      writeFileSync(
+        path.join(repositoryRoot, "attack.ts"),
+        `import { writeFileSync } from "node:fs";\n` +
+          `writeFileSync(".env", "disposable only\\n");\n` +
+          `for (const target of ${JSON.stringify([
+            sourceFile,
+            rootSentinel,
+            nestedSentinel,
+          ])}) {\n` +
+          `  try { writeFileSync(target, "poisoned\\n"); } catch {}\n` +
+          `}\n`,
+      );
+
+      const git = resolveTrustedExecutable("git", process.env, repositoryRoot);
+      if (git === null)
+        throw new Error("Trusted Git is required for this test.");
+      const invokeGit = (arguments_: readonly string[]) =>
+        execFileSync(git.executable, arguments_, {
+          cwd: repositoryRoot,
+          env: {
+            ...process.env,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+          },
+          stdio: "ignore",
+        });
+      invokeGit(["init", "--quiet"]);
+      invokeGit(["-c", "core.hooksPath=/dev/null", "add", "--all"]);
+      invokeGit([
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "user.name=Preflight Test",
+        "-c",
+        "user.email=preflight-test@localhost",
+        "commit",
+        "--quiet",
+        "--no-gpg-sign",
+        "--no-verify",
+        "-m",
+        "fixture",
+      ]);
+
+      expect(runPreflight(repositoryRoot, "attack")).toBe(0);
+      expect(existsSync(ignoredFile)).toBe(false);
+      expect(readFileSync(sourceFile, "utf8")).toBe("original source\n");
+      expect(readFileSync(rootSentinel, "utf8")).toBe("root dependency\n");
+      expect(readFileSync(nestedSentinel, "utf8")).toBe("nested dependency\n");
+    } finally {
+      rmSync(repositoryRoot, { force: true, recursive: true });
+    }
+  },
+  20_000,
+);

@@ -307,7 +307,8 @@ function normalizedImageFilename(filename: string, extension: string) {
   const dotIndex = normalized.lastIndexOf(".");
   const stem = dotIndex > 0 ? normalized.slice(0, dotIndex) : normalized;
   const suffix = `.${extension}`;
-  const trimmedStem = stem.slice(0, 255 - suffix.length) || "issue-image";
+  const trimmedStem =
+    [...stem].slice(0, 255 - suffix.length).join("") || "issue-image";
   return `${trimmedStem}${suffix}`;
 }
 

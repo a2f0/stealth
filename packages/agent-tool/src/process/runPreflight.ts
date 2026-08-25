@@ -1,5 +1,18 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 import {
@@ -9,6 +22,21 @@ import {
 } from "../review/trustedExecutable";
 
 const SAFE_PREFLIGHT_ENVIRONMENT = new Set(["LANG", "LC_ALL", "TERM", "TZ"]);
+const MUTABLE_DEPENDENCY_CACHE_NAMES = new Set([
+  ".astro",
+  ".cache",
+  ".turbo",
+  ".vite",
+  ".vite-temp",
+]);
+const MAX_PREFLIGHT_BYTES = 64 * 1024 * 1024;
+const MAX_PREFLIGHT_FILES = 20_000;
+
+interface PreflightFile {
+  readonly contents: Buffer;
+  readonly executable: boolean;
+  readonly filePath: string;
+}
 
 function seatbeltString(value: string) {
   return JSON.stringify(value);
@@ -30,17 +58,46 @@ function pathRules(kind: "literal" | "subpath", paths: readonly string[]) {
     .join(" ");
 }
 
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`))
+  );
+}
+
+function resolveTemporaryParent(
+  candidate: string | undefined,
+  repositoryRoot: string,
+): string {
+  const fallback = realpathSync("/private/tmp");
+  if (candidate === undefined || !path.isAbsolute(candidate)) return fallback;
+  try {
+    const resolved = realpathSync(candidate);
+    return isWithin(realpathSync(repositoryRoot), resolved)
+      ? fallback
+      : resolved;
+  } catch {
+    return fallback;
+  }
+}
+
 /** A macOS Seatbelt profile that cannot read user credentials or mutate Git. */
 export function buildPreflightSandboxProfile(
-  repositoryRoot: string,
+  checkoutRoot: string,
   temporaryHome: string,
   runtimes: readonly TrustedExecutable[],
+  readonlyPaths: readonly string[] = [],
+  protectedPaths: readonly string[] = [],
 ) {
-  const root = path.resolve(repositoryRoot);
+  const root = path.resolve(checkoutRoot);
   const isolatedHome = path.resolve(temporaryHome);
   const traversalDirectories = [
     ...ancestors(root),
     ...ancestors(isolatedHome),
+    ...readonlyPaths.flatMap(ancestors),
     ...runtimes.flatMap(({ readablePaths }) =>
       readablePaths.flatMap(ancestors),
     ),
@@ -56,7 +113,13 @@ export function buildPreflightSandboxProfile(
     "/private/etc/ssl",
     root,
     isolatedHome,
+    ...readonlyPaths,
     ...runtimes.flatMap(({ readablePaths }) => readablePaths),
+  ];
+  const deniedWrites = [
+    path.join(root, ".git"),
+    ...readonlyPaths,
+    ...protectedPaths,
   ];
   return [
     "(version 1)",
@@ -70,7 +133,7 @@ export function buildPreflightSandboxProfile(
     "(allow file-read-metadata)",
     `(allow file-read* ${pathRules("literal", traversalDirectories)} ${pathRules("subpath", readableTrees)})`,
     `(allow file-write* (subpath ${seatbeltString(root)}) (subpath ${seatbeltString(isolatedHome)}))`,
-    `(deny file-write* (subpath ${seatbeltString(path.join(root, ".git"))}) (subpath ${seatbeltString(path.join(root, "node_modules"))}))`,
+    `(deny file-write* ${pathRules("subpath", deniedWrites)})`,
     // Terraform and Miniflare use local plugin/test sockets. Only loopback and
     // Unix sockets under the isolated home escape the external-network deny.
     `(allow network-bind network-outbound (subpath ${seatbeltString(isolatedHome)}))`,
@@ -80,6 +143,262 @@ export function buildPreflightSandboxProfile(
     '(allow network-outbound (remote ip "localhost:*"))',
     "(deny network*)",
   ].join("\n");
+}
+
+function safeGitEnvironment(
+  source: NodeJS.ProcessEnv,
+  repositoryRoot: string,
+  temporaryHome: string,
+  runtimes: readonly TrustedExecutable[],
+) {
+  return {
+    ...buildPreflightEnvironment(
+      source,
+      repositoryRoot,
+      temporaryHome,
+      runtimes,
+    ),
+    GIT_AUTHOR_EMAIL: "preflight@localhost",
+    GIT_AUTHOR_NAME: "Preflight",
+    GIT_COMMITTER_EMAIL: "preflight@localhost",
+    GIT_COMMITTER_NAME: "Preflight",
+  };
+}
+
+function preflightPaths(
+  repositoryRoot: string,
+  git: TrustedExecutable,
+  environment: NodeJS.ProcessEnv,
+): string[] {
+  const output = execFileSync(
+    git.executable,
+    [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "credential.helper=",
+      "-C",
+      repositoryRoot,
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+    ],
+    { env: environment, maxBuffer: MAX_PREFLIGHT_BYTES },
+  );
+  const paths = output.toString("utf8").split("\0").filter(Boolean);
+  if (paths.length > MAX_PREFLIGHT_FILES) {
+    throw new Error(
+      `Preflight checkout contains ${paths.length} files; limit is ${MAX_PREFLIGHT_FILES}.`,
+    );
+  }
+  return paths;
+}
+
+function preflightDestination(checkoutRoot: string, filePath: string): string {
+  const parts = filePath.split("/");
+  if (
+    filePath.length === 0 ||
+    filePath.includes("\\") ||
+    path.posix.isAbsolute(filePath) ||
+    parts.some((part) => part.length === 0 || part === "." || part === "..")
+  ) {
+    throw new Error(`Unsafe preflight path: ${JSON.stringify(filePath)}`);
+  }
+  const root = path.resolve(checkoutRoot);
+  const destination = path.resolve(root, ...parts);
+  if (!destination.startsWith(`${root}${path.sep}`)) {
+    throw new Error(
+      `Preflight path escaped checkout: ${JSON.stringify(filePath)}`,
+    );
+  }
+  return destination;
+}
+
+function assertNoSymlinkAncestors(
+  repositoryRoot: string,
+  filePath: string,
+): boolean {
+  const parts = filePath.split("/");
+  let current = repositoryRoot;
+  for (const part of parts.slice(0, -1)) {
+    current = path.join(current, part);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(
+        `Preflight path has an unsafe ancestor: ${JSON.stringify(filePath)}`,
+      );
+    }
+  }
+  return true;
+}
+
+function readPreflightFile(
+  repositoryRoot: string,
+  filePath: string,
+): PreflightFile | null {
+  if (!assertNoSymlinkAncestors(repositoryRoot, filePath)) return null;
+  const source = path.join(repositoryRoot, ...filePath.split("/"));
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(source);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+
+  let contents: Buffer;
+  if (stat.isSymbolicLink()) {
+    contents = Buffer.from(readlinkSync(source));
+  } else if (stat.isFile()) {
+    contents = readFileSync(source);
+  } else if (stat.isDirectory()) {
+    contents = Buffer.from("submodule working tree\n");
+  } else {
+    throw new Error(`Unsupported preflight file: ${JSON.stringify(filePath)}`);
+  }
+  return {
+    contents,
+    executable: stat.isFile() && (stat.mode & 0o111) !== 0,
+    filePath,
+  };
+}
+
+/** Snapshot tracked and non-ignored working files without following symlinks. */
+function materializePreflightCheckout(
+  repositoryRoot: string,
+  checkoutRoot: string,
+  git: TrustedExecutable,
+  environment: NodeJS.ProcessEnv,
+): void {
+  const files: PreflightFile[] = [];
+  let totalBytes = 0;
+  for (const filePath of preflightPaths(repositoryRoot, git, environment)) {
+    preflightDestination(checkoutRoot, filePath);
+    const file = readPreflightFile(repositoryRoot, filePath);
+    if (file === null) continue;
+    totalBytes += file.contents.byteLength;
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > MAX_PREFLIGHT_BYTES) {
+      throw new Error(
+        `Preflight checkout exceeds the ${MAX_PREFLIGHT_BYTES}-byte materialization limit.`,
+      );
+    }
+    files.push(file);
+  }
+
+  mkdirSync(checkoutRoot, { recursive: true });
+  for (const file of files) {
+    const destination = preflightDestination(checkoutRoot, file.filePath);
+    const mode = file.executable ? 0o755 : 0o644;
+    mkdirSync(path.dirname(destination), { recursive: true });
+    writeFileSync(destination, file.contents, { mode });
+    chmodSync(destination, mode);
+  }
+}
+
+function initializeSnapshotRepository(
+  checkoutRoot: string,
+  git: TrustedExecutable,
+  environment: NodeJS.ProcessEnv,
+) {
+  const invoke = (arguments_: readonly string[]) =>
+    execFileSync(git.executable, arguments_, {
+      cwd: checkoutRoot,
+      env: environment,
+      stdio: "ignore",
+    });
+  invoke(["init", "--quiet"]);
+  invoke(["-c", "core.hooksPath=/dev/null", "add", "-f", "--all"]);
+  invoke([
+    "-c",
+    "core.hooksPath=/dev/null",
+    "commit",
+    "--quiet",
+    "--no-gpg-sign",
+    "--no-verify",
+    "-m",
+    "preflight snapshot",
+  ]);
+}
+
+function childDirectories(parent: string): string[] {
+  if (!existsSync(parent) || !lstatSync(parent).isDirectory()) return [];
+  return readdirSync(parent, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(parent, entry.name));
+}
+
+function pathExists(candidate: string): boolean {
+  try {
+    lstatSync(candidate);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function mountDependencyFacade(source: string, destination: string): string {
+  const resolved = realpathSync(source);
+  mkdirSync(destination, { recursive: true });
+  for (const entry of readdirSync(resolved, { withFileTypes: true })) {
+    const mountedEntry = path.join(destination, entry.name);
+    if (MUTABLE_DEPENDENCY_CACHE_NAMES.has(entry.name)) {
+      mkdirSync(mountedEntry, { recursive: true });
+    } else {
+      symlinkSync(path.join(resolved, entry.name), mountedEntry);
+    }
+  }
+  return resolved;
+}
+
+/** Link only known dependency caches; the sandbox grants them read-only access. */
+function mountPreflightDependencies(
+  repositoryRoot: string,
+  checkoutRoot: string,
+): string[] {
+  const nodeModules = [
+    path.join(repositoryRoot, "node_modules"),
+    ...["apps", "packages"].flatMap((directory) =>
+      childDirectories(path.join(repositoryRoot, directory)).map((child) =>
+        path.join(child, "node_modules"),
+      ),
+    ),
+  ];
+  const readonlyPaths: string[] = [];
+  for (const candidate of nodeModules) {
+    if (!existsSync(candidate) || !lstatSync(candidate).isDirectory()) continue;
+    const relative = path.relative(repositoryRoot, candidate);
+    const destination = path.join(checkoutRoot, relative);
+    if (pathExists(destination)) continue;
+    mkdirSync(path.dirname(destination), { recursive: true });
+    readonlyPaths.push(mountDependencyFacade(candidate, destination));
+  }
+  const terraformCaches = childDirectories(
+    path.join(repositoryRoot, "terraform", "stacks"),
+  ).map((child) => path.join(child, ".terraform"));
+  for (const candidate of terraformCaches) {
+    if (!existsSync(candidate) || !lstatSync(candidate).isDirectory()) continue;
+    const destination = path.join(
+      checkoutRoot,
+      path.relative(repositoryRoot, candidate),
+    );
+    if (pathExists(destination)) continue;
+    mkdirSync(path.dirname(destination), { recursive: true });
+    const resolved = realpathSync(candidate);
+    symlinkSync(resolved, destination, "dir");
+    readonlyPaths.push(resolved);
+  }
+  return [...new Set(readonlyPaths)];
 }
 
 export function buildPreflightEnvironment(
@@ -117,6 +436,25 @@ export function buildPreflightEnvironment(
   };
 }
 
+function resolvePreflightRuntimes(
+  repositoryRoot: string,
+  environment: NodeJS.ProcessEnv,
+): [TrustedExecutable, TrustedExecutable] {
+  const bun = resolveTrustedExecutable("bun", environment, repositoryRoot);
+  if (bun === null) {
+    throw new Error(
+      "No trusted bun executable was found outside the repository.",
+    );
+  }
+  const git = resolveTrustedExecutable("git", environment, repositoryRoot);
+  if (git === null) {
+    throw new Error(
+      "No trusted git executable was found outside the repository.",
+    );
+  }
+  return [bun, git];
+}
+
 /** Run a branch-controlled script without credentials or external network. */
 export function runPreflight(
   repositoryRoot: string,
@@ -132,28 +470,49 @@ export function runPreflight(
       "Credential-free preflight currently requires macOS Seatbelt; refusing to run unsandboxed.",
     );
   }
-  const bun = resolveTrustedExecutable("bun", environment, repositoryRoot);
-  if (bun === null) {
-    throw new Error(
-      "No trusted bun executable was found outside the repository.",
-    );
-  }
-  const git = resolveTrustedExecutable("git", environment, repositoryRoot);
-  if (git === null) {
-    throw new Error(
-      "No trusted git executable was found outside the repository.",
-    );
-  }
+  const [bun, git] = resolvePreflightRuntimes(repositoryRoot, environment);
   const runtimes = [bun, git];
 
-  const temporaryDirectory = mkdtempSync("/private/tmp/agent-tool-preflight-");
-  const temporaryHome = realpathSync(temporaryDirectory);
+  const temporaryParent = resolveTemporaryParent(
+    Reflect.get(environment, "TMPDIR"),
+    repositoryRoot,
+  );
+  const temporaryDirectory = mkdtempSync(
+    path.join(temporaryParent, "agent-tool-preflight-"),
+  );
+  const temporaryRoot = realpathSync(temporaryDirectory);
+  const temporaryHome = path.join(temporaryRoot, "home");
+  const checkoutRoot = path.join(temporaryRoot, "checkout");
+  mkdirSync(temporaryHome, { recursive: true });
   try {
+    const gitEnvironment = safeGitEnvironment(
+      environment,
+      checkoutRoot,
+      temporaryHome,
+      runtimes,
+    );
+    materializePreflightCheckout(
+      repositoryRoot,
+      checkoutRoot,
+      git,
+      gitEnvironment,
+    );
+    initializeSnapshotRepository(checkoutRoot, git, gitEnvironment);
+    const readonlyPaths = mountPreflightDependencies(
+      repositoryRoot,
+      checkoutRoot,
+    );
     const result = spawnSync(
       "/usr/bin/sandbox-exec",
       [
         "-p",
-        buildPreflightSandboxProfile(repositoryRoot, temporaryHome, runtimes),
+        buildPreflightSandboxProfile(
+          checkoutRoot,
+          temporaryHome,
+          runtimes,
+          readonlyPaths,
+          [repositoryRoot],
+        ),
         bun.executable,
         "--no-env-file",
         "run",
@@ -161,10 +520,10 @@ export function runPreflight(
         ...scriptArguments,
       ],
       {
-        cwd: repositoryRoot,
+        cwd: checkoutRoot,
         env: buildPreflightEnvironment(
           environment,
-          repositoryRoot,
+          checkoutRoot,
           temporaryHome,
           runtimes,
         ),
