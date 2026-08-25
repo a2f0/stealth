@@ -97,9 +97,9 @@ syntax and the 50-char header limit are enforced without executing
 feature-checkout configuration. The two review SHAs must be supplied together.
 With both present, the tool fetches and ancestry-checks the reviewed base,
 refreshes the PR, and inspects GitHub's effective branch policy. An unprotected
-branch has no policy to bypass, so the tool creates a one-parent squash commit
-and atomically updates the base and head refs with exact leases on both reviewed
-SHAs. A protected
+branch has no policy to bypass, so—after confirming the repository permits
+squash merges—the tool creates a one-parent squash commit and atomically updates
+the base and head refs with exact leases on both reviewed SHAs. A protected
 branch merges immediately through GitHub's policy-enforcing API only when strict
 up-to-date checks close the base race and every requirement is already clean.
 The guarded path never enables delayed auto-merge, because a later writer push

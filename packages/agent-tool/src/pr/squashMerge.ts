@@ -163,6 +163,14 @@ function fieldOf(value: unknown, key: string): unknown {
   return recordOf(value)?.[key];
 }
 
+export function assertRepositoryAllowsSquash(repository: unknown): void {
+  if (fieldOf(repository, "allow_squash_merge") !== true) {
+    throw new Error(
+      "The repository does not allow squash merging; refusing to bypass its merge-method policy with a direct ref update.",
+    );
+  }
+}
+
 /** Select a base-race-safe strategy from GitHub's effective branch policy. */
 export function selectGuardedMergeStrategy(
   classicProtection: unknown,
@@ -435,6 +443,9 @@ function guardedReviewedMerge(
     freshPr.baseRefName,
   );
   if (strategy === "github_api") assertImmediatelyMergeable(freshPr);
+  else {
+    assertRepositoryAllowsSquash(githubApiJson(`repos/${freshPr.repo}`));
+  }
   const mergeExitCode =
     strategy === "atomic_refs"
       ? atomicReviewedMerge(

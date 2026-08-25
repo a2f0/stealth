@@ -166,6 +166,13 @@ describe("audits", () => {
 
     expect(uploads.filter(({ status }) => status === 201)).toHaveLength(2);
     expect(uploads.filter(({ status }) => status === 429)).toHaveLength(1);
+    expect(uploads[2]?.status).toBe(201);
+    expect(
+      uploads.slice(0, 2).filter(({ status }) => status === 201),
+    ).toHaveLength(1);
+    expect(
+      uploads.slice(0, 2).filter(({ status }) => status === 429),
+    ).toHaveLength(1);
     expect(processing).toBe(2);
   });
 
@@ -556,17 +563,17 @@ describe("audits", () => {
     );
     expect(
       concurrentUploads.filter(({ status }) => status === 201),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(
       concurrentUploads.filter(({ status }) => status === 429),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
     expect(
       concurrentUploads
         .filter(({ status }) => status === 429)
         .every((response) => response.headers.get("retry-after") === "1"),
     ).toBe(true);
     const retriedUploads: Response[] = [];
-    for (let index = 0; index < 8; index += 1) {
+    for (let index = 0; index < 9; index += 1) {
       retriedUploads.push(
         await fixture.app.request(
           `/issues/${issue.body.issueId}/images?filename=retry-${index}.png`,
@@ -576,7 +583,7 @@ describe("audits", () => {
       );
     }
     expect(retriedUploads.filter(({ status }) => status === 201)).toHaveLength(
-      7,
+      8,
     );
     expect(retriedUploads.filter(({ status }) => status === 409)).toHaveLength(
       1,

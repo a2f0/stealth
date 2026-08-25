@@ -20,7 +20,7 @@ const maxImagesPerIssue = 10;
 // immutable Blob consumed by Images, and a 10 MB normalized R2 body. Keep two
 // such pipelines well below Workers' shared 128 MB isolate memory limit.
 const maxConcurrentImageUploads = 2;
-const maxConcurrentImageUploadsPerOrganization = 2;
+const maxConcurrentImageUploadsPerOrganization = 1;
 const maxImageReadMilliseconds = 60_000;
 const pendingUploadGraceMilliseconds = 15 * 60 * 1000;
 const pendingCleanupBatchSize = 100;

@@ -6,6 +6,7 @@ import {
   assertGuardPair,
   assertImmediatelyMergeable,
   assertMergeRequirements,
+  assertRepositoryAllowsSquash,
   assertReviewedAncestry,
   buildAtomicPushArgs,
   buildReviewedCommitArgs,
@@ -173,6 +174,18 @@ describe("reviewed merge guards", () => {
     expect(() =>
       selectGuardedMergeStrategy({ required_pull_request_reviews: {} }, []),
     ).toThrow("does not require branches to be up to date");
+  });
+
+  test("requires repository policy to allow handcrafted squash merges", () => {
+    expect(() =>
+      assertRepositoryAllowsSquash({ allow_squash_merge: true }),
+    ).not.toThrow();
+    expect(() =>
+      assertRepositoryAllowsSquash({ allow_squash_merge: false }),
+    ).toThrow("does not allow squash merging");
+    expect(() => assertRepositoryAllowsSquash({})).toThrow(
+      "does not allow squash merging",
+    );
   });
 
   test("builds a one-parent squash commit", () => {
