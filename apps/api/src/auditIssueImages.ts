@@ -9,6 +9,8 @@ const auditIssueImages = new Hono<{
 }>();
 
 const maxImageBytes = 10 * 1024 * 1024;
+const maxImageDimension = 12_000;
+const maxImagePixels = 40_000_000;
 const maxImagesPerIssue = 10;
 
 export interface AuditIssueImageRow {
@@ -44,13 +46,11 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     return context.json({ error: "Images must be 10 MB or smaller." }, 413);
   }
   const bytes = await file.arrayBuffer();
-  const imageType = detectImageType(new Uint8Array(bytes));
-  if (!imageType) {
-    return context.json(
-      { error: "Images must be JPEG, PNG, GIF, or WebP files." },
-      400,
-    );
+  const validation = await validateImage(context.env.IMAGES, bytes);
+  if ("error" in validation) {
+    return context.json({ error: validation.error }, 400);
   }
+  const { imageType } = validation;
 
   const id = crypto.randomUUID();
   const objectId = crypto.randomUUID();
@@ -243,30 +243,55 @@ export function toAuditIssueImage(row: AuditIssueImageRow) {
   };
 }
 
-function detectImageType(bytes: Uint8Array) {
-  if (matches(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
-    return { contentType: "image/png", extension: "png" };
+function supportedImageType(format: string) {
+  switch (format.toLowerCase()) {
+    case "image/png":
+    case "png":
+      return { contentType: "image/png", extension: "png" };
+    case "image/jpeg":
+    case "jpeg":
+    case "jpg":
+      return { contentType: "image/jpeg", extension: "jpg" };
+    case "image/gif":
+    case "gif":
+      return { contentType: "image/gif", extension: "gif" };
+    case "image/webp":
+    case "webp":
+      return { contentType: "image/webp", extension: "webp" };
+    default:
+      return null;
   }
-  if (matches(bytes, [0xff, 0xd8, 0xff])) {
-    return { contentType: "image/jpeg", extension: "jpg" };
-  }
-  if (
-    matches(bytes, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) ||
-    matches(bytes, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
-  ) {
-    return { contentType: "image/gif", extension: "gif" };
-  }
-  if (
-    matches(bytes, [0x52, 0x49, 0x46, 0x46]) &&
-    matches(bytes, [0x57, 0x45, 0x42, 0x50], 8)
-  ) {
-    return { contentType: "image/webp", extension: "webp" };
-  }
-  return null;
 }
 
-function matches(bytes: Uint8Array, signature: number[], offset = 0) {
-  return signature.every((byte, index) => bytes[offset + index] === byte);
+async function validateImage(images: ImagesBinding, bytes: ArrayBuffer) {
+  let imageInfo: ImageInfoResponse;
+  try {
+    imageInfo = await images.info(new Blob([bytes]).stream());
+  } catch {
+    return { error: "The uploaded file is not a valid image." } as const;
+  }
+  const imageType = supportedImageType(imageInfo.format);
+  if (!imageType || !("width" in imageInfo)) {
+    return {
+      error: "Images must be JPEG, PNG, GIF, or WebP files.",
+    } as const;
+  }
+  const { height, width } = imageInfo;
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    width <= 0 ||
+    height <= 0 ||
+    width > maxImageDimension ||
+    height > maxImageDimension ||
+    width * height > maxImagePixels
+  ) {
+    return {
+      error:
+        "Images must be no larger than 12,000 pixels per side and 40 megapixels.",
+    } as const;
+  }
+  return { imageType } as const;
 }
 
 export { auditIssueImages };

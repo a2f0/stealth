@@ -532,6 +532,7 @@ function bindingsFor(database: Database): Bindings {
     CORS_ORIGIN: "https://app.test",
     DB: toD1(database),
     EMAIL: {} as SendEmail,
+    IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: {} as R2Bucket,
   };

@@ -61,16 +61,70 @@ function stringField(source: string, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function firstPrNumber(source: string | null): string {
-  if (source === null) {
-    return "";
-  }
+export function selectOpenPrNumber(
+  source: string,
+  pushRepository: string,
+): string {
   const parsed = safeParse(source);
   if (!Array.isArray(parsed) || parsed.length === 0) {
     return "";
   }
-  const numberField = fieldOf(parsed[0], "number");
-  return typeof numberField === "number" ? String(numberField) : "";
+  if (pushRepository.length === 0) {
+    throw new Error(
+      "Could not determine the branch's GitHub push repository, so a same-named fork PR cannot be selected safely.",
+    );
+  }
+  const matching = parsed.filter((candidate) => {
+    const headRepository = fieldOf(candidate, "headRepository");
+    return fieldOf(headRepository, "nameWithOwner") === pushRepository;
+  });
+  if (matching.length === 0) {
+    return "";
+  }
+  if (matching.length !== 1) {
+    throw new Error(
+      `Found ${matching.length} open PRs from '${pushRepository}' for the same branch; select the PR explicitly.`,
+    );
+  }
+  const numberField = fieldOf(matching[0], "number");
+  if (typeof numberField !== "number") {
+    throw new Error("The matching PR did not include a valid number.");
+  }
+  return String(numberField);
+}
+
+function configuredPushRemote(branch: string): string {
+  for (const args of [
+    ["config", "--get", `branch.${branch}.pushRemote`],
+    ["config", "--get", "remote.pushDefault"],
+    ["config", "--get", `branch.${branch}.remote`],
+  ]) {
+    const remote = tryRun("git", args);
+    if (remote !== null && remote.length > 0) return remote;
+  }
+  const remotes = run("git", ["remote"])
+    .split("\n")
+    .filter((remote) => remote.length > 0);
+  if (remotes.includes("origin")) return "origin";
+  return remotes.length === 1 ? (remotes[0] ?? "") : "";
+}
+
+/** GitHub `owner/name` for the remote that an ordinary push would target. */
+export function resolvePushRepository(branch: string): string {
+  const remote = configuredPushRemote(branch);
+  if (remote.length === 0 || remote === ".") return "";
+  const pushUrl = tryRun("git", ["remote", "get-url", "--push", remote]);
+  if (pushUrl === null || pushUrl.length === 0) return "";
+  const repositoryRaw = tryRun("gh", [
+    "repo",
+    "view",
+    pushUrl,
+    "--json",
+    "nameWithOwner",
+  ]);
+  return repositoryRaw === null
+    ? ""
+    : stringField(repositoryRaw, "nameWithOwner");
 }
 
 /**
@@ -251,7 +305,7 @@ export function findOpenPrNumber(branch: string, repo: string): string {
     "--state",
     "open",
     "--json",
-    "number",
+    "number,headRepository",
     "-R",
     repo,
   ]);
@@ -260,7 +314,7 @@ export function findOpenPrNumber(branch: string, repo: string): string {
       `Could not list open PRs for branch '${branch}'. Ensure gh is authenticated and reachable.`,
     );
   }
-  return firstPrNumber(raw);
+  return selectOpenPrNumber(raw, resolvePushRepository(branch));
 }
 
 /** Read a known-open PR's title and base identity from GitHub. */

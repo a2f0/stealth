@@ -31,6 +31,9 @@
       "bucket_name": "stealth-objects"
     }
   ],
+  "images": {
+    "binding": "IMAGES"
+  },
   "send_email": [
     {
       "name": "EMAIL",

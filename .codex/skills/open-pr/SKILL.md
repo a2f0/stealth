@@ -182,8 +182,10 @@ AGENT_TOOL="$ROOT_DIR/packages/agent-tool/src/index.ts"
      or a Claude co-author trailer — and exits non-zero **without creating the
      PR**. This mirrors the pre-push hook that strips co-author trailers from
      commits: keep the attribution footer out of PR descriptions entirely.
-   - Runs `gh pr create --title <title> --body <stdin> --head <branch>` (base
-     defaults to the repository's default branch) and prints the PR URL.
+   - Resolves the branch's push repository and creates the PR with an explicit
+     owner-qualified head (`owner:branch`). The base defaults to the repository's
+     default branch; the qualified head prevents a same-named fork from being
+     selected. Prints the PR URL.
 
 5. **On a validation failure**: for a rejected title, relay commitlint's output,
    propose a corrected title (valid type, ≤50 chars), and re-run once confirmed.

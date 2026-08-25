@@ -90,9 +90,11 @@ loop, subject-only squash, and `MERGED`-state verification.
    case, nothing is pushed and no PR exists — so the review reads local commits
    and the branch is pushed exactly once, when the PR is opened.
 
-   First look up whether an open PR already exists for the branch
-   (`gh pr list --head "$BRANCH" --state open`); one may remain from a prior gated
-   run. Then take the matching case:
+   First look up whether an open PR already exists for the branch, using the
+   repository-matched lookup from `cross-agent-review`: match both the branch
+   name and `headRepository.nameWithOwner` to the branch's resolved push remote,
+   and require exactly one match. Never take the first same-named fork PR. One
+   matching PR may remain from a prior gated run. Then take the matching case:
 
    - **A PR is already open for the branch** (a prior gated run resuming after
      fixes): do not prepare a new branch or open another PR. Confirm it targets

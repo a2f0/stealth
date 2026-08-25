@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
   findOpenPrNumber,
+  resolvePushRepository,
   resolveRepoContext,
   run,
   spawnExitCode,
@@ -45,6 +46,14 @@ export function openPr(rootDir: string, titleArg: string | undefined): number {
   const body = readBody();
   assertNoClaudeBranding(body);
 
+  const pushRepository = resolvePushRepository(branch);
+  const headOwner = pushRepository.split("/")[0] ?? "";
+  if (headOwner.length === 0) {
+    throw new Error(
+      `Could not determine the GitHub push repository for '${branch}'. Push the branch with an upstream first.`,
+    );
+  }
+
   // Pin the base to the repo default branch; without --base, gh honors a
   // branch.<name>.gh-merge-base git config that could target another branch.
   const baseArgs = defaultBranch.length > 0 ? ["--base", defaultBranch] : [];
@@ -58,7 +67,7 @@ export function openPr(rootDir: string, titleArg: string | undefined): number {
       "--body",
       body,
       "--head",
-      branch,
+      `${headOwner}:${branch}`,
       ...baseArgs,
       "-R",
       repo,

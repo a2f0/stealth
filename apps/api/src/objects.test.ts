@@ -224,6 +224,7 @@ function bindingsFor(
     CORS_ORIGIN: "https://app.test",
     DB: toD1(database),
     EMAIL: {} as SendEmail,
+    IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: storageFor(stored),
   };

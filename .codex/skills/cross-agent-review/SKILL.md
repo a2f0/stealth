@@ -49,7 +49,7 @@ commit, repair rounds produce new commits to read.
 
 ## Prerequisites
 
-- `git` and `gh` (authenticated) on `PATH`.
+- `git`, `gh` (authenticated), and `awk` on `PATH`.
 - The `@tearleads/agent-tool` package: `packages/agent-tool/src/index.ts`.
 - For Claude Code reviews: `claude` CLI authenticated.
 - For Codex reviews: `codex` CLI configured (`OPENAI_API_KEY`).
@@ -71,7 +71,20 @@ ROOT_DIR=$(git rev-parse --show-toplevel)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
-PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' -R "$REPO") || { echo "Error: could not query open PRs for $BRANCH (is gh authenticated?)" >&2; exit 1; }
+FEATURE_REMOTE=$(git config --get "branch.$BRANCH.pushRemote" || git config --get remote.pushDefault || git config --get "branch.$BRANCH.remote" || true)
+if [ -z "$FEATURE_REMOTE" ]; then
+  git remote get-url origin >/dev/null 2>&1 && FEATURE_REMOTE=origin
+  [ -n "$FEATURE_REMOTE" ] || [ "$(git remote | awk 'NF { count++; remote=$0 } END { print count + 0 }')" -ne 1 ] || FEATURE_REMOTE=$(git remote)
+fi
+FEATURE_REPO=""
+if [ -n "$FEATURE_REMOTE" ] && [ "$FEATURE_REMOTE" != "." ]; then
+  FEATURE_REMOTE_URL=$(git remote get-url --push "$FEATURE_REMOTE") || { echo "Error: could not resolve push URL for remote $FEATURE_REMOTE" >&2; exit 1; }
+  FEATURE_REPO=$(gh repo view "$FEATURE_REMOTE_URL" --json nameWithOwner -q .nameWithOwner) || { echo "Error: could not resolve GitHub repository for remote $FEATURE_REMOTE" >&2; exit 1; }
+fi
+PR_LINES=$(gh pr list --head "$BRANCH" --state open --json number,headRepository --template '{{range .}}{{.number}} {{.headRepository.nameWithOwner}}{{"\n"}}{{end}}' -R "$REPO") || { echo "Error: could not query open PRs for $BRANCH (is gh authenticated?)" >&2; exit 1; }
+[ -z "$PR_LINES" ] || [ -n "$FEATURE_REPO" ] || { echo "Error: same-named fork PRs exist, but this branch has no GitHub push repository" >&2; exit 1; }
+PR_NUMBER=$(printf '%s\n' "$PR_LINES" | awk -v repository="$FEATURE_REPO" '$2 == repository { print $1 }')
+[ "$(printf '%s\n' "$PR_NUMBER" | awk 'NF { count++ } END { print count + 0 }')" -le 1 ] || { echo "Error: multiple PRs match $FEATURE_REPO:$BRANCH" >&2; exit 1; }
 AGENT_TOOL="$ROOT_DIR/packages/agent-tool/src/index.ts"
 [ -f "$AGENT_TOOL" ] || { echo "Error: agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
 ```
@@ -82,7 +95,8 @@ an error**: it means the branch has no PR yet, and the review runs against
 `$DEFAULT_BRANCH` with repairs kept local. A **failed** lookup is different — the
 command above stops rather than reading a transient `gh` error as "no PR", which
 would silently reroute the review to the wrong base and skip the pushed-head
-checks. `--jq '… // ""'` yields an empty string only on a successful empty result.
+checks. Same-named branches from other forks are ignored; a PR is selected only
+when its head repository matches this branch's push repository.
 
 Require a clean worktree before fetching or snapshotting anything:
 
@@ -130,7 +144,11 @@ Require a clean worktree before fetching or snapshotting anything:
    masking the very mismatch that check exists to catch:
 
    ```bash
-   [ -z "$PR_NUMBER" ] || test "$(git rev-parse HEAD)" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)" || { echo "Error: local HEAD is not the pushed head of PR #$PR_NUMBER; reconcile before reviewing" >&2; exit 1; }
+   if [ -n "$PR_NUMBER" ]; then
+     PR_HEAD_REPO=$(gh pr view "$PR_NUMBER" --json headRepository -q .headRepository.nameWithOwner -R "$REPO") || { echo "Error: could not resolve the PR head repository" >&2; exit 1; }
+     [ -n "$FEATURE_REMOTE" ] && [ "$FEATURE_REMOTE" != "." ] && [ "$FEATURE_REPO" = "$PR_HEAD_REPO" ] || { echo "Error: PR #$PR_NUMBER does not belong to the branch push remote" >&2; exit 1; }
+     test "$(git rev-parse HEAD)" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")" || { echo "Error: local HEAD is not the pushed head of PR #$PR_NUMBER; reconcile before reviewing" >&2; exit 1; }
+   fi
    ```
 
    Then **merge** the exact fetched base in — merge `$FETCHED_BASE`, which was
@@ -162,7 +180,7 @@ Require a clean worktree before fetching or snapshotting anything:
 
    ```bash
    if [ -n "$PR_NUMBER" ] && [ "$(git rev-parse HEAD)" != "$PRE_SYNC_HEAD" ]; then
-     git push origin "$BRANCH"
+     git push "$FEATURE_REMOTE" "HEAD:$BRANCH"
    fi
    ```
 

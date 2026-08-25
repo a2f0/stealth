@@ -260,14 +260,37 @@ describe("audits", () => {
     expect(invalidImage.status).toBe(400);
     expect(fixture.stored.size).toBe(0);
 
-    const imageForm = new FormData();
-    imageForm.set(
+    const truncatedImageForm = new FormData();
+    truncatedImageForm.set(
       "file",
       new File(
         [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
-        "electrical-panel.png",
+        "truncated.png",
         { type: "image/png" },
       ),
+    );
+    const truncatedImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images`,
+      { body: truncatedImageForm, method: "POST" },
+      fixture.bindings,
+    );
+    expect(truncatedImage.status).toBe(400);
+    expect(fixture.stored.size).toBe(0);
+
+    fixture.bindings.IMAGES = imagesFor({ width: 12_001 });
+    const oversizedDimensions = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images`,
+      { body: pngForm("too-wide.png"), method: "POST" },
+      fixture.bindings,
+    );
+    expect(oversizedDimensions.status).toBe(400);
+    expect(fixture.stored.size).toBe(0);
+    fixture.bindings.IMAGES = imagesFor();
+
+    const imageForm = new FormData();
+    imageForm.set(
+      "file",
+      new File([pngBytes()], "electrical-panel.png", { type: "image/png" }),
     );
     const uploaded = await fixture.app.request(
       `/issues/${issue.body.issueId}/images`,
@@ -839,6 +862,7 @@ function bindingsFor(
     CORS_ORIGIN: "https://app.test",
     DB: toD1(database),
     EMAIL: {} as SendEmail,
+    IMAGES: imagesFor(),
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: storageFor(stored),
   };
@@ -914,15 +938,38 @@ function toD1(database: Database) {
 
 function pngForm(filename: string) {
   const form = new FormData();
-  form.set(
-    "file",
-    new File(
-      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
-      filename,
-      { type: "image/png" },
-    ),
-  );
+  form.set("file", new File([pngBytes()], filename, { type: "image/png" }));
   return form;
+}
+
+function pngBytes() {
+  return Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    ),
+    (character) => character.charCodeAt(0),
+  );
+}
+
+function imagesFor(dimensions: { height?: number; width?: number } = {}) {
+  return {
+    info: async (stream: ReadableStream<Uint8Array>) => {
+      const actual = new Uint8Array(await new Response(stream).arrayBuffer());
+      const expected = pngBytes();
+      if (
+        actual.length !== expected.length ||
+        !actual.every((byte, index) => byte === expected[index])
+      ) {
+        throw new Error("Invalid test image");
+      }
+      return {
+        fileSize: actual.length,
+        format: "image/png",
+        height: dimensions.height ?? 1,
+        width: dimensions.width ?? 1,
+      };
+    },
+  } as unknown as ImagesBinding;
 }
 
 async function applyMigration(database: Database, filename: string) {

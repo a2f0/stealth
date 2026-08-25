@@ -105,6 +105,7 @@ function createBindings(database: D1Database, storage: R2Bucket): Bindings {
     CORS_ORIGIN: "https://app.tearleads.com",
     DB: database,
     EMAIL: {} as SendEmail,
+    IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: inboundEmailDomain,
     STORAGE: storage,
   };

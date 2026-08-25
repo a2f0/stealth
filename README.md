@@ -97,6 +97,8 @@ raise issues with priorities and optional organization-member assignees. Audit
 issues can include a description, be reassigned, and have up to ten JPEG, PNG,
 GIF, or WebP images attached. Image metadata is organization-scoped in D1 and
 the private image bytes are stored under organization and issue prefixes in R2.
+The Cloudflare Images binding validates image structure, type, and dimensions
+before an upload is written to storage.
 Audit runs snapshot their template so later template edits do not rewrite
 history.
 Customizing a global template creates a new organization-scoped form instead

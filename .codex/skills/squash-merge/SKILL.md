@@ -67,17 +67,22 @@ DEFAULT_BRANCH=${REPO_INFO##* }
 [ -n "$DEFAULT_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
 [ "$BRANCH" != "$DEFAULT_BRANCH" ] || { echo "Error: on default branch $DEFAULT_BRANCH" >&2; exit 1; }
 
-PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' -R "$REPO")
-[ -n "$PR_NUMBER" ] || { echo "Error: no open PR for branch $BRANCH" >&2; exit 1; }
+# Keep the feature branch's push remote separate from the base branch's pull
+# remote. On a fork these are different repositories.
+FEATURE_REMOTE=$(git config --get "branch.$BRANCH.pushRemote" || git config --get remote.pushDefault || git config --get "branch.$BRANCH.remote" || true)
+[ -n "$FEATURE_REMOTE" ] && [ "$FEATURE_REMOTE" != "." ] || { echo "Error: feature branch has no deletion-safe remote" >&2; exit 1; }
+FEATURE_REMOTE_URL=$(git remote get-url --push "$FEATURE_REMOTE") || { echo "Error: could not resolve push URL for $FEATURE_REMOTE" >&2; exit 1; }
+FEATURE_REPO=$(gh repo view "$FEATURE_REMOTE_URL" --json nameWithOwner -q .nameWithOwner) || { echo "Error: could not resolve GitHub repository for $FEATURE_REMOTE" >&2; exit 1; }
+PR_LINES=$(gh pr list --head "$BRANCH" --state open --json number,headRepository --template '{{range .}}{{.number}} {{.headRepository.nameWithOwner}}{{"\n"}}{{end}}' -R "$REPO") || { echo "Error: could not list PRs for $BRANCH" >&2; exit 1; }
+PR_NUMBER=$(printf '%s\n' "$PR_LINES" | awk -v repository="$FEATURE_REPO" '$2 == repository { print $1 }')
+[ "$(printf '%s\n' "$PR_NUMBER" | awk 'NF { count++ } END { print count + 0 }')" -eq 1 ] || { echo "Error: expected exactly one open PR from $FEATURE_REPO for branch $BRANCH" >&2; exit 1; }
+PR_HEAD_REPO=$(gh pr view "$PR_NUMBER" --json headRepository -q .headRepository.nameWithOwner -R "$REPO")
+[ "$PR_HEAD_REPO" = "$FEATURE_REPO" ] || { echo "Error: PR head repository does not match $FEATURE_REMOTE" >&2; exit 1; }
 
 # The branch to return to is the PR's base — NOT necessarily the default branch.
 BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName -R "$REPO")
 [ -n "$BASE_BRANCH" ] || { echo "Error: could not resolve base branch for PR #$PR_NUMBER" >&2; exit 1; }
 
-# Keep the feature branch's push remote separate from the base branch's pull
-# remote. On a fork these are different repositories.
-FEATURE_REMOTE=$(git config --get "branch.$BRANCH.pushRemote" || git config --get remote.pushDefault || git config --get "branch.$BRANCH.remote" || true)
-[ -n "$FEATURE_REMOTE" ] && [ "$FEATURE_REMOTE" != "." ] || { echo "Error: feature branch has no deletion-safe remote" >&2; exit 1; }
 PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")
 [ -n "$PR_HEAD_SHA" ] || { echo "Error: could not resolve PR head SHA" >&2; exit 1; }
 ```

@@ -4,6 +4,7 @@ import {
   assertCleanReviewWorktree,
   assertFetchedCommit,
   assertSpawnSucceeded,
+  selectOpenPrNumber,
   spawnExitCode,
 } from "./prContext";
 
@@ -12,6 +13,39 @@ describe("assertCleanReviewWorktree", () => {
     expect(() => assertCleanReviewWorktree("")).not.toThrow();
     expect(() => assertCleanReviewWorktree(" M src/a.ts\n?? src/b.ts")).toThrow(
       "Review worktree is not clean",
+    );
+  });
+});
+
+describe("selectOpenPrNumber", () => {
+  const prs = JSON.stringify([
+    {
+      headRepository: { nameWithOwner: "fork-one/project" },
+      number: 12,
+    },
+    {
+      headRepository: { nameWithOwner: "fork-two/project" },
+      number: 34,
+    },
+  ]);
+
+  test("matches a PR to the branch push repository", () => {
+    expect(selectOpenPrNumber(prs, "fork-two/project")).toBe("34");
+    expect(selectOpenPrNumber("[]", "fork-two/project")).toBe("");
+    expect(selectOpenPrNumber(prs, "another/project")).toBe("");
+  });
+
+  test("rejects ambiguous or unresolvable fork PRs", () => {
+    expect(() => selectOpenPrNumber(prs, "")).toThrow("same-named fork PR");
+    const duplicates = JSON.stringify([
+      ...JSON.parse(prs),
+      {
+        headRepository: { nameWithOwner: "fork-two/project" },
+        number: 56,
+      },
+    ]);
+    expect(() => selectOpenPrNumber(duplicates, "fork-two/project")).toThrow(
+      "Found 2 open PRs",
     );
   });
 });
