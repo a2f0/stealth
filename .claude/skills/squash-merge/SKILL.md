@@ -209,7 +209,9 @@ as-is.
      effective branch policy. With no branch policy, it first confirms the
      repository permits squash merges, then atomically pushes a one-parent
      squash commit to the base and head refs with exact leases on both reviewed
-     SHAs. With branch policy, it uses `gh pr merge --match-head-commit` only when
+     SHAs, then compare-and-swaps the checked-out local feature branch to that
+     same squash commit so `--keep-branch` retains synchronized refs. With
+     branch policy, it uses `gh pr merge --match-head-commit` only when
      strict up-to-date checks guard base movement and the PR is immediately
      clean. It never enables delayed auto-merge. Pending requirements, an active
      merge queue, and policy without strict checks all stop with setup guidance.
@@ -272,7 +274,8 @@ as-is.
      [ "$REMOTE_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$REMOTE_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH moved to $REMOTE_BRANCH_SHA after merge; refusing remote delete" >&2; exit 1; }
      git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --force-with-lease="refs/heads/$MERGED_BRANCH:$REMOTE_BRANCH_SHA" "$FEATURE_REPO_URL" ":refs/heads/$MERGED_BRANCH" || { echo "Error: could not lease-delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }
    fi
-   [ "$(git rev-parse "$MERGED_BRANCH")" = "$PR_HEAD_SHA" ] || { echo "Error: local $MERGED_BRANCH moved after merge; refusing local delete" >&2; exit 1; }
+   LOCAL_BRANCH_SHA=$(git rev-parse "$MERGED_BRANCH")
+   [ "$LOCAL_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$LOCAL_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: local $MERGED_BRANCH moved after merge; refusing local delete" >&2; exit 1; }
    git branch -D "$MERGED_BRANCH" || { echo "Error: could not delete local $MERGED_BRANCH" >&2; exit 1; }
    ```
 

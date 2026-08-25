@@ -111,6 +111,11 @@ describe("organization uploads", () => {
     );
     expect(deleted.status).toBe(204);
     expect(fixture.stored.has(uploadBody.object.objectKey)).toBe(false);
+    expect(
+      fixture.database
+        .query("SELECT id FROM deleted_object_cleanup WHERE id = ?")
+        .get(uploadBody.object.id),
+    ).toBeNull();
   });
 });
 
@@ -136,6 +141,7 @@ async function createFixture() {
     );
   await applyMigration(database, "0006_scope_objects_to_organizations.sql");
   await applyMigration(database, "0025_classify_objects.sql");
+  await applyMigration(database, "0030_queue_deleted_objects.sql");
   database
     .query(
       `INSERT INTO objects

@@ -97,6 +97,9 @@ while IFS=$'\t' read -r organization_id deleted_at; do
     echo "ERROR: Organization $organization_id was not deleted from D1." >&2
     exit 1
   fi
+  cleanup_sql="DELETE FROM deleted_object_cleanup WHERE organization_id = '$escaped_id';"
+  bunx wrangler d1 execute DB "${wrangler_storage_args[@]}" --json \
+    --command "$cleanup_sql" >/dev/null
   purged_count=$((purged_count + 1))
   echo "Permanently deleted organization $organization_id."
 done <<<"$eligible_rows"

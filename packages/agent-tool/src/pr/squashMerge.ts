@@ -285,6 +285,22 @@ export function buildAtomicPushArgs(
   ];
 }
 
+/** Compare-and-swap the retained local branch to the server's squash commit. */
+export function buildLocalBranchUpdateArgs(
+  branch: string,
+  mergeCommitSha: string,
+  expectedHeadSha: string,
+): string[] {
+  return [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "update-ref",
+    `refs/heads/${branch}`,
+    mergeCommitSha,
+    expectedHeadSha,
+  ];
+}
+
 function createReviewedMergeCommit(
   finalSubject: string,
   expectedHeadSha: string,
@@ -335,7 +351,17 @@ function atomicReviewedMerge(
       stdio: "inherit",
     },
   );
-  return spawnExitCode("atomic reviewed merge push", result);
+  const pushExitCode = spawnExitCode("atomic reviewed merge push", result);
+  if (pushExitCode !== 0) return pushExitCode;
+
+  return spawnExitCode(
+    "synchronize local feature branch",
+    spawnSync(
+      toolExecutable("git"),
+      buildLocalBranchUpdateArgs(pr.branch, mergeCommitSha, expectedHeadSha),
+      { env: toolEnvironment(), stdio: "inherit" },
+    ),
+  );
 }
 
 export function mergeStateExitCode(state: string): number | null {

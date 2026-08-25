@@ -1065,6 +1065,13 @@ describe("audits", () => {
         .query(`SELECT id FROM objects WHERE id = 'cascade-object'`)
         .get(),
     ).toBeNull();
+    expect(
+      fixture.database
+        .query(
+          `SELECT id FROM deleted_object_cleanup WHERE id = 'cascade-object'`,
+        )
+        .get(),
+    ).toBeNull();
 
     fixture.database
       .query(
@@ -1100,6 +1107,11 @@ describe("audits", () => {
     expect(
       fixture.database
         .query(`SELECT COUNT(*) AS count FROM audit_issue_images`)
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      fixture.database
+        .query(`SELECT COUNT(*) AS count FROM deleted_object_cleanup`)
         .get(),
     ).toEqual({ count: 0 });
   });
@@ -1157,11 +1169,15 @@ describe("audits", () => {
     expect(
       fixture.database
         .query(
-          `SELECT id, object_key FROM deleted_object_cleanup
+          `SELECT id, organization_id, object_key FROM deleted_object_cleanup
            WHERE id = 'purged-object'`,
         )
         .get(),
-    ).toEqual({ id: "purged-object", object_key: "purged/image" });
+    ).toEqual({
+      id: "purged-object",
+      object_key: "purged/image",
+      organization_id: "org_user-1",
+    });
     expect(fixture.stored.has("purged/image")).toBe(true);
 
     fixture.storageControl.failNextDelete = true;

@@ -9,6 +9,7 @@ import {
   assertRepositoryAllowsSquash,
   assertReviewedAncestry,
   buildAtomicPushArgs,
+  buildLocalBranchUpdateArgs,
   buildReviewedCommitArgs,
   buildSquashMergeArgs,
   mergeStateExitCode,
@@ -222,6 +223,19 @@ describe("reviewed merge guards", () => {
       "https://github.com/a2f0/stealth",
       "merge-1:refs/heads/main",
       "merge-1:refs/heads/feat/widget",
+    ]);
+  });
+
+  test("synchronizes a retained local branch after the atomic merge", () => {
+    expect(
+      buildLocalBranchUpdateArgs("feat/widget", "merge-1", "head-1"),
+    ).toEqual([
+      "-c",
+      "core.hooksPath=/dev/null",
+      "update-ref",
+      "refs/heads/feat/widget",
+      "merge-1",
+      "head-1",
     ]);
   });
 
