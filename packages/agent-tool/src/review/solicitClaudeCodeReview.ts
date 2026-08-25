@@ -1,12 +1,5 @@
 import { spawnSync } from "node:child_process";
-import {
-  accessSync,
-  constants,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -30,6 +23,11 @@ import {
   readReviewInstructions,
 } from "./reviewPrompt";
 import { type ReviewerEnv, relayReviewWithRetry } from "./runReview";
+import {
+  resolveTrustedExecutable,
+  type TrustedExecutable,
+  trustedRuntimePath,
+} from "./trustedExecutable";
 
 /**
  * Tools the reviewer gets. Read-only, and deliberately not empty: the diff alone
@@ -68,39 +66,10 @@ const CLAUDE_ENV_ALLOWLIST = new Set([
   "no_proxy",
 ]);
 
-interface ClaudeRuntime {
-  readonly executable: string;
-  readonly readablePaths: string[];
-}
-
-function resolveClaudeRuntime(env: ReviewerEnv): ClaudeRuntime | null {
-  for (const directory of (env.PATH ?? "").split(path.delimiter)) {
-    if (!path.isAbsolute(directory)) continue;
-    const candidate = path.join(directory, "claude");
-    try {
-      accessSync(candidate, constants.X_OK);
-      const resolved = realpathSync(candidate);
-      return {
-        executable: candidate,
-        readablePaths: [
-          ...new Set([
-            path.dirname(candidate),
-            candidate,
-            path.dirname(resolved),
-            resolved,
-          ]),
-        ],
-      };
-    } catch {
-      // Keep searching PATH for an executable bare-mode Claude installation.
-    }
-  }
-  return null;
-}
-
 function claudeSandboxEnvironment(
   env: ReviewerEnv,
   codexHome: string,
+  executablePath: string,
 ): ReviewerEnv {
   return {
     ...Object.fromEntries(
@@ -109,6 +78,7 @@ function claudeSandboxEnvironment(
       ),
     ),
     CODEX_HOME: codexHome,
+    PATH: executablePath,
   };
 }
 
@@ -142,7 +112,7 @@ export function buildClaudeReviewArgs(effort: ReviewEffort): string[] {
 export function buildClaudeSandboxArgs(
   effort: ReviewEffort,
   reviewRoot: string,
-  runtime: ClaudeRuntime,
+  runtime: TrustedExecutable,
 ): string[] {
   return [
     "sandbox",
@@ -175,10 +145,17 @@ export function spawnClaudeReview(
   repositoryRoot = process.cwd(),
   headRef = "HEAD",
 ): number {
-  const runtime = resolveClaudeRuntime(env);
+  const runtime = resolveTrustedExecutable("claude", env, repositoryRoot);
   if (runtime === null) {
     process.stderr.write(
-      "Failed to run claude: Executable not found in $PATH.\n",
+      "Failed to run claude: no executable outside the repository was found in PATH.\n",
+    );
+    return 1;
+  }
+  const codexRuntime = resolveTrustedExecutable("codex", env, repositoryRoot);
+  if (codexRuntime === null) {
+    process.stderr.write(
+      "Failed to run sandboxed claude: no Codex executable outside the repository was found in PATH.\n",
     );
     return 1;
   }
@@ -194,14 +171,18 @@ export function spawnClaudeReview(
       // Read/Grep/Glob permissions do not. Bare mode prevents keychain/config
       // reads; authentication must arrive through the allowlisted environment.
       const result = spawnSync(
-        "codex",
+        codexRuntime.executable,
         buildClaudeSandboxArgs(effort, outDir, runtime),
         {
           stdio: ["pipe", "pipe", "inherit"],
           input: prompt,
           encoding: "utf8",
           maxBuffer: MAX_BUFFER_BYTES,
-          env: claudeSandboxEnvironment(env, codexHome),
+          env: claudeSandboxEnvironment(
+            env,
+            codexHome,
+            trustedRuntimePath([codexRuntime, runtime]),
+          ),
         },
       );
       return {

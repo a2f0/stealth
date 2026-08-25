@@ -43,7 +43,10 @@ reviews via `codex exec` with the user config ignored and a least-privilege
 filesystem profile. Both reviewers get a temporary snapshot containing only
 committed tracked files; ignored files, untracked secrets, and neighboring
 repositories are unreadable. Codex shell environment inheritance is disabled,
-and each reviewer process receives only an auth/transport allowlist. The
+and each reviewer process receives only an auth/transport allowlist. Before any
+credentials are exposed, the launcher resolves Codex and Claude to absolute
+executables outside the repository and replaces `PATH` with trusted runtime and
+system directories, so a contributor-controlled shadow binary cannot run. The
 temporary directory is the primary workspace, so contributor-controlled
 `AGENTS.md` files inside the nested checkout are data rather than reviewer
 policy. Only the final message — captured with `--output-last-message` — is

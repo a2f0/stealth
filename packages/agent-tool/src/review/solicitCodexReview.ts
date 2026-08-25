@@ -1,12 +1,5 @@
 import { spawnSync } from "node:child_process";
-import {
-  accessSync,
-  constants,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -30,6 +23,10 @@ import {
   readReviewInstructions,
 } from "./reviewPrompt";
 import { type ReviewerEnv, relayReviewWithRetry } from "./runReview";
+import {
+  resolveTrustedExecutable,
+  trustedRuntimePath,
+} from "./trustedExecutable";
 
 /** How much transcript tail to relay when a codex attempt fails outright. */
 const TRANSCRIPT_TAIL_CHARS = 2000;
@@ -62,36 +59,29 @@ const REVIEWER_SHELL_PATH =
   "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin";
 
 /** Keep only values the Codex process may need for auth and transport. */
-export function reviewerEnvironment(env: ReviewerEnv): ReviewerEnv {
-  return Object.fromEntries(
-    Object.entries(env).filter(
-      ([key, value]) => REVIEWER_ENV_ALLOWLIST.has(key) && value !== undefined,
+export function reviewerEnvironment(
+  env: ReviewerEnv,
+  executablePath = env.PATH ?? "",
+): ReviewerEnv {
+  return {
+    ...Object.fromEntries(
+      Object.entries(env).filter(
+        ([key, value]) =>
+          REVIEWER_ENV_ALLOWLIST.has(key) && value !== undefined,
+      ),
     ),
-  );
+    PATH: executablePath,
+  };
 }
 
 /** Resolve the command path and symlink target the sandbox helper must execute. */
-export function reviewerRuntimePaths(env: ReviewerEnv): string[] {
-  const searchPath = env.PATH ?? "";
-  for (const directory of searchPath.split(path.delimiter)) {
-    if (!path.isAbsolute(directory)) continue;
-    const candidate = path.join(directory, "codex");
-    try {
-      accessSync(candidate, constants.X_OK);
-      const resolved = realpathSync(candidate);
-      return [
-        ...new Set([
-          path.dirname(candidate),
-          candidate,
-          path.dirname(resolved),
-          resolved,
-        ]),
-      ];
-    } catch {
-      // Keep searching PATH for an executable Codex installation.
-    }
-  }
-  return [];
+export function reviewerRuntimePaths(
+  env: ReviewerEnv,
+  repositoryRoot = process.cwd(),
+): string[] {
+  return (
+    resolveTrustedExecutable("codex", env, repositoryRoot)?.readablePaths ?? []
+  );
 }
 
 function reviewerFilesystemConfig(runtimePaths: readonly string[]): string {
@@ -202,7 +192,19 @@ export function spawnCodexReview(
 ): number {
   const outDir = mkdtempSync(path.join(tmpdir(), "agent-tool-codex-"));
   const checkoutDir = path.join(outDir, "checkout");
-  const runtimePaths = reviewerRuntimePaths(env);
+  const runtime = resolveTrustedExecutable("codex", env, repositoryRoot);
+  if (runtime === null) {
+    process.stderr.write(
+      "Failed to run codex: no executable outside the repository was found in PATH.\n",
+    );
+    rmSync(outDir, { recursive: true, force: true });
+    return 1;
+  }
+  const runtimePaths = runtime.readablePaths;
+  const runtimeEnvironment = reviewerEnvironment(
+    env,
+    trustedRuntimePath([runtime]),
+  );
   let attempt = 0;
   try {
     materializeTrackedCheckout(repositoryRoot, checkoutDir, headRef);
@@ -212,14 +214,14 @@ export function spawnCodexReview(
       attempt += 1;
       const lastMessageFile = path.join(outDir, `review-${attempt}.md`);
       const result = spawnSync(
-        "codex",
+        runtime.executable,
         buildCodexReviewArgs(effort, lastMessageFile, outDir, runtimePaths),
         {
           stdio: ["pipe", "pipe", "pipe"],
           input: prompt,
           encoding: "utf8",
           maxBuffer: MAX_BUFFER_BYTES,
-          env: reviewerEnvironment(env),
+          env: runtimeEnvironment,
         },
       );
       const exitCode = spawnExitCode("codex", result);
