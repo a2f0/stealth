@@ -17,18 +17,33 @@ const maxImageDimension = 12_000;
 const maxImagePixels = 40_000_000;
 const maxImagesPerIssue = 10;
 const maxConcurrentImageUploads = 4;
+const maxConcurrentImageUploadsPerOrganization = 2;
+const maxImageReadMilliseconds = 60_000;
 const pendingUploadGraceMilliseconds = 15 * 60 * 1000;
 const pendingCleanupBatchSize = 100;
 let activeImageUploads = 0;
+const activeOrganizationImageUploads = new Map<string, number>();
 
-function acquireImageUploadCapacity() {
-  if (activeImageUploads >= maxConcurrentImageUploads) return null;
+function acquireImageUploadCapacity(organizationId: string) {
+  const organizationUploads =
+    activeOrganizationImageUploads.get(organizationId) ?? 0;
+  if (
+    activeImageUploads >= maxConcurrentImageUploads ||
+    organizationUploads >= maxConcurrentImageUploadsPerOrganization
+  ) {
+    return null;
+  }
   activeImageUploads += 1;
+  activeOrganizationImageUploads.set(organizationId, organizationUploads + 1);
   let released = false;
   return () => {
     if (released) return;
     released = true;
     activeImageUploads -= 1;
+    const remaining =
+      (activeOrganizationImageUploads.get(organizationId) ?? 1) - 1;
+    if (remaining === 0) activeOrganizationImageUploads.delete(organizationId);
+    else activeOrganizationImageUploads.set(organizationId, remaining);
   };
 }
 
@@ -57,7 +72,7 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     .first<{ id: string }>();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
 
-  const releaseCapacity = acquireImageUploadCapacity();
+  const releaseCapacity = acquireImageUploadCapacity(organizationId);
   if (releaseCapacity === null) {
     context.header("retry-after", "1");
     return context.json(
@@ -514,8 +529,8 @@ async function parseImageUpload(
   request: Request,
   filename: string | undefined,
 ): Promise<
-  | { bytes: ArrayBuffer; filename: string }
-  | { error: string; status: 400 | 413 }
+  | { bytes: Uint8Array; filename: string }
+  | { error: string; status: 400 | 408 | 413 }
 > {
   const contentLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > maxImageBytes) {
@@ -532,7 +547,22 @@ async function parseImageUpload(
       status: 400,
     };
   }
-  const requestBytes = await readBodyWithLimit(request.body, maxImageBytes);
+  let requestBytes: Uint8Array | null;
+  try {
+    requestBytes = await readBodyWithLimit(
+      request.body,
+      maxImageBytes,
+      maxImageReadMilliseconds,
+    );
+  } catch (cause) {
+    if (cause instanceof ImageUploadReadTimeoutError) {
+      return {
+        error: "Images must finish uploading within 60 seconds.",
+        status: 408,
+      };
+    }
+    throw cause;
+  }
   if (requestBytes === null) {
     return { error: "Images must be 10 MB or smaller.", status: 413 };
   }
@@ -542,34 +572,44 @@ async function parseImageUpload(
   return { bytes: requestBytes, filename: filename || "issue-image" };
 }
 
-/** Read a request stream without ever buffering more than `maxBytes`. */
+export class ImageUploadReadTimeoutError extends Error {}
+
+/** Read a request stream with fixed memory and a cancellation deadline. */
 export async function readBodyWithLimit(
   body: ReadableStream<Uint8Array> | null,
   maxBytes: number,
-): Promise<ArrayBuffer | null> {
-  if (body === null) return new ArrayBuffer(0);
+  timeoutMilliseconds = maxImageReadMilliseconds,
+): Promise<Uint8Array | null> {
+  if (body === null) return new Uint8Array();
+  const reader = body.getReader();
+  const bytes = new Uint8Array(maxBytes);
   let total = 0;
-  let exceeded = false;
-  const limited = body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        total += chunk.byteLength;
-        if (total > maxBytes) {
-          exceeded = true;
-          controller.error(
-            new Error("request body exceeded image upload limit"),
-          );
-          return;
-        }
-        controller.enqueue(chunk);
-      },
-    }),
+  const timeoutError = new ImageUploadReadTimeoutError(
+    "image upload read deadline exceeded",
   );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(timeoutError), timeoutMilliseconds);
+  });
   try {
-    return await new Response(limited).arrayBuffer();
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), deadline]);
+      if (done) return bytes.subarray(0, total);
+      if (total + value.byteLength > maxBytes) {
+        await reader.cancel("request body exceeded image upload limit");
+        return null;
+      }
+      bytes.set(value, total);
+      total += value.byteLength;
+    }
   } catch (cause) {
-    if (exceeded) return null;
+    if (cause === timeoutError) {
+      await reader.cancel(timeoutError).catch(() => undefined);
+    }
     throw cause;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    reader.releaseLock();
   }
 }
 
@@ -844,7 +884,7 @@ function supportedImageType(format: string) {
   }
 }
 
-async function validateImage(images: ImagesBinding, bytes: ArrayBuffer) {
+async function validateImage(images: ImagesBinding, bytes: Uint8Array) {
   let imageInfo: ImageInfoResponse;
   try {
     imageInfo = await images.info(new Blob([bytes]).stream());

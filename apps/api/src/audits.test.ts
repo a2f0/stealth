@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuditDefinition } from "./auditDefinition";
 import {
+  ImageUploadReadTimeoutError,
   purgePendingAuditIssueImages,
   readBodyWithLimit,
 } from "./auditIssueImages";
@@ -78,9 +79,20 @@ describe("audits", () => {
     });
     const exactBytes = await readBodyWithLimit(exact, 3);
     expect(exactBytes).not.toBeNull();
-    expect(new Uint8Array(exactBytes as ArrayBuffer)).toEqual(
+    expect(new Uint8Array(exactBytes ?? [])).toEqual(
       Uint8Array.from([1, 2, 3]),
     );
+
+    let timedOutStreamCancelled = false;
+    const stalled = new ReadableStream<Uint8Array>({
+      cancel: () => {
+        timedOutStreamCancelled = true;
+      },
+    });
+    await expect(readBodyWithLimit(stalled, 7, 5)).rejects.toBeInstanceOf(
+      ImageUploadReadTimeoutError,
+    );
+    expect(timedOutStreamCancelled).toBe(true);
   });
 
   it("migrates existing templates and audit provenance into version one", async () => {
@@ -470,17 +482,17 @@ describe("audits", () => {
     );
     expect(
       concurrentUploads.filter(({ status }) => status === 201),
-    ).toHaveLength(4);
+    ).toHaveLength(2);
     expect(
       concurrentUploads.filter(({ status }) => status === 429),
-    ).toHaveLength(6);
+    ).toHaveLength(8);
     expect(
       concurrentUploads
         .filter(({ status }) => status === 429)
         .every((response) => response.headers.get("retry-after") === "1"),
     ).toBe(true);
     const retriedUploads: Response[] = [];
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 8; index += 1) {
       retriedUploads.push(
         await fixture.app.request(
           `/issues/${issue.body.issueId}/images?filename=retry-${index}.png`,
@@ -490,7 +502,7 @@ describe("audits", () => {
       );
     }
     expect(retriedUploads.filter(({ status }) => status === 201)).toHaveLength(
-      5,
+      7,
     );
     expect(retriedUploads.filter(({ status }) => status === 409)).toHaveLength(
       1,

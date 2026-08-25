@@ -37,7 +37,10 @@ const gitReader: TrackedCheckoutReader = {
 
 /** Parse one NUL-delimited `git ls-tree` record. */
 export function parseTrackedTreeEntry(record: string): TrackedTreeEntry {
-  const match = /^([0-7]{6}) (blob|commit) ([0-9a-f]+)\t(.+)$/.exec(record);
+  const separator = record.indexOf("\t");
+  const header = separator < 0 ? record : record.slice(0, separator);
+  const filePath = separator < 0 ? "" : record.slice(separator + 1);
+  const match = /^([0-7]{6}) (blob|commit) ([0-9a-f]+)$/.exec(header);
   if (match === null) {
     throw new Error(
       `Could not parse tracked tree entry: ${JSON.stringify(record)}`,
@@ -47,7 +50,7 @@ export function parseTrackedTreeEntry(record: string): TrackedTreeEntry {
     mode: match[1] ?? "",
     type: (match[2] ?? "") as "blob" | "commit",
     oid: match[3] ?? "",
-    filePath: match[4] ?? "",
+    filePath,
   };
 }
 

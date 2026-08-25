@@ -286,14 +286,23 @@ Require a clean worktree before fetching or snapshotting anything:
 
       ```bash
       BASE="$FETCHED_BASE"
-      git diff --name-only "$BASE"...HEAD
+      REVIEW_FILE_LIST=$(mktemp)
+      git diff --name-only -z "$BASE"...HEAD > "$REVIEW_FILE_LIST"
       ```
 
-   b. For each changed file, get the per-file diff against the same `$BASE`:
+      Consume `$REVIEW_FILE_LIST` with a NUL-aware reader and keep each decoded
+      pathname as one value. Never put this output in command substitution or
+      split it on lines: Git permits tabs and newlines in tracked pathnames.
+
+   b. For each exact pathname decoded by that NUL-aware reader, get the per-file
+      diff against the same `$BASE` (with `$FILE_PATH` passed as one quoted
+      argument):
 
       ```bash
-      git diff "$BASE"...HEAD -- <file-path>
+      git diff "$BASE"...HEAD -- "$FILE_PATH"
       ```
+
+      Remove `$REVIEW_FILE_LIST` after the last path is reviewed.
 
    c. For added or modified files, read the file with native file-reading tools
       for full context. Deleted files do not need to be read.
