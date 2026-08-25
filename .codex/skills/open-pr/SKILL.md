@@ -213,7 +213,7 @@ fi
 4. **Open the PR** (title single-quoted; body via a quoted heredoc):
 
    ```bash
-   "$BUN_BIN" "$AGENT_TOOL" openPr 'feat(app): add widget' <<'EOF'
+   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" openPr 'feat(app): add widget' <<'EOF'
    ## Summary
    What changed and why.
    EOF
@@ -222,7 +222,7 @@ fi
    To default the title to the latest commit subject, or to open with no body:
 
    ```bash
-   "$BUN_BIN" "$AGENT_TOOL" openPr </dev/null
+   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" openPr </dev/null
    ```
 
    **Quote the title in single quotes** and use a **quoted heredoc** (`<<'EOF'`)

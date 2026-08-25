@@ -141,11 +141,11 @@ as-is.
 2. **Run the reviewed merge**:
 
    ```bash
-   "$BUN_BIN" "$AGENT_TOOL" squashMerge 'feat(app): add widget'
+   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" squashMerge 'feat(app): add widget'
    # or, to default to the PR title:
-   "$BUN_BIN" "$AGENT_TOOL" squashMerge
+   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" squashMerge
    # or, bind the merge to a reviewed head/base pair:
-   "$BUN_BIN" "$AGENT_TOOL" squashMerge 'feat(app): add widget' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
+   "$BUN_BIN" --config=/dev/null "$AGENT_TOOL" squashMerge 'feat(app): add widget' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
    ```
 
    **Quote the subject in single quotes** so the shell does not expand

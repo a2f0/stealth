@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { MAX_BUFFER_BYTES } from "../git/prContext";
+import { toolEnvironment, toolExecutable } from "../process/trustedTooling";
 
 interface TrackedTreeEntry {
   readonly mode: string;
@@ -19,16 +20,21 @@ export interface TrackedCheckoutReader {
 const gitReader: TrackedCheckoutReader = {
   listTree(repositoryRoot, treeish) {
     return execFileSync(
-      "git",
+      toolExecutable("git"),
       ["-C", repositoryRoot, "ls-tree", "-rz", "--full-tree", "-r", treeish],
-      { encoding: "utf8", maxBuffer: MAX_BUFFER_BYTES },
+      {
+        encoding: "utf8",
+        env: toolEnvironment(),
+        maxBuffer: MAX_BUFFER_BYTES,
+      },
     );
   },
   readBlob(repositoryRoot, oid) {
     return execFileSync(
-      "git",
+      toolExecutable("git"),
       ["-C", repositoryRoot, "cat-file", "blob", oid],
       {
+        env: toolEnvironment(),
         maxBuffer: MAX_BUFFER_BYTES,
       },
     );

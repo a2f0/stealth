@@ -25,25 +25,18 @@
  *                               `--match-head-commit`; [base-sha] rejects a
  *                               base that moved after review.
  */
-import { execFileSync } from "node:child_process";
-
 import { openPr } from "./pr/openPr";
 import { squashMerge } from "./pr/squashMerge";
+import { initializeTrustedTooling } from "./process/trustedTooling";
 import { solicitClaudeCodeReview } from "./review/solicitClaudeCodeReview";
 import { solicitCodexReview } from "./review/solicitCodexReview";
 
 const USAGE =
   "Usage: agent-tool <solicitClaudeCodeReview|solicitCodexReview|openPr|squashMerge> [args]\n";
 
-function repoRoot(): string {
-  return execFileSync("git", ["rev-parse", "--show-toplevel"], {
-    encoding: "utf8",
-  }).trim();
-}
-
 function main(): number {
   const action = process.argv[2];
-  const rootDir = repoRoot();
+  const rootDir = initializeTrustedTooling();
   process.chdir(rootDir);
 
   switch (action) {

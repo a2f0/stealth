@@ -7,6 +7,7 @@ import {
   run,
   spawnExitCode,
 } from "../git/prContext";
+import { toolEnvironment, toolExecutable } from "../process/trustedTooling";
 import { assertNoClaudeBranding } from "./assertNoClaudeBranding";
 import { singleLineSubject } from "./subjectLine";
 import { validateCommitSubject } from "./validateCommitSubject";
@@ -58,7 +59,7 @@ export function openPr(rootDir: string, titleArg: string | undefined): number {
   // branch.<name>.gh-merge-base git config that could target another branch.
   const baseArgs = defaultBranch.length > 0 ? ["--base", defaultBranch] : [];
   const result = spawnSync(
-    "gh",
+    toolExecutable("gh"),
     [
       "pr",
       "create",
@@ -72,7 +73,10 @@ export function openPr(rootDir: string, titleArg: string | undefined): number {
       "-R",
       repo,
     ],
-    { stdio: ["ignore", "inherit", "inherit"] },
+    {
+      env: toolEnvironment(),
+      stdio: ["ignore", "inherit", "inherit"],
+    },
   );
   return spawnExitCode("gh pr create", result);
 }

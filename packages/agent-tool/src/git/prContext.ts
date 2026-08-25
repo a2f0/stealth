@@ -1,4 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import {
+  type ToolCommand,
+  toolEnvironment,
+  toolExecutable,
+} from "../process/trustedTooling";
 
 export interface PrIdentity {
   readonly branch: string;
@@ -36,15 +41,16 @@ interface SpawnResult {
 // ENOBUFS before we can hand the diff to a reviewer, so capture generously.
 export const MAX_BUFFER_BYTES = 512 * 1024 * 1024;
 
-export function run(command: string, args: string[]): string {
-  return execFileSync(command, args, {
+export function run(command: ToolCommand, args: string[]): string {
+  return execFileSync(toolExecutable(command), args, {
     encoding: "utf8",
+    env: toolEnvironment(),
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: MAX_BUFFER_BYTES,
   }).trim();
 }
 
-function tryRun(command: string, args: string[]): string | null {
+function tryRun(command: ToolCommand, args: string[]): string | null {
   try {
     return run(command, args);
   } catch {
@@ -175,9 +181,10 @@ export function resolveFreshBaseRef(
     throw new Error(`Could not resolve a fetch URL for '${repository}'.`);
   }
   const fetchResult = spawnSync(
-    "git",
+    toolExecutable("git"),
     ["fetch", "--quiet", repositoryUrl, baseRefName],
     {
+      env: toolEnvironment(),
       stdio: "ignore",
     },
   );
@@ -264,9 +271,9 @@ export function assertSpawnSucceeded(
 
 export function ensureChanges(baseRef: string, headRef = "HEAD"): void {
   const result = spawnSync(
-    "git",
+    toolExecutable("git"),
     ["diff", "--quiet", `${baseRef}...${headRef}`],
-    { stdio: "ignore" },
+    { env: toolEnvironment(), stdio: "ignore" },
   );
   if (result.error) {
     throw result.error;

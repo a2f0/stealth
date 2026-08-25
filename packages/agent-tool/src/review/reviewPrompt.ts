@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 
 import type { PrContext } from "../git/prContext";
+import { toolEnvironment, toolExecutable } from "../process/trustedTooling";
 import { REVIEW_VERDICTS } from "./reviewOutput";
 
 const REVIEW_INSTRUCTION_FILES = ["REVIEW.md", "AGENTS.md"];
@@ -55,10 +56,15 @@ ${diff}
 type ReadAtRef = (rootDir: string, ref: string, filename: string) => string;
 
 function gitShow(rootDir: string, ref: string, filename: string): string {
-  return execFileSync("git", ["-C", rootDir, "show", `${ref}:${filename}`], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  return execFileSync(
+    toolExecutable("git"),
+    ["-C", rootDir, "show", `${ref}:${filename}`],
+    {
+      encoding: "utf8",
+      env: toolEnvironment(),
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
 }
 
 /** Load review policy from the fetched base commit, never the untrusted branch. */

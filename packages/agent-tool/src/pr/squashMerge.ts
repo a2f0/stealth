@@ -9,6 +9,7 @@ import {
   run,
   spawnExitCode,
 } from "../git/prContext";
+import { toolEnvironment, toolExecutable } from "../process/trustedTooling";
 import { appendPrNumberSuffix, stripPrNumberSuffix } from "./prNumberSuffix";
 import { singleLineSubject } from "./subjectLine";
 import { validateCommitSubject } from "./validateCommitSubject";
@@ -200,8 +201,9 @@ export function selectGuardedMergeStrategy(
 }
 
 function githubApiJson(path: string, allowUnprotected = false): unknown {
-  const result = spawnSync("gh", ["api", path], {
+  const result = spawnSync(toolExecutable("gh"), ["api", path], {
     encoding: "utf8",
+    env: toolEnvironment(),
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.error) throw result.error;
@@ -311,7 +313,7 @@ function atomicReviewedMerge(
     expectedBaseSha,
   );
   const result = spawnSync(
-    "git",
+    toolExecutable("git"),
     buildAtomicPushArgs(
       repositoryHttpsUrl(pr.repo),
       mergeCommitSha,
@@ -320,7 +322,10 @@ function atomicReviewedMerge(
       pr.headRefName,
       expectedHeadSha,
     ),
-    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: "inherit" },
+    {
+      env: toolEnvironment({ GIT_TERMINAL_PROMPT: "0" }),
+      stdio: "inherit",
+    },
   );
   return spawnExitCode("atomic reviewed merge push", result);
 }
@@ -404,9 +409,9 @@ function guardedReviewedMerge(
   // checked API never merges a stale, unintegrated candidate.
   resolveFreshBaseRef(pr.repo, pr.baseRefName, expectedBaseSha);
   const ancestry = spawnSync(
-    "git",
+    toolExecutable("git"),
     ["merge-base", "--is-ancestor", expectedBaseSha, expectedHeadSha],
-    { stdio: "ignore" },
+    { env: toolEnvironment(), stdio: "ignore" },
   );
   if (ancestry.error) throw ancestry.error;
   if (ancestry.signal !== null) {
@@ -441,9 +446,9 @@ function guardedReviewedMerge(
       : spawnExitCode(
           "gh pr merge",
           spawnSync(
-            "gh",
+            toolExecutable("gh"),
             buildSquashMergeArgs(freshPr, finalSubject, expectedHeadSha, false),
-            { stdio: "inherit" },
+            { env: toolEnvironment(), stdio: "inherit" },
           ),
         );
   if (mergeExitCode !== 0) return mergeExitCode;
@@ -494,9 +499,9 @@ export function squashMerge(
   }
 
   const result = spawnSync(
-    "gh",
+    toolExecutable("gh"),
     buildSquashMergeArgs(pr, finalSubject, expectedHeadSha),
-    { stdio: "inherit" },
+    { env: toolEnvironment(), stdio: "inherit" },
   );
   const exitCode = spawnExitCode("gh pr merge", result);
   if (exitCode !== 0) {
