@@ -100,12 +100,15 @@ The subject is validated against the repository's own commitlint setup (the same
 `@commitlint/cli` binary and `commitlint.config.mts` the commit-msg hook uses),
 so conventional-commit syntax and the 50-char header limit are enforced
 identically. The two review SHAs must be supplied together. With both present,
-the tool creates a subject-only integration commit whose first parent is the
-reviewed base, second parent is the reviewed head, and tree is the reviewed
-head. It then updates the base ref with an exact server-side lease on the
-reviewed base SHA. That compare-and-swap atomically rejects either a changed
-base or changed head, while keeping the reviewed head reachable so GitHub marks
-the PR merged. The unguarded form remains a normal GitHub squash merge for
+the tool creates a subject-only squash commit whose sole parent is the reviewed
+base and whose tree is the reviewed head. For same-repository PRs it atomically
+updates both the base and feature refs to that commit, with exact leases on the
+reviewed base and head SHAs. The push uses HTTPS with `gh auth git-credential`,
+so it does not assume separate SSH credentials. That two-ref compare-and-swap
+rejects either a changed base or head, while moving the PR head onto the squash
+commit so GitHub marks it merged.
+Guarded fork PRs stop because Git cannot atomically update refs across two
+repositories. The unguarded form remains a normal GitHub squash merge for
 manual use. Backs the `squash-merge` compatibility skill.
 
 The tool only merges. Returning to the base branch, fast-forwarding it, and

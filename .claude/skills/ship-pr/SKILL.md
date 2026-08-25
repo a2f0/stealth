@@ -236,9 +236,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    Then invoke the `squash-merge` compatibility skill, passing
    `REVIEWED_SHA` as its **second (head-SHA) argument** and
    `REVIEWED_BASE_SHA` as its **third (base-SHA) argument**. The guarded merge
-   commit names both reviewed commits as parents and the remote ref update uses
-   an exact lease on the reviewed base, so GitHub atomically refuses either a
-   different reviewed head or an intervening base update.
+   commit names both reviewed commits as parents and one atomic push updates the
+   same-repository base and feature refs with exact leases on both reviewed
+   SHAs, so GitHub refuses either a different head or an intervening base update.
 
    That skill also owns the post-merge cleanup: once GitHub confirms `MERGED`, it
    returns to the PR's base branch, fast-forwards it, verifies it contains the
@@ -254,8 +254,8 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    leaving the feature branch checked out and undeleted.
 
    The guarded tool path binds both reviewed SHAs into one integration commit
-   and compare-and-swap updates the base ref with an exact lease on the reviewed
-   base. That server-side ref update atomically rejects a base race. Because the
+   and atomically updates the base and feature refs with exact leases on both.
+   That server-side transaction rejects either race. Because the
    head and base SHAs are the **second and third** positionals, pass an empty
    first argument to default the subject to the PR title:
 

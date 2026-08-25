@@ -74,6 +74,7 @@ FEATURE_REMOTE=$(git config --get "branch.$BRANCH.pushRemote" || git config --ge
 [ -n "$FEATURE_REMOTE" ] && [ "$FEATURE_REMOTE" != "." ] || { echo "Error: feature branch has no deletion-safe remote" >&2; exit 1; }
 FEATURE_REMOTE_URL=$(git remote get-url --push "$FEATURE_REMOTE") || { echo "Error: could not resolve push URL for $FEATURE_REMOTE" >&2; exit 1; }
 FEATURE_REPO=$(gh repo view "$FEATURE_REMOTE_URL" --json nameWithOwner -q .nameWithOwner) || { echo "Error: could not resolve GitHub repository for $FEATURE_REMOTE" >&2; exit 1; }
+FEATURE_REPO_URL=$(gh repo view "$FEATURE_REPO" --json url -q .url) || { echo "Error: could not resolve HTTPS URL for $FEATURE_REPO" >&2; exit 1; }
 PR_LINES=$(gh pr list --head "$BRANCH" --state open --json number,headRepository --template '{{range .}}{{.number}} {{.headRepository.nameWithOwner}}{{"\n"}}{{end}}' -R "$REPO") || { echo "Error: could not list PRs for $BRANCH" >&2; exit 1; }
 PR_NUMBER=$(printf '%s\n' "$PR_LINES" | awk -v repository="$FEATURE_REPO" '$2 == repository { print $1 }')
 [ "$(printf '%s\n' "$PR_NUMBER" | awk 'NF { count++ } END { print count + 0 }')" -eq 1 ] || { echo "Error: expected exactly one open PR from $FEATURE_REPO for branch $BRANCH" >&2; exit 1; }
@@ -141,12 +142,14 @@ as-is.
    - Appends the PR reference so the subject ends with a space followed by
      `(#<pr>)`, replacing any existing trailing `(#<n>)` (idempotent on
      re-runs), and asserts the suffix is present before merging.
-   - With both reviewed SHAs, creates a subject-only integration commit whose
-     tree is the reviewed head and whose parents are the reviewed base and head,
-     then compare-and-swap pushes it to the base ref with an exact lease on the
-     reviewed base SHA. The remote atomically rejects any intervening base
-     update, and the reviewed head remains reachable so GitHub marks the PR
-     merged.
+   - With both reviewed SHAs, creates a subject-only squash commit whose tree is
+     the reviewed head and whose sole parent is the reviewed base, then
+     atomically pushes it to both the base and same-repository feature refs with
+     exact leases on the reviewed base and head SHAs. The HTTPS push uses
+     `gh auth git-credential`; no separate SSH setup is assumed. The remote
+     rejects either intervening update, and moving the feature ref onto the
+     squash commit makes the PR head reachable from the base. Guarded fork PRs
+     stop because refs in two repositories cannot share one atomic push.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
    - Confirms the PR reached the `MERGED` state.
@@ -202,10 +205,11 @@ as-is.
    [ -n "$MERGE_COMMIT" ] || { echo "Error: could not resolve merge commit; skipping delete" >&2; exit 1; }
    git merge-base --is-ancestor "$MERGE_COMMIT" HEAD || { echo "Error: $BASE_BRANCH does not contain merge commit $MERGE_COMMIT; skipping delete" >&2; exit 1; }
 
-   REMOTE_BRANCH_SHA=$(git ls-remote --heads "$FEATURE_REMOTE" "$MERGED_BRANCH" | awk 'NR == 1 { print $1 }')
+   MERGED_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")
+   REMOTE_BRANCH_SHA=$(git ls-remote --heads "$FEATURE_REPO_URL" "$MERGED_BRANCH" | awk 'NR == 1 { print $1 }')
    if [ -n "$REMOTE_BRANCH_SHA" ]; then
-     [ "$REMOTE_BRANCH_SHA" = "$PR_HEAD_SHA" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH is $REMOTE_BRANCH_SHA, not PR head $PR_HEAD_SHA; refusing remote delete" >&2; exit 1; }
-     git push "$FEATURE_REMOTE" --delete "$MERGED_BRANCH" || { echo "Error: could not delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }
+     [ "$REMOTE_BRANCH_SHA" = "$MERGED_HEAD_SHA" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH is $REMOTE_BRANCH_SHA, not merged PR head $MERGED_HEAD_SHA; refusing remote delete" >&2; exit 1; }
+     git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --force-with-lease="refs/heads/$MERGED_BRANCH:$REMOTE_BRANCH_SHA" "$FEATURE_REPO_URL" ":refs/heads/$MERGED_BRANCH" || { echo "Error: could not lease-delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }
    fi
    git branch -D "$MERGED_BRANCH" || { echo "Error: could not delete local $MERGED_BRANCH" >&2; exit 1; }
    ```
@@ -222,10 +226,11 @@ as-is.
      from the wrong remote, a stale fork, or a base that never received the merge
      — none of which the `MERGED` state alone can detect.
    - **Remote deletion uses the feature branch's own remote, never the base
-     branch's remote.** Before deletion, its branch SHA must equal the PR head
-     captured before merge. This prevents a fork PR from deleting an unrelated
-     same-named branch in the upstream repository. An empty lookup means GitHub
-     already deleted the feature branch and is treated as success.
+     branch's remote.** Before deletion, its branch SHA must equal GitHub's
+     post-merge PR head, and the delete itself carries an exact force-with-lease
+     for that SHA. A commit pushed between lookup and delete makes the remote
+     reject the deletion. An empty lookup means GitHub already deleted the
+     feature branch and is treated as success.
    - **`-D`, not `-d`, is required here** — see the note below. The `MERGED` check
      plus the ancestry check above are what make the force safe.
 

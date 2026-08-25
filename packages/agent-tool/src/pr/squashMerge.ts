@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 
 import {
   prState,
-  repositorySshUrl,
+  repositoryHttpsUrl,
   resolveFreshBaseRef,
   resolvePr,
   run,
@@ -106,32 +106,41 @@ export function assertReviewedAncestry(status: number | null): void {
   );
 }
 
-/** Build a commit whose exact parents prove the reviewed base and head. */
+/** Build a squash commit with the reviewed base as its sole parent. */
 export function buildReviewedCommitArgs(
   treeSha: string,
   expectedBaseSha: string,
-  expectedHeadSha: string,
 ): string[] {
-  return ["commit-tree", treeSha, "-p", expectedBaseSha, "-p", expectedHeadSha];
+  return ["commit-tree", treeSha, "-p", expectedBaseSha];
 }
 
 /**
- * Build an exact compare-and-swap push. The lease is checked by the remote as
- * it updates the base ref, closing the race between a base query and a merge.
+ * Build an exact compare-and-swap push. Both leases are checked by the remote
+ * as one atomic transaction, closing races on either reviewed ref.
  */
 export function buildAtomicPushArgs(
   repositoryUrl: string,
   mergeCommitSha: string,
   baseRefName: string,
   expectedBaseSha: string,
+  headRefName: string,
+  expectedHeadSha: string,
 ): string[] {
   const baseRef = `refs/heads/${baseRefName}`;
+  const headRef = `refs/heads/${headRefName}`;
   return [
+    "-c",
+    "credential.helper=",
+    "-c",
+    "credential.helper=!gh auth git-credential",
     "push",
     "--porcelain",
+    "--atomic",
     `--force-with-lease=${baseRef}:${expectedBaseSha}`,
+    `--force-with-lease=${headRef}:${expectedHeadSha}`,
     repositoryUrl,
     `${mergeCommitSha}:${baseRef}`,
+    `${mergeCommitSha}:${headRef}`,
   ];
 }
 
@@ -149,7 +158,7 @@ function createReviewedMergeCommit(
   ]);
   const result = spawnSync(
     "git",
-    buildReviewedCommitArgs(treeSha, expectedBaseSha, expectedHeadSha),
+    buildReviewedCommitArgs(treeSha, expectedBaseSha),
     {
       input: `${finalSubject}\n`,
       encoding: "utf8",
@@ -161,10 +170,10 @@ function createReviewedMergeCommit(
 }
 
 /**
- * Merge the reviewed graph with a server-side compare-and-swap on the base
- * ref. A two-parent integration commit keeps the reviewed head reachable (so
- * GitHub marks the PR merged) while its first-parent tree is exactly the
- * reviewed head. This is used whenever ship-pr supplies both review guards.
+ * Squash the reviewed graph with a server-side compare-and-swap on both refs.
+ * Moving the feature ref to the same one-parent commit as the base keeps the
+ * PR head reachable (so GitHub marks the PR merged) without turning the squash
+ * into a merge commit. This is used whenever ship-pr supplies both guards.
  */
 function atomicReviewedMerge(
   pr: ReturnType<typeof resolvePr>,
@@ -176,6 +185,14 @@ function atomicReviewedMerge(
   assertExpectedBaseCommit(expectedBaseSha, pr.baseRefOid);
   if (pr.baseRefName.length === 0) {
     throw new Error("Could not determine the PR base branch.");
+  }
+  if (pr.headRefName.length === 0 || pr.headRepository.length === 0) {
+    throw new Error("Could not determine the PR head branch and repository.");
+  }
+  if (pr.headRepository !== pr.repo) {
+    throw new Error(
+      "Guarded atomic merges require the PR head and base to be in the same repository.",
+    );
   }
 
   // Fetch from the PR's repository and require that it still agrees with the
@@ -208,12 +225,14 @@ function atomicReviewedMerge(
   const pushResult = spawnSync(
     "git",
     buildAtomicPushArgs(
-      repositorySshUrl(pr.repo),
+      repositoryHttpsUrl(pr.repo),
       mergeCommitSha,
       pr.baseRefName,
       expectedBaseSha,
+      pr.headRefName,
+      expectedHeadSha,
     ),
-    { stdio: "inherit" },
+    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: "inherit" },
   );
   const pushExitCode = spawnExitCode("atomic reviewed merge push", pushResult);
   if (pushExitCode !== 0) return pushExitCode;

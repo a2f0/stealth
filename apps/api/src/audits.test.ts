@@ -2,6 +2,7 @@ import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuditDefinition } from "./auditDefinition";
+import { readBodyWithLimit } from "./auditIssueImages";
 import { audits } from "./audits";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
@@ -51,6 +52,32 @@ interface TestIdentity {
 }
 
 describe("audits", () => {
+  it("stops reading image uploads at the streaming byte limit", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      cancel: () => {
+        cancelled = true;
+      },
+      start(controller) {
+        controller.enqueue(new Uint8Array(4));
+        controller.enqueue(new Uint8Array(4));
+      },
+    });
+    expect(await readBodyWithLimit(stream, 7)).toBeNull();
+    expect(cancelled).toBe(true);
+
+    const exact = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Uint8Array.from([1, 2]));
+        controller.enqueue(Uint8Array.from([3]));
+        controller.close();
+      },
+    });
+    expect(await readBodyWithLimit(exact, 3)).toEqual(
+      Uint8Array.from([1, 2, 3]),
+    );
+  });
+
   it("migrates existing templates and audit provenance into version one", async () => {
     const database = await createLegacyDatabase();
     const definition: AuditDefinition = {

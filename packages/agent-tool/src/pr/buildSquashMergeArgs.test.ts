@@ -79,31 +79,38 @@ describe("reviewed merge guards", () => {
     expect(() => assertReviewedAncestry(128)).toThrow("Could not verify");
   });
 
-  test("makes the reviewed base and head the integration commit parents", () => {
-    expect(buildReviewedCommitArgs("tree-1", "base-1", "head-1")).toEqual([
+  test("makes the reviewed base the squash commit's sole parent", () => {
+    expect(buildReviewedCommitArgs("tree-1", "base-1")).toEqual([
       "commit-tree",
       "tree-1",
       "-p",
       "base-1",
-      "-p",
-      "head-1",
     ]);
   });
 
-  test("atomically leases the remote base ref at the reviewed SHA", () => {
+  test("atomically leases both remote refs at the reviewed SHAs", () => {
     expect(
       buildAtomicPushArgs(
-        "git@github.com:a2f0/stealth.git",
+        "https://github.com/a2f0/stealth",
         "merge-1",
         "main",
         "base-1",
+        "feat/widget",
+        "head-1",
       ),
     ).toEqual([
+      "-c",
+      "credential.helper=",
+      "-c",
+      "credential.helper=!gh auth git-credential",
       "push",
       "--porcelain",
+      "--atomic",
       "--force-with-lease=refs/heads/main:base-1",
-      "git@github.com:a2f0/stealth.git",
+      "--force-with-lease=refs/heads/feat/widget:head-1",
+      "https://github.com/a2f0/stealth",
       "merge-1:refs/heads/main",
+      "merge-1:refs/heads/feat/widget",
     ]);
   });
 });

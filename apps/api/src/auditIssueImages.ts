@@ -9,6 +9,8 @@ const auditIssueImages = new Hono<{
 }>();
 
 const maxImageBytes = 10 * 1024 * 1024;
+const maxMultipartOverheadBytes = 64 * 1024;
+const maxImageRequestBytes = maxImageBytes + maxMultipartOverheadBytes;
 const maxImageDimension = 12_000;
 const maxImagePixels = 40_000_000;
 const maxImagesPerIssue = 10;
@@ -29,6 +31,12 @@ export interface AuditIssueImageRow {
 }
 
 auditIssueImages.post("/:issueId/images", async (context) => {
+  const upload = await parseImageUpload(context.req.raw);
+  if ("error" in upload) {
+    return context.json({ error: upload.error }, upload.status);
+  }
+  const { file } = upload;
+
   const organizationId = context.get("organizationId");
   const issueId = context.req.param("issueId");
   const issue = await context.env.DB.prepare(
@@ -38,14 +46,6 @@ auditIssueImages.post("/:issueId/images", async (context) => {
     .first<{ id: string }>();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
 
-  const body = (await context.req.parseBody()) as { file?: File | string };
-  const file = body.file;
-  if (!(file instanceof File)) {
-    return context.json({ error: "A multipart image field is required." }, 400);
-  }
-  if (file.size > maxImageBytes) {
-    return context.json({ error: "Images must be 10 MB or smaller." }, 413);
-  }
   const sourceBytes = await file.arrayBuffer();
   const validation = await validateImage(context.env.IMAGES, sourceBytes);
   if ("error" in validation) {
@@ -131,6 +131,68 @@ auditIssueImages.post("/:issueId/images", async (context) => {
   if (!image) throw new Error("Uploaded issue image could not be loaded.");
   return context.json({ image: toAuditIssueImage(image) }, 201);
 });
+
+async function parseImageUpload(
+  request: Request,
+): Promise<{ file: File } | { error: string; status: 400 | 413 }> {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxImageRequestBytes) {
+    return { error: "Images must be 10 MB or smaller.", status: 413 };
+  }
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    return { error: "A multipart image field is required.", status: 400 };
+  }
+  const requestBytes = await readBodyWithLimit(
+    request.body,
+    maxImageRequestBytes,
+  );
+  if (requestBytes === null) {
+    return { error: "Images must be 10 MB or smaller.", status: 413 };
+  }
+
+  try {
+    const formData = await new Response(requestBytes, {
+      headers: { "content-type": contentType },
+    }).formData();
+    const file = formData.get("file");
+    if (!(file instanceof File)) throw new Error("File field missing");
+    if (file.size > maxImageBytes) {
+      return { error: "Images must be 10 MB or smaller.", status: 413 };
+    }
+    return { file };
+  } catch {
+    return { error: "A multipart image field is required.", status: 400 };
+  }
+}
+
+/** Read a request stream without ever buffering more than `maxBytes`. */
+export async function readBodyWithLimit(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<Uint8Array | null> {
+  if (body === null) return new Uint8Array();
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel("request body exceeded image upload limit");
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
 
 auditIssueImages.get("/:issueId/images/:imageId", async (context) => {
   const row = await findAuditIssueImage(

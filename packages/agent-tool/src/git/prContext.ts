@@ -10,7 +10,9 @@ export interface PrIdentity {
 interface PrMergeIdentity extends PrIdentity {
   readonly baseRefName: string;
   readonly baseRefOid: string;
+  readonly headRefName: string;
   readonly headRefOid: string;
+  readonly headRepository: string;
 }
 
 export interface PrContext extends PrIdentity {
@@ -61,6 +63,15 @@ function fieldOf(value: unknown, key: string): unknown {
 
 function stringField(source: string, key: string): string {
   const value = fieldOf(safeParse(source), key);
+  return typeof value === "string" ? value : "";
+}
+
+function nestedStringField(
+  source: string,
+  parent: string,
+  key: string,
+): string {
+  const value = fieldOf(fieldOf(safeParse(source), parent), key);
   return typeof value === "string" ? value : "";
 }
 
@@ -327,7 +338,7 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     "view",
     prNumber,
     "--json",
-    "title,baseRefName,baseRefOid,headRefOid",
+    "title,baseRefName,baseRefOid,headRefName,headRefOid,headRepository",
     "-R",
     repo,
   ]);
@@ -339,7 +350,13 @@ function viewPr(branch: string, repo: string, prNumber: string): PrView {
     title: stringField(viewRaw, "title"),
     baseRefName: stringField(viewRaw, "baseRefName"),
     baseRefOid: stringField(viewRaw, "baseRefOid"),
+    headRefName: stringField(viewRaw, "headRefName"),
     headRefOid: stringField(viewRaw, "headRefOid"),
+    headRepository: nestedStringField(
+      viewRaw,
+      "headRepository",
+      "nameWithOwner",
+    ),
   };
 }
 
@@ -377,23 +394,25 @@ export function resolvePr(): PrMergeIdentity {
     title: view.title,
     baseRefName: view.baseRefName,
     baseRefOid: view.baseRefOid,
+    headRefName: view.headRefName,
     headRefOid: view.headRefOid,
+    headRepository: view.headRepository,
   };
 }
 
-/** Authenticated SSH URL for a GitHub repository. */
-export function repositorySshUrl(repo: string): string {
+/** HTTPS URL for a GitHub repository; callers authenticate through `gh`. */
+export function repositoryHttpsUrl(repo: string): string {
   const url = run("gh", [
     "repo",
     "view",
     repo,
     "--json",
-    "sshUrl",
+    "url",
     "--jq",
-    ".sshUrl",
+    ".url",
   ]);
   if (url.length === 0) {
-    throw new Error(`Could not determine an SSH URL for '${repo}'.`);
+    throw new Error(`Could not determine an HTTPS URL for '${repo}'.`);
   }
   return url;
 }
