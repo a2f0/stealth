@@ -94,6 +94,18 @@ export function assertGuardPair(
   }
 }
 
+export function assertReviewedAncestry(status: number | null): void {
+  if (status === 0) return;
+  if (status === 1) {
+    throw new Error(
+      "The reviewed base is not an ancestor of the reviewed head; sync the base and re-review before merging.",
+    );
+  }
+  throw new Error(
+    `Could not verify reviewed base ancestry (git exited ${status ?? "on a signal"}).`,
+  );
+}
+
 /** Build a commit whose exact parents prove the reviewed base and head. */
 export function buildReviewedCommitArgs(
   treeSha: string,
@@ -169,6 +181,18 @@ function atomicReviewedMerge(
   // Fetch from the PR's repository and require that it still agrees with the
   // GitHub PR snapshot. The later lease remains the atomic race-closing gate.
   resolveFreshBaseRef(pr.repo, pr.baseRefName, expectedBaseSha);
+  const ancestry = spawnSync(
+    "git",
+    ["merge-base", "--is-ancestor", expectedBaseSha, expectedHeadSha],
+    { stdio: "ignore" },
+  );
+  if (ancestry.error) throw ancestry.error;
+  if (ancestry.signal !== null) {
+    throw new Error(
+      `Could not verify reviewed base ancestry (git terminated by ${ancestry.signal}).`,
+    );
+  }
+  assertReviewedAncestry(ancestry.status);
 
   const { exitCode, mergeCommitSha } = createReviewedMergeCommit(
     finalSubject,

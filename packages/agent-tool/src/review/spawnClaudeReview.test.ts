@@ -48,6 +48,21 @@ function stubClaude(stdout: string, exitCode = 0): void {
   const stubPath = path.join(stubDir, "claude");
   writeFileSync(stubPath, script);
   chmodSync(stubPath, 0o755);
+  stubCodexSandbox();
+}
+
+/** Stand in for `codex sandbox`, executing only the command after `--`. */
+function stubCodexSandbox(): void {
+  const script = [
+    "#!/bin/sh",
+    'while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done',
+    'if [ "$#" -eq 0 ]; then exit 2; fi',
+    "shift",
+    'exec "$@"',
+  ].join("\n");
+  const stubPath = path.join(stubDir, "codex");
+  writeFileSync(stubPath, script);
+  chmodSync(stubPath, 0o755);
 }
 
 /**
@@ -73,6 +88,7 @@ function stubFlakyClaude(review: string): void {
   const stubPath = path.join(stubDir, "claude");
   writeFileSync(stubPath, script);
   chmodSync(stubPath, 0o755);
+  stubCodexSandbox();
 }
 
 afterAll(() => {

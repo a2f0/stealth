@@ -16,6 +16,7 @@ const maxImagesPerIssue = 10;
 export interface AuditIssueImageRow {
   content_type: string;
   created_at: string;
+  deletion_pending: number;
   filename: string;
   id: string;
   issue_id: string;
@@ -176,8 +177,18 @@ auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
     organizationId,
     context.req.param("issueId"),
     context.req.param("imageId"),
+    true,
   );
   if (!row) return context.json({ error: "Issue image not found." }, 404);
+  // Make the image inaccessible before touching R2. If either later operation
+  // fails, the same DELETE remains able to find this pending row and retry both
+  // idempotent cleanup steps without exposing broken metadata to readers.
+  await context.env.DB.prepare(
+    `UPDATE objects SET deletion_pending = 1
+     WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
+  )
+    .bind(row.object_id, organizationId)
+    .run();
   await context.env.STORAGE.delete(row.object_key);
   await context.env.DB.prepare(
     `DELETE FROM objects
@@ -197,6 +208,8 @@ export async function findAuditIssueImages(
     .prepare(
       `${imageSelect}
        WHERE issue.organization_id = ? AND issue.audit_id = ?
+         AND object.kind = 'audit_issue_image'
+         AND object.deletion_pending = 0
        ORDER BY image.created_at ASC`,
     )
     .bind(organizationId, auditId)
@@ -209,11 +222,14 @@ async function findAuditIssueImage(
   organizationId: string,
   issueId: string,
   imageId: string,
+  includePending = false,
 ) {
   return database
     .prepare(
       `${imageSelect}
-       WHERE issue.organization_id = ? AND issue.id = ? AND image.id = ?`,
+       WHERE issue.organization_id = ? AND issue.id = ? AND image.id = ?
+         AND object.kind = 'audit_issue_image'
+         ${includePending ? "" : "AND object.deletion_pending = 0"}`,
     )
     .bind(organizationId, issueId, imageId)
     .first<AuditIssueImageRow>();
@@ -221,6 +237,7 @@ async function findAuditIssueImage(
 
 const imageSelect = `
   SELECT image.id, image.issue_id, image.object_id, image.created_at,
+         object.deletion_pending,
          object.object_key, object.filename, object.content_type, object.size,
          uploader.id AS uploaded_by_id, uploader.name AS uploaded_by_name,
          uploader.email AS uploaded_by_email

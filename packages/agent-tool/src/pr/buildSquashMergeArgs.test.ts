@@ -4,6 +4,7 @@ import {
   assertExpectedBaseCommit,
   assertExpectedHeadCommit,
   assertGuardPair,
+  assertReviewedAncestry,
   buildAtomicPushArgs,
   buildReviewedCommitArgs,
   buildSquashMergeArgs,
@@ -70,6 +71,12 @@ describe("reviewed merge guards", () => {
     expect(() => assertExpectedHeadCommit("head-1", "head-2")).toThrow(
       "re-review",
     );
+  });
+
+  test("requires the reviewed head to contain the reviewed base", () => {
+    expect(() => assertReviewedAncestry(0)).not.toThrow();
+    expect(() => assertReviewedAncestry(1)).toThrow("sync the base");
+    expect(() => assertReviewedAncestry(128)).toThrow("Could not verify");
   });
 
   test("makes the reviewed base and head the integration commit parents", () => {

@@ -1,4 +1,14 @@
 import { spawnSync } from "node:child_process";
+import {
+  accessSync,
+  constants,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import {
   ensureChanges,
@@ -7,6 +17,7 @@ import {
   run,
   spawnExitCode,
 } from "../git/prContext";
+import { materializeTrackedCheckout } from "./materializeTrackedCheckout";
 import {
   DEFAULT_CLAUDE_EFFORT,
   type ReviewEffort,
@@ -33,18 +44,118 @@ import { type ReviewerEnv, relayReviewWithRetry } from "./runReview";
  */
 const REVIEW_TOOLS = ["Read", "Grep", "Glob"] as const;
 
+const CLAUDE_ENV_ALLOWLIST = new Set([
+  "ALL_PROXY",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "LANG",
+  "LC_ALL",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_PROXY",
+  "PATH",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "all_proxy",
+  "https_proxy",
+  "http_proxy",
+  "no_proxy",
+]);
+
+interface ClaudeRuntime {
+  readonly executable: string;
+  readonly readablePaths: string[];
+}
+
+function resolveClaudeRuntime(env: ReviewerEnv): ClaudeRuntime | null {
+  for (const directory of (env.PATH ?? "").split(path.delimiter)) {
+    if (!path.isAbsolute(directory)) continue;
+    const candidate = path.join(directory, "claude");
+    try {
+      accessSync(candidate, constants.X_OK);
+      const resolved = realpathSync(candidate);
+      return {
+        executable: candidate,
+        readablePaths: [
+          ...new Set([
+            path.dirname(candidate),
+            candidate,
+            path.dirname(resolved),
+            resolved,
+          ]),
+        ],
+      };
+    } catch {
+      // Keep searching PATH for an executable bare-mode Claude installation.
+    }
+  }
+  return null;
+}
+
+function claudeSandboxEnvironment(
+  env: ReviewerEnv,
+  codexHome: string,
+): ReviewerEnv {
+  return {
+    ...Object.fromEntries(
+      Object.entries(env).filter(
+        ([key, value]) => CLAUDE_ENV_ALLOWLIST.has(key) && value !== undefined,
+      ),
+    ),
+    CODEX_HOME: codexHome,
+  };
+}
+
+function claudeFilesystemConfig(runtimePaths: readonly string[]): string {
+  const runtimeEntries = runtimePaths
+    .map((runtimePath) => `${JSON.stringify(runtimePath)}="read"`)
+    .join(",");
+  return `permissions.agent-tool-claude-review.filesystem={":minimal"="read",":workspace_roots"={"."="read"},${runtimeEntries}}`;
+}
+
 /**
  * Build the `claude` argv for a non-interactive review at the given effort
  * level. The prompt itself goes over stdin, not argv.
  */
 export function buildClaudeReviewArgs(effort: ReviewEffort): string[] {
   return [
+    "--bare",
     "--safe-mode",
+    "--no-session-persistence",
+    "--disable-slash-commands",
+    "--no-chrome",
     "--effort",
     effort,
     "--print",
     "--tools",
     REVIEW_TOOLS.join(","),
+  ];
+}
+
+/** Build the outer Codex filesystem sandbox and inner bare Claude invocation. */
+export function buildClaudeSandboxArgs(
+  effort: ReviewEffort,
+  reviewRoot: string,
+  runtime: ClaudeRuntime,
+): string[] {
+  return [
+    "sandbox",
+    "--cd",
+    reviewRoot,
+    "-c",
+    claudeFilesystemConfig(runtime.readablePaths),
+    "-c",
+    "permissions.agent-tool-claude-review.network.enabled=true",
+    "--permission-profile",
+    "agent-tool-claude-review",
+    "--",
+    runtime.executable,
+    ...buildClaudeReviewArgs(effort),
   ];
 }
 
@@ -60,25 +171,45 @@ export function spawnClaudeReview(
   prompt: string,
   effort: ReviewEffort,
   env: ReviewerEnv = process.env,
+  repositoryRoot = process.cwd(),
 ): number {
-  return relayReviewWithRetry("claude", () => {
-    // Captured rather than inherited: a review has to be read to be judged, and
-    // `claude` exits 0 whether it reviewed the diff or merely said it would.
-    // `--print` emits the review in one final block, so nothing streams anyway.
-    const result = spawnSync("claude", buildClaudeReviewArgs(effort), {
-      stdio: ["pipe", "pipe", "inherit"],
-      input: prompt,
-      encoding: "utf8",
-      maxBuffer: MAX_BUFFER_BYTES,
-      // Passed explicitly so `claude` resolves against this PATH rather than the
-      // one the runtime snapshotted at startup.
-      env,
+  const runtime = resolveClaudeRuntime(env);
+  if (runtime === null) {
+    process.stderr.write(
+      "Failed to run claude: Executable not found in $PATH.\n",
+    );
+    return 1;
+  }
+
+  const outDir = mkdtempSync(path.join(tmpdir(), "agent-tool-claude-"));
+  const checkoutDir = path.join(outDir, "checkout");
+  const codexHome = path.join(outDir, "codex-home");
+  try {
+    mkdirSync(codexHome);
+    materializeTrackedCheckout(repositoryRoot, checkoutDir);
+    return relayReviewWithRetry("claude", () => {
+      // Codex's standalone sandbox supplies the filesystem boundary Claude's
+      // Read/Grep/Glob permissions do not. Bare mode prevents keychain/config
+      // reads; authentication must arrive through the allowlisted environment.
+      const result = spawnSync(
+        "codex",
+        buildClaudeSandboxArgs(effort, outDir, runtime),
+        {
+          stdio: ["pipe", "pipe", "inherit"],
+          input: prompt,
+          encoding: "utf8",
+          maxBuffer: MAX_BUFFER_BYTES,
+          env: claudeSandboxEnvironment(env, codexHome),
+        },
+      );
+      return {
+        exitCode: spawnExitCode("sandboxed claude", result),
+        review: result.stdout ?? "",
+      };
     });
-    return {
-      exitCode: spawnExitCode("claude", result),
-      review: result.stdout ?? "",
-    };
-  });
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -101,8 +232,8 @@ export function solicitClaudeCodeReview(
     context,
     diff,
     reviewInstructions: readReviewInstructions(rootDir, context.baseRef),
-    accessNote: CLAUDE_ACCESS_NOTE,
+    accessNote: `${CLAUDE_ACCESS_NOTE}. The committed files are in the tracked checkout/ directory`,
   });
 
-  return spawnClaudeReview(prompt, effort);
+  return spawnClaudeReview(prompt, effort, process.env, rootDir);
 }

@@ -45,6 +45,19 @@ describe("review delivery", () => {
     );
     chmodSync(stubPath, 0o755);
 
+    const sandboxStubPath = path.join(workDir, "codex");
+    writeFileSync(
+      sandboxStubPath,
+      [
+        "#!/bin/sh",
+        'while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done',
+        'if [ "$#" -eq 0 ]; then exit 2; fi',
+        "shift",
+        'exec "$@"',
+      ].join("\n"),
+    );
+    chmodSync(sandboxStubPath, 0o755);
+
     // Drive the real export from a child process so fd 1 is a true pipe and
     // `process.exit` runs for real, exactly as `index.ts` invokes it.
     const runnerPath = path.join(workDir, "runner.ts");

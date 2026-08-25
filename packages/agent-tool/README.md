@@ -29,13 +29,15 @@ Both actions:
    one is retried once (the observed failure mode is stochastic), then reported
    as a nonzero exit.
 
-Claude reviews in safe mode, with project hooks, plugins, settings, and MCP
-servers disabled and only read-only tools (`Read,Grep,Glob`, no `Bash`). Codex
+Claude reviews in bare safe mode, with project hooks, plugins, settings, MCP,
+keychain access, and persistence disabled and only read-only tools
+(`Read,Grep,Glob`, no `Bash`). It runs inside a standalone Codex filesystem
+sandbox and authenticates only from an allowlisted API-key environment. Codex
 reviews via `codex exec` with the user config ignored and a least-privilege
-filesystem profile. The reviewer gets a temporary snapshot containing only
+filesystem profile. Both reviewers get a temporary snapshot containing only
 committed tracked files; ignored files, untracked secrets, and neighboring
-repositories are unreadable. Shell environment inheritance is disabled, and
-the Codex process itself receives only an auth/transport allowlist. The
+repositories are unreadable. Codex shell environment inheritance is disabled,
+and each reviewer process receives only an auth/transport allowlist. The
 temporary directory is the primary workspace, so contributor-controlled
 `AGENTS.md` files inside the nested checkout are data rather than reviewer
 policy. Only the final message — captured with `--output-last-message` — is
@@ -134,7 +136,7 @@ changes nothing, invoke `cross-agent-review` with `--repair-rounds 0`.
 ## Prerequisites
 
 - `git` and `gh` (authenticated) on `PATH`.
-- `claude` CLI authenticated for `solicitClaudeCodeReview`.
+- `claude` CLI with `ANTHROPIC_API_KEY` available for its bare sandboxed review.
 - `codex` CLI configured (`OPENAI_API_KEY`) for `solicitCodexReview`.
 - A PR on the current branch: `squashMerge` requires an open one; `openPr`
   requires that none exists; the review actions work with or without one (with

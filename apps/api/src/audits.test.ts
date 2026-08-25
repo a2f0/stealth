@@ -414,14 +414,63 @@ describe("audits", () => {
         .get(issue.body.issueId),
     ).toEqual({ assigned_to: "user-1", status: "resolved" });
 
+    fixture.databaseControl.failNextPendingUpdate = true;
+    const failedMetadataDelete = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(failedMetadataDelete.status).toBe(500);
+    expect(fixture.stored.size).toBe(10);
+    const retainedImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
+      undefined,
+      fixture.bindings,
+    );
+    expect(retainedImage.status).toBe(200);
+
+    fixture.storageControl.failNextDelete = true;
+    const failedImageDelete = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(failedImageDelete.status).toBe(500);
+    expect(fixture.stored.size).toBe(10);
+    expect(
+      fixture.database
+        .query(
+          `SELECT object.deletion_pending
+           FROM audit_issue_images AS image
+           JOIN objects AS object ON object.id = image.object_id
+           WHERE image.id = ?`,
+        )
+        .get(uploadedBody.image.id),
+    ).toEqual({ deletion_pending: 1 });
+    const pendingImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
+      undefined,
+      fixture.bindings,
+    );
+    expect(pendingImage.status).toBe(404);
+    const retriedImageDelete = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(retriedImageDelete.status).toBe(204);
+    expect(fixture.stored.size).toBe(9);
+
     const deletedImages = await Promise.all(
-      (detailBody.issues[0]?.images ?? []).map(({ id }) =>
-        fixture.app.request(
-          `/issues/${issue.body.issueId}/images/${id}`,
-          { method: "DELETE" },
-          fixture.bindings,
+      (detailBody.issues[0]?.images ?? [])
+        .filter(({ id }) => id !== uploadedBody.image.id)
+        .map(({ id }) =>
+          fixture.app.request(
+            `/issues/${issue.body.issueId}/images/${id}`,
+            { method: "DELETE" },
+            fixture.bindings,
+          ),
         ),
-      ),
     );
     expect(deletedImages.every(({ status }) => status === 204)).toBe(true);
     expect(fixture.stored.size).toBe(0);
@@ -774,10 +823,25 @@ async function createFixture() {
   await applyMigration(database, "0022_version_audit_templates.sql");
   await applyMigration(database, "0024_create_audit_issue_images.sql");
   await applyMigration(database, "0025_classify_objects.sql");
+  await applyMigration(database, "0026_track_object_deletion.sql");
   const stored = new Map<string, Uint8Array>();
-  const bindings = bindingsFor(database, stored);
+  const databaseControl = { failNextPendingUpdate: false };
+  const storageControl = { failNextDelete: false };
+  const bindings = bindingsFor(
+    database,
+    stored,
+    storageControl,
+    databaseControl,
+  );
   const app = testApp();
-  return { app, bindings, database, stored };
+  return {
+    app,
+    bindings,
+    database,
+    databaseControl,
+    storageControl,
+    stored,
+  };
 }
 
 async function createLegacyDatabase() {
@@ -858,23 +922,34 @@ async function jsonRequest<T = unknown>(
 function bindingsFor(
   database: Database,
   stored: Map<string, Uint8Array> = new Map(),
+  storageControl = { failNextDelete: false },
+  databaseControl = { failNextPendingUpdate: false },
 ): Bindings {
   return {
     AUTH_EMAIL_FROM: "security@auth.tearleads.com",
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: toD1(database),
+    DB: toD1(database, databaseControl),
     EMAIL: {} as SendEmail,
     IMAGES: imagesFor(),
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
-    STORAGE: storageFor(stored),
+    STORAGE: storageFor(stored, storageControl),
   };
 }
 
-function storageFor(stored: Map<string, Uint8Array>) {
+function storageFor(
+  stored: Map<string, Uint8Array>,
+  control: { failNextDelete: boolean },
+) {
   return {
-    delete: async (key: string) => stored.delete(key),
+    delete: async (key: string) => {
+      if (control.failNextDelete) {
+        control.failNextDelete = false;
+        throw new Error("Transient R2 delete failure");
+      }
+      return stored.delete(key);
+    },
     get: async (key: string) => {
       const content = stored.get(key);
       if (!content) return null;
@@ -889,7 +964,7 @@ function storageFor(stored: Map<string, Uint8Array>) {
   } as unknown as R2Bucket;
 }
 
-function toD1(database: Database) {
+function toD1(database: Database, control = { failNextPendingUpdate: false }) {
   let batchTail: Promise<void> = Promise.resolve();
   return {
     batch: (statements: D1PreparedStatement[]) => {
@@ -919,6 +994,13 @@ function toD1(database: Database) {
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const runSync = () => {
+        if (
+          control.failNextPendingUpdate &&
+          query.includes("UPDATE objects SET deletion_pending = 1")
+        ) {
+          control.failNextPendingUpdate = false;
+          throw new Error("Transient D1 update failure");
+        }
         const result = database.query(query).run(...values);
         return { meta: { changes: result.changes }, success: true };
       };

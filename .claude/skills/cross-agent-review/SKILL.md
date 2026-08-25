@@ -52,7 +52,8 @@ commit, repair rounds produce new commits to read.
 - `git`, `gh` (authenticated), and `awk` on `PATH`.
 - The `@tearleads/agent-tool` package: `packages/agent-tool/src/index.ts`.
 - For Codex reviews: `codex` CLI configured (`OPENAI_API_KEY`).
-- For Claude Code reviews: `claude` CLI authenticated.
+- For Claude Code reviews: `claude` CLI with `ANTHROPIC_API_KEY` available;
+  bare mode intentionally does not read OAuth/keychain credentials.
 - A feature branch (not the default branch) with commits to review. A PR **may
   or may not** exist: with an open PR, local `HEAD` must equal the pushed PR
   head, and repairs are pushed to it; with no PR, the branch is reviewed against
@@ -398,9 +399,12 @@ Require a clean worktree before fetching or snapshotting anything:
   report-only inert.
 - Both reviewers get the prompt/diff via stdin (not argv) to avoid
   "Argument list too long" failures on large PRs.
-- The Claude reviewer runs in `--safe-mode`, disabling project hooks, plugins,
-  settings, MCP servers, and other branch-controlled customizations. It gets only
-  read-only tools (`--tools "Read,Grep,Glob"`) and no `Bash`. It needs to read:
+- The Claude reviewer runs in `--bare --safe-mode`, disabling project hooks,
+  plugins, settings, MCP servers, keychain access, persistence, and other
+  customizations. It gets only read-only tools
+  (`--tools "Read,Grep,Glob"`) and no `Bash`, inside a standalone Codex
+  permission-profile sandbox over the same tracked-files-only temporary
+  checkout. It needs to read:
   the best findings come from the code *around* the diff — an unchanged branch
   further up the file, a source-shape baseline, the callers a signature change
   breaks. `Bash` is withheld because a review needs no shell, and the session's

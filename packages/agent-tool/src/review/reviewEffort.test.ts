@@ -5,7 +5,10 @@ import {
   REVIEW_EFFORT_LEVELS,
   resolveReviewEffort,
 } from "./reviewEffort";
-import { buildClaudeReviewArgs } from "./solicitClaudeCodeReview";
+import {
+  buildClaudeReviewArgs,
+  buildClaudeSandboxArgs,
+} from "./solicitClaudeCodeReview";
 import { buildCodexReviewArgs } from "./solicitCodexReview";
 
 describe("review effort defaults", () => {
@@ -46,7 +49,11 @@ describe("resolveReviewEffort", () => {
 describe("buildClaudeReviewArgs", () => {
   test("passes --effort and keeps --print", () => {
     expect(buildClaudeReviewArgs("xhigh")).toEqual([
+      "--bare",
       "--safe-mode",
+      "--no-session-persistence",
+      "--disable-slash-commands",
+      "--no-chrome",
       "--effort",
       "xhigh",
       "--print",
@@ -67,6 +74,18 @@ describe("buildClaudeReviewArgs", () => {
 
   test("disables project hooks, plugins, settings, and MCP servers", () => {
     expect(buildClaudeReviewArgs("high")).toContain("--safe-mode");
+  });
+
+  test("runs bare Claude inside a tracked-workspace permission profile", () => {
+    const args = buildClaudeSandboxArgs("high", "/tmp/review", {
+      executable: "/opt/bin/claude",
+      readablePaths: ["/opt/bin", "/opt/bin/claude"],
+    });
+    expect(args.slice(0, 3)).toEqual(["sandbox", "--cd", "/tmp/review"]);
+    expect(args).toContain("--permission-profile");
+    expect(args).toContain("agent-tool-claude-review");
+    expect(args).toContain("/opt/bin/claude");
+    expect(args).toContain("--bare");
   });
 });
 
