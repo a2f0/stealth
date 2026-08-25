@@ -58,13 +58,46 @@ number **before** merging — afterwards the PR is no longer open, so
 `gh pr list --state open` will not find it:
 
 ```bash
-ROOT_DIR=$(realpath "$(git rev-parse --show-toplevel)")
+REALPATH_BIN=/usr/bin/realpath
+[ -x "$REALPATH_BIN" ] || REALPATH_BIN=/bin/realpath
+[ -x "$REALPATH_BIN" ] || {
+  echo "Error: trusted system realpath is unavailable" >&2
+  exit 1
+}
+CHECKOUT_ROOT=$("$REALPATH_BIN" .)
+while [ ! -e "$CHECKOUT_ROOT/.git" ] && [ "$CHECKOUT_ROOT" != "/" ]; do
+  CHECKOUT_ROOT=${CHECKOUT_ROOT%/*}
+  [ -n "$CHECKOUT_ROOT" ] || CHECKOUT_ROOT=/
+done
+[ -e "$CHECKOUT_ROOT/.git" ] || {
+  echo "Error: could not find the checkout boundary" >&2
+  exit 1
+}
+
+resolve_bootstrap_tool() {
+  tool_name=$1
+  candidate=$(command -v "$tool_name") || {
+    echo "Error: $tool_name is unavailable" >&2
+    return 1
+  }
+  candidate=$("$REALPATH_BIN" "$candidate") || return 1
+  case "$candidate" in
+    "$CHECKOUT_ROOT" | "$CHECKOUT_ROOT"/*)
+      echo "Error: refusing checkout-controlled $tool_name executable" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$candidate"
+}
+
+GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
+GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
+BUN_BIN=$(resolve_bootstrap_tool bun) || exit 1
+TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-BUN_BIN=$(command -v bun) || { echo "Error: bun is unavailable" >&2; exit 1; }
-BUN_BIN=$(realpath "$BUN_BIN") || { echo "Error: bun path is invalid" >&2; exit 1; }
-case "$BUN_BIN" in
-  "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: refusing branch-controlled bun executable" >&2; exit 1 ;;
-esac
 
 # One gh call for both values, split on the space neither a repo slug nor a
 # branch name may contain. Guard each: an unauthenticated gh leaves them empty,

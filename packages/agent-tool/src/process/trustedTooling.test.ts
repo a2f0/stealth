@@ -42,7 +42,7 @@ test("trusted tool subprocesses inherit only required environment values", () =>
 
 test("trusted skill launchers disable feature-checkout dotenv loading", () => {
   const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
-  const skillPaths = [
+  const credentialedSkillPaths = [
     ".claude/skills/cross-agent-review/SKILL.md",
     ".claude/skills/open-pr/SKILL.md",
     ".claude/skills/squash-merge/SKILL.md",
@@ -50,7 +50,7 @@ test("trusted skill launchers disable feature-checkout dotenv loading", () => {
     ".codex/skills/open-pr/SKILL.md",
     ".codex/skills/squash-merge/SKILL.md",
   ];
-  for (const skillPath of skillPaths) {
+  for (const skillPath of credentialedSkillPaths) {
     const launchers = readFileSync(path.join(repositoryRoot, skillPath), "utf8")
       .split("\n")
       .filter(
@@ -90,5 +90,50 @@ test("trusted skill launchers disable feature-checkout dotenv loading", () => {
     expect(result.stdout.trim()).toBe("{}");
   } finally {
     rmSync(hostileCheckout, { force: true, recursive: true });
+  }
+});
+
+test("shipping skills bootstrap tools outside the feature checkout", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  const skillPaths = [
+    ".claude/skills/cross-agent-review/SKILL.md",
+    ".claude/skills/open-pr/SKILL.md",
+    ".claude/skills/reset/SKILL.md",
+    ".claude/skills/squash-merge/SKILL.md",
+    ".codex/skills/cross-agent-review/SKILL.md",
+    ".codex/skills/open-pr/SKILL.md",
+    ".codex/skills/reset/SKILL.md",
+    ".codex/skills/squash-merge/SKILL.md",
+  ];
+
+  for (const skillPath of skillPaths) {
+    const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
+    const bootstrapStart = content.indexOf("REALPATH_BIN=/usr/bin/realpath");
+    expect(bootstrapStart).toBeGreaterThan(-1);
+    const bootstrap = content.slice(bootstrapStart);
+    expect(bootstrap).toContain("resolve_bootstrap_tool() {");
+    expect(bootstrap).toContain("GIT_BIN=$(resolve_bootstrap_tool git)");
+    expect(bootstrap).toContain("GH_BIN=$(resolve_bootstrap_tool gh)");
+    expect(bootstrap).toContain("export PATH");
+
+    const pathExport = bootstrap.indexOf("export PATH");
+    expect(pathExport).toBeGreaterThan(-1);
+    expect(pathExport).toBeLessThan(bootstrap.indexOf("git rev-parse"));
+    expect(pathExport).toBeLessThan(bootstrap.indexOf("gh repo view"));
+  }
+});
+
+test("open-pr validates branch names without feature-checkout code", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  for (const skillPath of [
+    ".claude/skills/open-pr/SKILL.md",
+    ".codex/skills/open-pr/SKILL.md",
+  ]) {
+    const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
+    expect(content).not.toContain("bun run lint:branch-name");
+    expect(content).toContain("branch names must match <type>/<name>");
+    expect(content).toContain(
+      "build chore ci cleanup docs feat fix perf refactor revert style test",
+    );
   }
 });

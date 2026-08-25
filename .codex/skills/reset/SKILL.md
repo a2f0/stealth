@@ -57,7 +57,43 @@ removing installed hooks that no longer exist at the target revision.
 ## Setup
 
 ```bash
-ROOT_DIR=$(git rev-parse --show-toplevel)
+REALPATH_BIN=/usr/bin/realpath
+[ -x "$REALPATH_BIN" ] || REALPATH_BIN=/bin/realpath
+[ -x "$REALPATH_BIN" ] || {
+  echo "Error: trusted system realpath is unavailable" >&2
+  exit 1
+}
+CHECKOUT_ROOT=$("$REALPATH_BIN" .)
+while [ ! -e "$CHECKOUT_ROOT/.git" ] && [ "$CHECKOUT_ROOT" != "/" ]; do
+  CHECKOUT_ROOT=${CHECKOUT_ROOT%/*}
+  [ -n "$CHECKOUT_ROOT" ] || CHECKOUT_ROOT=/
+done
+[ -e "$CHECKOUT_ROOT/.git" ] || {
+  echo "Error: could not find the checkout boundary" >&2
+  exit 1
+}
+
+resolve_bootstrap_tool() {
+  tool_name=$1
+  candidate=$(command -v "$tool_name") || {
+    echo "Error: $tool_name is unavailable" >&2
+    return 1
+  }
+  candidate=$("$REALPATH_BIN" "$candidate") || return 1
+  case "$candidate" in
+    "$CHECKOUT_ROOT" | "$CHECKOUT_ROOT"/*)
+      echo "Error: refusing checkout-controlled $tool_name executable" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$candidate"
+}
+
+GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
+GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 HOOKS_SCRIPT="$ROOT_DIR/scripts/git/install-hooks.sh"
 

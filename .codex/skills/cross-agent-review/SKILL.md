@@ -71,7 +71,45 @@ commit, repair rounds produce new commits to read.
 Resolve the branch, repo, PR, and tool path:
 
 ```bash
-ROOT_DIR=$(realpath "$(git rev-parse --show-toplevel)")
+REALPATH_BIN=/usr/bin/realpath
+[ -x "$REALPATH_BIN" ] || REALPATH_BIN=/bin/realpath
+[ -x "$REALPATH_BIN" ] || {
+  echo "Error: trusted system realpath is unavailable" >&2
+  exit 1
+}
+CHECKOUT_ROOT=$("$REALPATH_BIN" .)
+while [ ! -e "$CHECKOUT_ROOT/.git" ] && [ "$CHECKOUT_ROOT" != "/" ]; do
+  CHECKOUT_ROOT=${CHECKOUT_ROOT%/*}
+  [ -n "$CHECKOUT_ROOT" ] || CHECKOUT_ROOT=/
+done
+[ -e "$CHECKOUT_ROOT/.git" ] || {
+  echo "Error: could not find the checkout boundary" >&2
+  exit 1
+}
+
+resolve_bootstrap_tool() {
+  tool_name=$1
+  candidate=$(command -v "$tool_name") || {
+    echo "Error: $tool_name is unavailable" >&2
+    return 1
+  }
+  candidate=$("$REALPATH_BIN" "$candidate") || return 1
+  case "$candidate" in
+    "$CHECKOUT_ROOT" | "$CHECKOUT_ROOT"/*)
+      echo "Error: refusing checkout-controlled $tool_name executable" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$candidate"
+}
+
+GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
+GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
+BUN_BIN=$(resolve_bootstrap_tool bun) || exit 1
+TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -89,11 +127,6 @@ PR_LINES=$(gh pr list --head "$BRANCH" --state open --json number,headRepository
 [ -z "$PR_LINES" ] || [ -n "$FEATURE_REPO" ] || { echo "Error: same-named fork PRs exist, but this branch has no GitHub push repository" >&2; exit 1; }
 PR_NUMBER=$(printf '%s\n' "$PR_LINES" | awk -v repository="$FEATURE_REPO" '$2 == repository { print $1 }')
 [ "$(printf '%s\n' "$PR_NUMBER" | awk 'NF { count++ } END { print count + 0 }')" -le 1 ] || { echo "Error: multiple PRs match $FEATURE_REPO:$BRANCH" >&2; exit 1; }
-BUN_BIN=$(command -v bun) || { echo "Error: bun is unavailable" >&2; exit 1; }
-BUN_BIN=$(realpath "$BUN_BIN") || { echo "Error: bun path is invalid" >&2; exit 1; }
-case "$BUN_BIN" in
-  "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: refusing branch-controlled bun executable" >&2; exit 1 ;;
-esac
 TRUSTED_AGENT_TOOL_TMP=""
 ```
 

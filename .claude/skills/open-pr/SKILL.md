@@ -39,16 +39,49 @@ PR **title must conform to the repository's commitlint rules**
 ## Setup
 
 ```bash
-ROOT_DIR=$(realpath "$(git rev-parse --show-toplevel)")
+REALPATH_BIN=/usr/bin/realpath
+[ -x "$REALPATH_BIN" ] || REALPATH_BIN=/bin/realpath
+[ -x "$REALPATH_BIN" ] || {
+  echo "Error: trusted system realpath is unavailable" >&2
+  exit 1
+}
+CHECKOUT_ROOT=$("$REALPATH_BIN" .)
+while [ ! -e "$CHECKOUT_ROOT/.git" ] && [ "$CHECKOUT_ROOT" != "/" ]; do
+  CHECKOUT_ROOT=${CHECKOUT_ROOT%/*}
+  [ -n "$CHECKOUT_ROOT" ] || CHECKOUT_ROOT=/
+done
+[ -e "$CHECKOUT_ROOT/.git" ] || {
+  echo "Error: could not find the checkout boundary" >&2
+  exit 1
+}
+
+resolve_bootstrap_tool() {
+  tool_name=$1
+  candidate=$(command -v "$tool_name") || {
+    echo "Error: $tool_name is unavailable" >&2
+    return 1
+  }
+  candidate=$("$REALPATH_BIN" "$candidate") || return 1
+  case "$candidate" in
+    "$CHECKOUT_ROOT" | "$CHECKOUT_ROOT"/*)
+      echo "Error: refusing checkout-controlled $tool_name executable" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$candidate"
+}
+
+GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
+GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
+BUN_BIN=$(resolve_bootstrap_tool bun) || exit 1
+TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef -q .defaultBranchRef.name)
 BASE_URL=$(gh repo view "$REPO" --json url -q .url)
-BUN_BIN=$(command -v bun) || { echo "Error: bun is unavailable" >&2; exit 1; }
-BUN_BIN=$(realpath "$BUN_BIN") || { echo "Error: bun path is invalid" >&2; exit 1; }
-case "$BUN_BIN" in
-  "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: refusing branch-controlled bun executable" >&2; exit 1 ;;
-esac
 [ -n "$REPO" ] || { echo "Error: repository identity is unavailable" >&2; exit 1; }
 [ -n "$DEFAULT_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
 [ -n "$BASE_URL" ] || { echo "Error: repository fetch URL is unavailable" >&2; exit 1; }
@@ -112,7 +145,26 @@ fi
 
      ```bash
      git check-ref-format --branch "$NEW_BRANCH"
-     bun run lint:branch-name "$NEW_BRANCH"
+     if [ "${#NEW_BRANCH}" -gt 50 ]; then
+       echo "Error: branch names must be 50 characters or fewer" >&2
+       exit 1
+     fi
+     case "$NEW_BRANCH" in
+       */*) ;;
+       *) echo "Error: branch names must match <type>/<name>" >&2; exit 1 ;;
+     esac
+     BRANCH_TYPE=${NEW_BRANCH%%/*}
+     BRANCH_NAME=${NEW_BRANCH#*/}
+     case " build chore ci cleanup docs feat fix perf refactor revert style test " in
+       *" $BRANCH_TYPE "*) ;;
+       *) echo "Error: unsupported conventional branch type: $BRANCH_TYPE" >&2; exit 1 ;;
+     esac
+     case "$NEW_BRANCH" in
+       *[!a-z0-9._/-]*) echo "Error: branch names must use lowercase letters, numbers, dots, dashes, underscores, and slashes" >&2; exit 1 ;;
+     esac
+     case "$BRANCH_NAME" in
+       "" | [!a-z0-9]* | */ | */[!a-z0-9]*) echo "Error: every branch-name segment must begin with a lowercase letter or number" >&2; exit 1 ;;
+     esac
      ```
 
    - Inspect `git status --short` and the diff. Continue only when every local
