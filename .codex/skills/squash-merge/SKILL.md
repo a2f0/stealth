@@ -152,7 +152,7 @@ as-is.
      without either condition stops with setup guidance.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
-   - Confirms the PR reached the `MERGED` state.
+   - Waits through an active merge queue and confirms the PR reached `MERGED`.
 
 3. **On a validation failure**: relay commitlint's output, propose a corrected
    subject that satisfies the rules (valid type, ≤50 chars), and re-run with the
@@ -201,12 +201,12 @@ as-is.
    [ -n "$MERGE_COMMIT" ] || { echo "Error: could not resolve merge commit; skipping delete" >&2; exit 1; }
    git merge-base --is-ancestor "$MERGE_COMMIT" HEAD || { echo "Error: $BASE_BRANCH does not contain merge commit $MERGE_COMMIT; skipping delete" >&2; exit 1; }
 
-   MERGED_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")
    REMOTE_BRANCH_SHA=$(git ls-remote --heads "$FEATURE_REPO_URL" "$MERGED_BRANCH" | awk 'NR == 1 { print $1 }')
    if [ -n "$REMOTE_BRANCH_SHA" ]; then
-     [ "$REMOTE_BRANCH_SHA" = "$MERGED_HEAD_SHA" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH is $REMOTE_BRANCH_SHA, not merged PR head $MERGED_HEAD_SHA; refusing remote delete" >&2; exit 1; }
+     [ "$REMOTE_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$REMOTE_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH moved to $REMOTE_BRANCH_SHA after merge; refusing remote delete" >&2; exit 1; }
      git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --force-with-lease="refs/heads/$MERGED_BRANCH:$REMOTE_BRANCH_SHA" "$FEATURE_REPO_URL" ":refs/heads/$MERGED_BRANCH" || { echo "Error: could not lease-delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }
    fi
+   [ "$(git rev-parse "$MERGED_BRANCH")" = "$PR_HEAD_SHA" ] || { echo "Error: local $MERGED_BRANCH moved after merge; refusing local delete" >&2; exit 1; }
    git branch -D "$MERGED_BRANCH" || { echo "Error: could not delete local $MERGED_BRANCH" >&2; exit 1; }
    ```
 
@@ -222,11 +222,13 @@ as-is.
      from the wrong remote, a stale fork, or a base that never received the merge
      — none of which the `MERGED` state alone can detect.
    - **Remote deletion uses the feature branch's own remote, never the base
-     branch's remote.** Before deletion, its branch SHA must equal GitHub's
-     post-merge PR head, and the delete itself carries an exact force-with-lease
-     for that SHA. A commit pushed between lookup and delete makes the remote
-     reject the deletion. An empty lookup means GitHub already deleted the
-     feature branch and is treated as success.
+     branch's remote.** Before deletion, its branch SHA must equal the captured
+     pre-merge head or the known atomic merge commit, and the delete itself
+     carries an exact force-with-lease for that SHA. A commit pushed between
+     lookup and delete makes the remote reject the deletion. An empty lookup
+     means GitHub already deleted the feature branch and is treated as success.
+     Local deletion separately requires the branch tip to remain the captured
+     pre-merge head.
    - **`-D`, not `-d`, is required here** — see the note below. The `MERGED` check
      plus the ancestry check above are what make the force safe.
 

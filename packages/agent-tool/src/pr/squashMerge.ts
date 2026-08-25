@@ -312,6 +312,45 @@ function atomicReviewedMerge(
   return spawnExitCode("atomic reviewed merge push", result);
 }
 
+export function mergeStateExitCode(state: string): number | null {
+  if (state === "MERGED") return 0;
+  if (state === "CLOSED") return 1;
+  return null;
+}
+
+function waitForMergedPr(prNumber: string, repo: string): number {
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  let polls = 0;
+  while (true) {
+    let state: string;
+    try {
+      state = prState(prNumber, repo);
+    } catch (cause) {
+      process.stderr.write(
+        `Could not refresh PR #${prNumber} while waiting for its merge; retrying: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+      );
+      Atomics.wait(waitBuffer, 0, 0, 5_000);
+      continue;
+    }
+    const exitCode = mergeStateExitCode(state);
+    if (exitCode !== null) {
+      if (exitCode !== 0) {
+        process.stderr.write(
+          `PR #${prNumber} closed without reaching MERGED.\n`,
+        );
+      }
+      return exitCode;
+    }
+    polls += 1;
+    if (polls === 1 || polls % 12 === 0) {
+      process.stderr.write(
+        `PR #${prNumber} is ${state || "pending"}; waiting for the active merge or queue entry.\n`,
+      );
+    }
+    Atomics.wait(waitBuffer, 0, 0, 5_000);
+  }
+}
+
 /**
  * Squash through GitHub's policy-enforcing merge API. The API atomically binds
  * the reviewed head; the reviewed base is fetched, ancestry-checked, and
@@ -375,15 +414,7 @@ function guardedReviewedMerge(
         );
   if (mergeExitCode !== 0) return mergeExitCode;
 
-  const state = prState(pr.prNumber, pr.repo);
-  if (state !== "MERGED") {
-    process.stderr.write(
-      `PR #${pr.prNumber} is not merged (state: ${state || "unknown"}). ` +
-        "It may be queued or blocked; the reviewed squash is not complete.\n",
-    );
-    return 1;
-  }
-  return 0;
+  return waitForMergedPr(pr.prNumber, pr.repo);
 }
 
 /**
@@ -438,16 +469,7 @@ export function squashMerge(
     return exitCode;
   }
 
-  // `gh pr merge` can exit 0 after only queuing the PR (merge queue / auto-merge),
-  // where the queue also picks the method. Confirm the squash actually landed.
-  const state = prState(pr.prNumber, pr.repo);
-  if (state !== "MERGED") {
-    process.stderr.write(
-      `PR #${pr.prNumber} is not merged (state: ${state || "unknown"}). ` +
-        "It may be queued or blocked; the subject-only squash is not guaranteed.\n",
-    );
-    return 1;
-  }
-
-  return 0;
+  // `gh pr merge` can enqueue rather than immediately merge. Do not return a
+  // failure while that active mutation can still land after cleanup was skipped.
+  return waitForMergedPr(pr.prNumber, pr.repo);
 }

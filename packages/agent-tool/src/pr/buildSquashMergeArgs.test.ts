@@ -9,6 +9,7 @@ import {
   buildAtomicPushArgs,
   buildReviewedCommitArgs,
   buildSquashMergeArgs,
+  mergeStateExitCode,
   selectGuardedMergeStrategy,
 } from "./squashMerge";
 
@@ -171,5 +172,12 @@ describe("reviewed merge guards", () => {
       "merge-1:refs/heads/main",
       "merge-1:refs/heads/feat/widget",
     ]);
+  });
+
+  test("waits through active states and recognizes terminal states", () => {
+    expect(mergeStateExitCode("OPEN")).toBeNull();
+    expect(mergeStateExitCode("QUEUED")).toBeNull();
+    expect(mergeStateExitCode("MERGED")).toBe(0);
+    expect(mergeStateExitCode("CLOSED")).toBe(1);
   });
 });
