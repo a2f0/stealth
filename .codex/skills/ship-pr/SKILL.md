@@ -57,7 +57,8 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 ## Prerequisites
 
 - `git` and `gh` (authenticated) on `PATH`.
-- The `@tearleads/agent-tool` package: `packages/agent-tool/src/index.ts`.
+- The trusted `@tearleads/agent-tool` setup required by the delegated
+  `cross-agent-review`, `open-pr`, and `squash-merge` skills.
 - `node_modules` installed (`bun install`) so the commitlint CLI is available.
 - The worktree contains only changes intended for this PR. A PR may already be
   open; this is how a prior gated run resumes after fixes.
@@ -74,8 +75,6 @@ the single push. Each wrapped skill re-checks its own preconditions.
 ROOT_DIR=$(git rev-parse --show-toplevel)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
-AGENT_TOOL="$ROOT_DIR/packages/agent-tool/src/index.ts"
-[ -f "$AGENT_TOOL" ] || { echo "Error: agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
 [ -n "$DEFAULT_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
 ```
 

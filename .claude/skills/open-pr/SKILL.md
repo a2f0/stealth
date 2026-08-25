@@ -25,8 +25,10 @@ PR **title must conform to the repository's commitlint rules**
 
 ## Prerequisites
 
-- `git`, `gh` (authenticated), and POSIX `awk` on `PATH`.
-- The `@tearleads/agent-tool` package: `packages/agent-tool/src/index.ts`.
+- `git`, `gh` (authenticated), POSIX `awk`, `realpath`, and `tar` on `PATH`.
+- The `@tearleads/agent-tool` package in the fetched base commit. During the
+  package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
+  independently trusted installation outside the repository checkout.
 - `node_modules` installed (`bun install`) so the commitlint CLI is available.
 - The working tree contains only changes intended for this PR. Stop and ask
   before carrying unrelated changes onto a new branch or committing them.
@@ -37,13 +39,16 @@ PR **title must conform to the repository's commitlint rules**
 ## Setup
 
 ```bash
-ROOT_DIR=$(git rev-parse --show-toplevel)
+ROOT_DIR=$(realpath "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef -q .defaultBranchRef.name)
 BASE_URL=$(gh repo view "$REPO" --json url -q .url)
-AGENT_TOOL="$ROOT_DIR/packages/agent-tool/src/index.ts"
-[ -f "$AGENT_TOOL" ] || { echo "Error: agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
+BUN_BIN=$(command -v bun) || { echo "Error: bun is unavailable" >&2; exit 1; }
+BUN_BIN=$(realpath "$BUN_BIN") || { echo "Error: bun path is invalid" >&2; exit 1; }
+case "$BUN_BIN" in
+  "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: refusing branch-controlled bun executable" >&2; exit 1 ;;
+esac
 [ -n "$REPO" ] || { echo "Error: repository identity is unavailable" >&2; exit 1; }
 [ -n "$DEFAULT_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
 [ -n "$BASE_URL" ] || { echo "Error: repository fetch URL is unavailable" >&2; exit 1; }
@@ -75,6 +80,20 @@ BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
   echo "Error: fetched base commit is unavailable" >&2
   exit 1
 }
+
+if git cat-file -e "$BASE_HEAD:packages/agent-tool/src/index.ts" 2>/dev/null; then
+  TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
+  trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
+  git archive "$BASE_HEAD" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
+  AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
+else
+  [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || { echo "Error: base has no agent-tool; set TEARLEADS_AGENT_TOOL_DIR to a trusted external installation" >&2; exit 1; }
+  AGENT_TOOL=$(realpath "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || { echo "Error: trusted agent-tool path is invalid" >&2; exit 1; }
+  case "$AGENT_TOOL" in
+    "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted agent-tool must be outside the feature checkout" >&2; exit 1 ;;
+  esac
+fi
+[ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
 ```
 
 ## Workflow
@@ -194,7 +213,7 @@ BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
 4. **Open the PR** (title single-quoted; body via a quoted heredoc):
 
    ```bash
-   bun "$AGENT_TOOL" openPr 'feat(app): add widget' <<'EOF'
+   "$BUN_BIN" "$AGENT_TOOL" openPr 'feat(app): add widget' <<'EOF'
    ## Summary
    What changed and why.
    EOF
@@ -203,7 +222,7 @@ BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
    To default the title to the latest commit subject, or to open with no body:
 
    ```bash
-   bun "$AGENT_TOOL" openPr </dev/null
+   "$BUN_BIN" "$AGENT_TOOL" openPr </dev/null
    ```
 
    **Quote the title in single quotes** and use a **quoted heredoc** (`<<'EOF'`)

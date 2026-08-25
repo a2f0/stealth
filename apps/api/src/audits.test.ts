@@ -712,6 +712,78 @@ describe("audits", () => {
     expect(fixture.stored.size).toBe(0);
   });
 
+  it("tombstones image objects when an issue is cascade-deleted", async () => {
+    const fixture = await createFixture();
+    const now = "2026-08-25T12:00:00.000Z";
+    const definition = JSON.stringify({ sections: [], version: 1 });
+    fixture.database
+      .query(
+        `INSERT INTO audits
+         (id, organization_id, template_id, template_name, definition,
+          responses, status, started_by, created_at, updated_at)
+         VALUES ('cascade-audit', 'org_user-1', NULL, 'Cascade audit', ?, '{}',
+                 'in_progress', 'user-1', ?, ?)`,
+      )
+      .run(definition, now, now);
+    fixture.database
+      .query(
+        `INSERT INTO audit_issues
+         (id, organization_id, audit_id, item_id, title, created_by,
+          created_at, updated_at)
+         VALUES ('cascade-issue', 'org_user-1', 'cascade-audit', 'item-1',
+                 'Cascade issue', 'user-1', ?, ?)`,
+      )
+      .run(now, now);
+    fixture.database
+      .query(
+        `INSERT INTO objects
+         (id, organization_id, object_key, filename, content_type, size,
+          created_at, kind, deletion_pending)
+         VALUES ('cascade-object', 'org_user-1', 'cascade/image', 'image.png',
+                 'image/png', 3, ?, 'audit_issue_image', 0)`,
+      )
+      .run(now);
+    fixture.database
+      .query(
+        `INSERT INTO audit_issue_images
+         (id, issue_id, object_id, uploaded_by, slot, created_at)
+         VALUES ('cascade-image', 'cascade-issue', 'cascade-object', 'user-1',
+                 1, ?)`,
+      )
+      .run(now);
+    fixture.stored.set("cascade/image", Uint8Array.from([1, 2, 3]));
+    fixture.database.exec("PRAGMA foreign_keys = ON");
+
+    fixture.database
+      .query(`DELETE FROM audit_issues WHERE id = 'cascade-issue'`)
+      .run();
+
+    expect(
+      fixture.database
+        .query(`SELECT id FROM audit_issue_images WHERE id = 'cascade-image'`)
+        .get(),
+    ).toBeNull();
+    expect(
+      fixture.database
+        .query(
+          `SELECT deletion_pending, cleanup_token, upload_token
+           FROM objects WHERE id = 'cascade-object'`,
+        )
+        .get(),
+    ).toEqual({
+      cleanup_token: null,
+      deletion_pending: 1,
+      upload_token: null,
+    });
+    expect(await purgePendingAuditIssueImages(fixture.bindings, now)).toBe(1);
+    expect(fixture.stored.size).toBe(0);
+    expect(
+      fixture.database
+        .query(`SELECT id FROM objects WHERE id = 'cascade-object'`)
+        .get(),
+    ).toBeNull();
+  });
+
   it("keeps every saved template version immutable", async () => {
     const fixture = await createFixture();
     const created = await jsonRequest<TemplateResponse>(
@@ -1062,6 +1134,7 @@ async function createFixture() {
   await applyMigration(database, "0026_track_object_deletion.sql");
   await applyMigration(database, "0027_claim_object_cleanup.sql");
   await applyMigration(database, "0028_lease_audit_image_uploads.sql");
+  await applyMigration(database, "0029_tombstone_cascaded_audit_images.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,

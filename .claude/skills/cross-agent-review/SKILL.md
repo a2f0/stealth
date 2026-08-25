@@ -50,8 +50,10 @@ commit, repair rounds produce new commits to read.
 
 ## Prerequisites
 
-- `git`, `gh` (authenticated), and `awk` on `PATH`.
-- The `@tearleads/agent-tool` package: `packages/agent-tool/src/index.ts`.
+- `git`, `gh` (authenticated), `awk`, `realpath`, and `tar` on `PATH`.
+- The `@tearleads/agent-tool` package in the fetched base commit. During the
+  package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
+  independently trusted installation outside the repository checkout.
 - For Codex reviews: `codex` CLI configured (`OPENAI_API_KEY`).
 - For Claude Code reviews: `claude` CLI with `ANTHROPIC_API_KEY` available;
   bare mode intentionally does not read OAuth/keychain credentials.
@@ -69,7 +71,7 @@ commit, repair rounds produce new commits to read.
 Resolve the branch, repo, PR, and tool path:
 
 ```bash
-ROOT_DIR=$(git rev-parse --show-toplevel)
+ROOT_DIR=$(realpath "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -87,8 +89,12 @@ PR_LINES=$(gh pr list --head "$BRANCH" --state open --json number,headRepository
 [ -z "$PR_LINES" ] || [ -n "$FEATURE_REPO" ] || { echo "Error: same-named fork PRs exist, but this branch has no GitHub push repository" >&2; exit 1; }
 PR_NUMBER=$(printf '%s\n' "$PR_LINES" | awk -v repository="$FEATURE_REPO" '$2 == repository { print $1 }')
 [ "$(printf '%s\n' "$PR_NUMBER" | awk 'NF { count++ } END { print count + 0 }')" -le 1 ] || { echo "Error: multiple PRs match $FEATURE_REPO:$BRANCH" >&2; exit 1; }
-AGENT_TOOL="$ROOT_DIR/packages/agent-tool/src/index.ts"
-[ -f "$AGENT_TOOL" ] || { echo "Error: agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
+BUN_BIN=$(command -v bun) || { echo "Error: bun is unavailable" >&2; exit 1; }
+BUN_BIN=$(realpath "$BUN_BIN") || { echo "Error: bun path is invalid" >&2; exit 1; }
+case "$BUN_BIN" in
+  "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: refusing branch-controlled bun executable" >&2; exit 1 ;;
+esac
+TRUSTED_AGENT_TOOL_TMP=""
 ```
 
 If `$BRANCH` equals `$DEFAULT_BRANCH` (or a conventional `main`/`master`), report
@@ -139,6 +145,28 @@ Require a clean worktree before fetching or snapshotting anything:
    git fetch "$BASE_URL" "$BASE_REF" || { echo "Error: could not fetch $BASE_REF from $BASE_URL" >&2; exit 1; }
    FETCHED_BASE=$(git rev-parse 'FETCH_HEAD^{commit}') || { echo "Error: fetched base commit is unavailable" >&2; exit 1; }
    [ -z "$BASE_OID" ] || [ "$FETCHED_BASE" = "$BASE_OID" ] || { echo "Error: fetched $FETCHED_BASE but PR base snapshot was $BASE_OID; retry" >&2; exit 1; }
+
+   # Never execute the feature branch's launcher: it runs before the reviewer
+   # sandbox and inherits credentials. Materialize the tool from the fetched,
+   # trusted base. The explicit external path exists only to bootstrap the first
+   # PR that introduces the package; it must resolve outside this checkout.
+   if [ -n "$TRUSTED_AGENT_TOOL_TMP" ]; then
+     rm -rf "$TRUSTED_AGENT_TOOL_TMP"
+     TRUSTED_AGENT_TOOL_TMP=""
+   fi
+   if git cat-file -e "$FETCHED_BASE:packages/agent-tool/src/index.ts" 2>/dev/null; then
+     TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
+     trap 'if [ -n "$TRUSTED_AGENT_TOOL_TMP" ]; then rm -rf "$TRUSTED_AGENT_TOOL_TMP"; fi' EXIT
+     git archive "$FETCHED_BASE" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
+     AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
+   else
+     [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || { echo "Error: base has no agent-tool; set TEARLEADS_AGENT_TOOL_DIR to a trusted external installation" >&2; exit 1; }
+     AGENT_TOOL=$(realpath "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || { echo "Error: trusted agent-tool path is invalid" >&2; exit 1; }
+     case "$AGENT_TOOL" in
+       "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted agent-tool must be outside the feature checkout" >&2; exit 1 ;;
+     esac
+   fi
+   [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
    if [ "$REPAIR_ROUNDS" -eq 0 ]; then
      git merge-base --is-ancestor "$FETCHED_BASE" HEAD || { echo "Error: report-only review cannot ship a branch behind $BASE_REF; sync it and run a fresh review" >&2; exit 1; }
    fi
@@ -212,15 +240,15 @@ Require a clean worktree before fetching or snapshotting anything:
    **For Codex review:**
 
    ```bash
-   bun "$AGENT_TOOL" solicitCodexReview high "$FETCHED_BASE"
-   bun "$AGENT_TOOL" solicitCodexReview xhigh "$FETCHED_BASE"
+   "$BUN_BIN" "$AGENT_TOOL" solicitCodexReview high "$FETCHED_BASE"
+   "$BUN_BIN" "$AGENT_TOOL" solicitCodexReview xhigh "$FETCHED_BASE"
    ```
 
    **For Claude Code review:**
 
    ```bash
-   bun "$AGENT_TOOL" solicitClaudeCodeReview xhigh "$FETCHED_BASE"
-   bun "$AGENT_TOOL" solicitClaudeCodeReview high "$FETCHED_BASE"
+   "$BUN_BIN" "$AGENT_TOOL" solicitClaudeCodeReview xhigh "$FETCHED_BASE"
+   "$BUN_BIN" "$AGENT_TOOL" solicitClaudeCodeReview high "$FETCHED_BASE"
    ```
 
    **Fallback behavior (required):**
@@ -231,7 +259,7 @@ Require a clean worktree before fetching or snapshotting anything:
      self-review:
 
      ```bash
-     bun "$AGENT_TOOL" solicitClaudeCodeReview xhigh "$FETCHED_BASE"
+     "$BUN_BIN" "$AGENT_TOOL" solicitClaudeCodeReview xhigh "$FETCHED_BASE"
      ```
 
    - If the Claude Code review also fails (or was selected first and fails due

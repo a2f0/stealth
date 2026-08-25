@@ -43,8 +43,10 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
 
 ## Prerequisites
 
-- `git`, `gh` (authenticated), and POSIX `awk` on `PATH`.
-- The `@tearleads/agent-tool` package: `packages/agent-tool/src/index.ts`.
+- `git`, `gh` (authenticated), POSIX `awk`, `realpath`, and `tar` on `PATH`.
+- The `@tearleads/agent-tool` package in the PR's base commit. During the
+  package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
+  independently trusted installation outside the repository checkout.
 - `node_modules` installed (`bun install`) so the commitlint CLI is available.
 - An open, mergeable PR on the current branch.
 
@@ -56,10 +58,13 @@ number **before** merging — afterwards the PR is no longer open, so
 `gh pr list --state open` will not find it:
 
 ```bash
-ROOT_DIR=$(git rev-parse --show-toplevel)
+ROOT_DIR=$(realpath "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-AGENT_TOOL="$ROOT_DIR/packages/agent-tool/src/index.ts"
-[ -f "$AGENT_TOOL" ] || { echo "Error: agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
+BUN_BIN=$(command -v bun) || { echo "Error: bun is unavailable" >&2; exit 1; }
+BUN_BIN=$(realpath "$BUN_BIN") || { echo "Error: bun path is invalid" >&2; exit 1; }
+case "$BUN_BIN" in
+  "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: refusing branch-controlled bun executable" >&2; exit 1 ;;
+esac
 
 # One gh call for both values, split on the space neither a repo slug nor a
 # branch name may contain. Guard each: an unauthenticated gh leaves them empty,
@@ -88,6 +93,25 @@ PR_HEAD_REPO=$(gh pr view "$PR_NUMBER" --json headRepository -q .headRepository.
 # The branch to return to is the PR's base — NOT necessarily the default branch.
 BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName -R "$REPO")
 [ -n "$BASE_BRANCH" ] || { echo "Error: could not resolve base branch for PR #$PR_NUMBER" >&2; exit 1; }
+PR_BASE_SHA=$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid -R "$REPO")
+[ -n "$PR_BASE_SHA" ] || { echo "Error: could not resolve PR base SHA" >&2; exit 1; }
+git fetch --quiet "$BASE_REPO_URL" "$BASE_BRANCH" || { echo "Error: could not fetch PR base" >&2; exit 1; }
+TOOL_BASE_SHA=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || { echo "Error: fetched PR base is unavailable" >&2; exit 1; }
+[ "$TOOL_BASE_SHA" = "$PR_BASE_SHA" ] || { echo "Error: PR base moved while resolving the trusted agent-tool; retry" >&2; exit 1; }
+
+if git cat-file -e "$TOOL_BASE_SHA:packages/agent-tool/src/index.ts" 2>/dev/null; then
+  TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
+  trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
+  git archive "$TOOL_BASE_SHA" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
+  AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
+else
+  [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || { echo "Error: base has no agent-tool; set TEARLEADS_AGENT_TOOL_DIR to a trusted external installation" >&2; exit 1; }
+  AGENT_TOOL=$(realpath "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || { echo "Error: trusted agent-tool path is invalid" >&2; exit 1; }
+  case "$AGENT_TOOL" in
+    "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted agent-tool must be outside the feature checkout" >&2; exit 1 ;;
+  esac
+fi
+[ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
 
 PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")
 [ -n "$PR_HEAD_SHA" ] || { echo "Error: could not resolve PR head SHA" >&2; exit 1; }
@@ -117,11 +141,11 @@ as-is.
 2. **Run the reviewed merge**:
 
    ```bash
-   bun "$AGENT_TOOL" squashMerge 'feat(app): add widget'
+   "$BUN_BIN" "$AGENT_TOOL" squashMerge 'feat(app): add widget'
    # or, to default to the PR title:
-   bun "$AGENT_TOOL" squashMerge
+   "$BUN_BIN" "$AGENT_TOOL" squashMerge
    # or, bind the merge to a reviewed head/base pair:
-   bun "$AGENT_TOOL" squashMerge 'feat(app): add widget' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
+   "$BUN_BIN" "$AGENT_TOOL" squashMerge 'feat(app): add widget' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
    ```
 
    **Quote the subject in single quotes** so the shell does not expand
