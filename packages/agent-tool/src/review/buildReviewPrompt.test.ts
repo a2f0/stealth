@@ -5,6 +5,7 @@ import {
   buildReviewPrompt,
   CLAUDE_ACCESS_NOTE,
   CODEX_ACCESS_NOTE,
+  readReviewInstructions,
 } from "./reviewPrompt";
 
 describe("buildReviewPrompt", () => {
@@ -79,5 +80,34 @@ describe("buildReviewPrompt", () => {
 
     expect(prompt).toContain("## Review Guidelines");
     expect(prompt).toContain("Blocker, Major, Minor, Suggestion");
+  });
+});
+
+describe("readReviewInstructions", () => {
+  test("loads policy only from the trusted base commit", () => {
+    const reads: string[] = [];
+    const policy = readReviewInstructions(
+      "/repo",
+      "trusted-base-sha",
+      (rootDir, ref, filename) => {
+        reads.push(`${rootDir}:${ref}:${filename}`);
+        if (filename === "REVIEW.md") throw new Error("missing");
+        return "TRUSTED POLICY";
+      },
+    );
+
+    expect(policy).toBe("TRUSTED POLICY");
+    expect(reads).toEqual([
+      "/repo:trusted-base-sha:REVIEW.md",
+      "/repo:trusted-base-sha:AGENTS.md",
+    ]);
+  });
+
+  test("returns empty policy when the base contains neither file", () => {
+    expect(
+      readReviewInstructions("/repo", "base", () => {
+        throw new Error("missing");
+      }),
+    ).toBe("");
   });
 });

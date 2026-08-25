@@ -20,7 +20,8 @@ Both actions:
 
 1. Resolve the review base from git + `gh` — the PR's base when the branch has an
    open PR, the repository's default branch when it does not.
-2. Verify there are changes against that base.
+2. Load `REVIEW.md` or `AGENTS.md` from that trusted base commit, never from the
+   contributor-controlled feature worktree, and verify there are changes.
 3. Build the repo's verdict-gated review prompt over the diff and hand it to the
    target agent's CLI on stdin.
 4. Relay the review to stdout and gate it: a usable review carries a
@@ -31,10 +32,11 @@ Both actions:
 Claude reviews in safe mode, with project hooks, plugins, settings, and MCP
 servers disabled and only read-only tools (`Read,Grep,Glob`, no `Bash`). Codex
 reviews via `codex exec` in a **read-only sandbox with the user config ignored**
-(the sandbox confines shell commands, not user-configured MCP tools), and
-only its final message — captured with `--output-last-message` — is relayed, so
-the output is the review itself rather than the session's investigative
-transcript.
+(the sandbox confines shell commands, not user-configured MCP tools). It runs
+from a temporary primary workspace so contributor-controlled `AGENTS.md` files
+are not auto-loaded, with the repository added for read access. Only its final
+message — captured with `--output-last-message` — is relayed, so the output is
+the review itself rather than the session's investigative transcript.
 
 The optional effort argument sets the reviewer's reasoning effort, defaulting to
 **`xhigh` for Claude** and **`high` for Codex**. It is passed as
@@ -84,13 +86,17 @@ auto-generated body or extended message.
 bun packages/agent-tool/src/index.ts squashMerge "feat(app): add widget"
 # Or omit to default to the PR title:
 bun packages/agent-tool/src/index.ts squashMerge
+# Bind the merge to the reviewed head/base pair:
+bun packages/agent-tool/src/index.ts squashMerge '' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
 ```
 
 The subject is validated against the repository's own commitlint setup (the same
 `@commitlint/cli` binary and `commitlint.config.mts` the commit-msg hook uses),
 so conventional-commit syntax and the 50-char header limit are enforced
-identically. On success it runs `gh pr merge --squash --subject <subject>
---body ""`. Backs the `squash-merge` skill.
+identically. An optional reviewed base SHA stops the merge if the PR base has
+moved, and an optional head SHA is passed to GitHub's atomic
+`--match-head-commit` guard. On success it runs a subject-only squash merge.
+Backs the `squash-merge` skill.
 
 The tool only merges. Returning to the base branch, fast-forwarding it, and
 deleting the merged branch live in the `squash-merge` skill *around* this call —

@@ -363,6 +363,14 @@ export function prState(prNumber: string, repo: string): string {
   );
 }
 
+/** Current base commit of a PR, read immediately before a guarded merge. */
+export function prBaseOid(prNumber: string, repo: string): string {
+  return stringField(
+    run("gh", ["pr", "view", prNumber, "--json", "baseRefOid", "-R", repo]),
+    "baseRefOid",
+  );
+}
+
 /** Identity of the open PR for the current branch (no base-ref resolution). */
 export function resolvePr(): PrIdentity {
   const view = fetchPrView();

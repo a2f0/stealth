@@ -47,10 +47,15 @@ const TRANSCRIPT_TAIL_CHARS = 2000;
  * `--disable plugins/hooks/apps` closes the remaining gaps: plugin-provided
  * MCP servers, trusted hooks, and app connectors all live outside
  * `config.toml`, so ignoring the config alone would leave them active.
+ * The primary workspace is a fresh temporary directory, with the repository
+ * added only for read access, so contributor-controlled `AGENTS.md` files are
+ * not auto-loaded as reviewer policy.
  */
 export function buildCodexReviewArgs(
   effort: ReviewEffort,
   lastMessageFile: string,
+  repositoryRoot: string,
+  reviewRoot: string,
 ): string[] {
   return [
     "exec",
@@ -63,6 +68,11 @@ export function buildCodexReviewArgs(
     "apps",
     "--sandbox",
     "read-only",
+    "--cd",
+    reviewRoot,
+    "--add-dir",
+    repositoryRoot,
+    "--skip-git-repo-check",
     "-c",
     `model_reasoning_effort="${effort}"`,
     "--color",
@@ -98,6 +108,7 @@ export function spawnCodexReview(
   prompt: string,
   effort: ReviewEffort,
   env: ReviewerEnv = process.env,
+  repositoryRoot = process.cwd(),
 ): number {
   const outDir = mkdtempSync(path.join(tmpdir(), "agent-tool-codex-"));
   let attempt = 0;
@@ -109,7 +120,7 @@ export function spawnCodexReview(
       const lastMessageFile = path.join(outDir, `review-${attempt}.md`);
       const result = spawnSync(
         "codex",
-        buildCodexReviewArgs(effort, lastMessageFile),
+        buildCodexReviewArgs(effort, lastMessageFile, repositoryRoot, outDir),
         {
           stdio: ["pipe", "pipe", "pipe"],
           input: prompt,
@@ -150,9 +161,9 @@ export function solicitCodexReview(
   const prompt = buildReviewPrompt({
     context,
     diff,
-    reviewInstructions: readReviewInstructions(rootDir),
-    accessNote: CODEX_ACCESS_NOTE,
+    reviewInstructions: readReviewInstructions(rootDir, context.baseRef),
+    accessNote: `${CODEX_ACCESS_NOTE}. Repository root: ${rootDir}`,
   });
 
-  return spawnCodexReview(prompt, effort);
+  return spawnCodexReview(prompt, effort, process.env, rootDir);
 }

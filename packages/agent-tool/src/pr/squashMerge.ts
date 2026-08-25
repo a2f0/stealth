@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-import { prState, resolvePr, spawnExitCode } from "../git/prContext";
+import { prBaseOid, prState, resolvePr, spawnExitCode } from "../git/prContext";
 import { appendPrNumberSuffix, stripPrNumberSuffix } from "./prNumberSuffix";
 import { singleLineSubject } from "./subjectLine";
 import { validateCommitSubject } from "./validateCommitSubject";
@@ -48,17 +48,34 @@ export function buildSquashMergeArgs(
   return args;
 }
 
+export function assertExpectedBaseCommit(
+  expectedBaseSha: string | undefined,
+  actualBaseSha: string,
+): void {
+  if (
+    expectedBaseSha !== undefined &&
+    expectedBaseSha.length > 0 &&
+    expectedBaseSha !== actualBaseSha
+  ) {
+    throw new Error(
+      `PR base moved from reviewed commit ${expectedBaseSha} to ${actualBaseSha}; sync and re-review before merging.`,
+    );
+  }
+}
+
 /**
  * Squash-merge the open PR for the current branch with a subject-only commit
  * message — no auto-generated body or extended message. The subject defaults to
  * the PR title when one is not supplied, and is validated against the repo's
  * commitlint rules before the merge runs. When `expectedHeadSha` is supplied the
- * merge is bound to that commit via `--match-head-commit`.
+ * merge is bound to that commit via `--match-head-commit`; when an expected
+ * base SHA is supplied, the merge stops if the PR base moved after review.
  */
 export function squashMerge(
   rootDir: string,
   subjectArg: string | undefined,
   expectedHeadSha?: string,
+  expectedBaseSha?: string,
 ): number {
   const pr = resolvePr();
   const subject = resolveSubject(subjectArg, pr.title);
@@ -71,6 +88,10 @@ export function squashMerge(
   const baseSubject = stripPrNumberSuffix(subject);
   validateCommitSubject(rootDir, baseSubject);
   const finalSubject = appendPrNumberSuffix(baseSubject, pr.prNumber);
+
+  if (expectedBaseSha !== undefined && expectedBaseSha.length > 0) {
+    assertExpectedBaseCommit(expectedBaseSha, prBaseOid(pr.prNumber, pr.repo));
+  }
 
   const result = spawnSync(
     "gh",

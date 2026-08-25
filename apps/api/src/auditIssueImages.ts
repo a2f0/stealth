@@ -45,12 +45,12 @@ auditIssueImages.post("/:issueId/images", async (context) => {
   if (file.size > maxImageBytes) {
     return context.json({ error: "Images must be 10 MB or smaller." }, 413);
   }
-  const bytes = await file.arrayBuffer();
-  const validation = await validateImage(context.env.IMAGES, bytes);
+  const sourceBytes = await file.arrayBuffer();
+  const validation = await validateImage(context.env.IMAGES, sourceBytes);
   if ("error" in validation) {
-    return context.json({ error: validation.error }, 400);
+    return context.json({ error: validation.error }, validation.status);
   }
-  const { imageType } = validation;
+  const { bytes, imageType } = validation;
 
   const id = crypto.randomUUID();
   const objectId = crypto.randomUUID();
@@ -80,7 +80,7 @@ auditIssueImages.post("/:issueId/images", async (context) => {
         objectKey,
         filename,
         imageType.contentType,
-        file.size,
+        bytes.byteLength,
         createdAt,
       ),
       context.env.DB.prepare(
@@ -248,17 +248,17 @@ function supportedImageType(format: string) {
   switch (format.toLowerCase()) {
     case "image/png":
     case "png":
-      return { contentType: "image/png", extension: "png" };
+      return { contentType: "image/png", extension: "png" } as const;
     case "image/jpeg":
     case "jpeg":
     case "jpg":
-      return { contentType: "image/jpeg", extension: "jpg" };
+      return { contentType: "image/jpeg", extension: "jpg" } as const;
     case "image/gif":
     case "gif":
-      return { contentType: "image/gif", extension: "gif" };
+      return { contentType: "image/gif", extension: "gif" } as const;
     case "image/webp":
     case "webp":
-      return { contentType: "image/webp", extension: "webp" };
+      return { contentType: "image/webp", extension: "webp" } as const;
     default:
       return null;
   }
@@ -269,12 +269,16 @@ async function validateImage(images: ImagesBinding, bytes: ArrayBuffer) {
   try {
     imageInfo = await images.info(new Blob([bytes]).stream());
   } catch {
-    return { error: "The uploaded file is not a valid image." } as const;
+    return {
+      error: "The uploaded file is not a valid image.",
+      status: 400,
+    } as const;
   }
   const imageType = supportedImageType(imageInfo.format);
   if (!imageType || !("width" in imageInfo)) {
     return {
       error: "Images must be JPEG, PNG, GIF, or WebP files.",
+      status: 400,
     } as const;
   }
   const { height, width } = imageInfo;
@@ -290,9 +294,45 @@ async function validateImage(images: ImagesBinding, bytes: ArrayBuffer) {
     return {
       error:
         "Images must be no larger than 12,000 pixels per side and 40 megapixels.",
+      status: 400,
     } as const;
   }
-  return { imageType } as const;
+  try {
+    const normalized = await images
+      .input(new Blob([bytes]).stream())
+      .output({ anim: false, format: imageType.contentType });
+    const normalizedImageType = supportedImageType(normalized.contentType());
+    if (normalizedImageType?.contentType !== imageType.contentType) {
+      return {
+        error: "The uploaded image could not be normalized safely.",
+        status: 400,
+      } as const;
+    }
+    const normalizedBytes = await new Response(
+      normalized.image(),
+    ).arrayBuffer();
+    if (normalizedBytes.byteLength === 0) {
+      return {
+        error: "The uploaded image could not be normalized safely.",
+        status: 400,
+      } as const;
+    }
+    if (normalizedBytes.byteLength > maxImageBytes) {
+      return {
+        error: "Normalized images must be 10 MB or smaller.",
+        status: 413,
+      } as const;
+    }
+    return {
+      bytes: normalizedBytes,
+      imageType: normalizedImageType,
+    } as const;
+  } catch {
+    return {
+      error: "The uploaded image could not be normalized safely.",
+      status: 400,
+    } as const;
+  }
 }
 
 export { auditIssueImages };

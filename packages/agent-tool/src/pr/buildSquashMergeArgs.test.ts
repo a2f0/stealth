@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { buildSquashMergeArgs } from "./squashMerge";
+import { assertExpectedBaseCommit, buildSquashMergeArgs } from "./squashMerge";
 
 const pr = { prNumber: "1537", repo: "a2f0/stealth" };
 
@@ -35,5 +35,18 @@ describe("buildSquashMergeArgs", () => {
   test("treats an empty head SHA as absent", () => {
     const args = buildSquashMergeArgs(pr, "feat: x (#1537)", "");
     expect(args).not.toContain("--match-head-commit");
+  });
+});
+
+describe("assertExpectedBaseCommit", () => {
+  test("accepts the reviewed base and an omitted base guard", () => {
+    expect(() => assertExpectedBaseCommit("base-1", "base-1")).not.toThrow();
+    expect(() => assertExpectedBaseCommit(undefined, "base-1")).not.toThrow();
+  });
+
+  test("requires re-review when the base moves", () => {
+    expect(() => assertExpectedBaseCommit("base-1", "base-2")).toThrow(
+      "sync and re-review",
+    );
   });
 });

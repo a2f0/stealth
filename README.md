@@ -98,7 +98,8 @@ issues can include a description, be reassigned, and have up to ten JPEG, PNG,
 GIF, or WebP images attached. Image metadata is organization-scoped in D1 and
 the private image bytes are stored under organization and issue prefixes in R2.
 The Cloudflare Images binding validates image structure, type, and dimensions
-before an upload is written to storage.
+and normalizes uploads to a single non-animated frame before anything is written
+to storage.
 Audit runs snapshot their template so later template edits do not rewrite
 history.
 Customizing a global template creates a new organization-scoped form instead
@@ -283,12 +284,12 @@ manual step is useful:
 bun run review:claude
 bun run review:codex
 bun run pr:open "feat: describe the change"
-bun run merge:squash "feat: describe the change" <reviewed-head-sha>
+bun run merge:squash "feat: describe the change" <reviewed-head-sha> <reviewed-base-sha>
 ```
 
 The ship flow commits locally, requests a cross-agent review before the first
-push, opens one pull request, binds the squash merge to the reviewed head SHA,
-and restores a clean, current `main` branch afterward.
+push, opens one pull request, guards the squash merge with the reviewed head and
+base SHAs, and restores a clean, current `main` branch afterward.
 
 The lint suite is adapted from Tearleads and runs Biome, Markdownlint,
 ls-lint, Knip, and strict TypeScript checks. Installed Git hooks lint staged

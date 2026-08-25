@@ -4,7 +4,12 @@ import { buildCodexReviewArgs } from "./solicitCodexReview";
 
 describe("buildCodexReviewArgs", () => {
   test("execs read-only with pinned effort, capturing the last message", () => {
-    const args = buildCodexReviewArgs("high", "/tmp/x/review-1.md");
+    const args = buildCodexReviewArgs(
+      "high",
+      "/tmp/x/review-1.md",
+      "/repo",
+      "/tmp/x",
+    );
 
     expect(args).toEqual([
       "exec",
@@ -17,6 +22,11 @@ describe("buildCodexReviewArgs", () => {
       "apps",
       "--sandbox",
       "read-only",
+      "--cd",
+      "/tmp/x",
+      "--add-dir",
+      "/repo",
+      "--skip-git-repo-check",
       "-c",
       'model_reasoning_effort="high"',
       "--color",
@@ -34,7 +44,12 @@ describe("buildCodexReviewArgs", () => {
     // table overrides merge — so the user config is ignored wholesale, and
     // plugins, hooks, and app connectors (all merged from outside config.toml)
     // are disabled by feature flag.
-    const args = buildCodexReviewArgs("high", "/tmp/x/review-1.md");
+    const args = buildCodexReviewArgs(
+      "high",
+      "/tmp/x/review-1.md",
+      "/repo",
+      "/tmp/x",
+    );
 
     expect(args).toContain("--ignore-user-config");
     const disabled = args.filter(
@@ -44,11 +59,30 @@ describe("buildCodexReviewArgs", () => {
   });
 
   test("reads the prompt from stdin, never argv", () => {
-    const args = buildCodexReviewArgs("xhigh", "/tmp/x/review-1.md");
+    const args = buildCodexReviewArgs(
+      "xhigh",
+      "/tmp/x/review-1.md",
+      "/repo",
+      "/tmp/x",
+    );
 
     // `-` must be the trailing positional: it is what makes codex read the
     // prompt (and its potentially argv-breaking diff) from stdin.
     expect(args.at(-1)).toBe("-");
     expect(args).toContain('model_reasoning_effort="xhigh"');
+  });
+
+  test("does not load contributor instructions as workspace policy", () => {
+    const args = buildCodexReviewArgs(
+      "high",
+      "/tmp/x/review.md",
+      "/repo",
+      "/tmp/x",
+    );
+    expect(args.slice(args.indexOf("--cd"), args.indexOf("--cd") + 2)).toEqual([
+      "--cd",
+      "/tmp/x",
+    ]);
+    expect(args).toContain("/repo");
   });
 });

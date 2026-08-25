@@ -24,12 +24,15 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
   adds `--match-head-commit <sha>` so GitHub **atomically refuses** the merge if
   the PR head has moved off that commit. `ship-pr` uses this to guarantee only
   the reviewed commit is merged.
+- Third argument (optional): the expected PR base SHA. When given, the tool
+  snapshots the PR immediately before merge and refuses if its base moved away
+  from the reviewed commit.
 - `--keep-branch` (optional flag, position-independent): skip the post-merge
   cleanup (step 4) and stay on the feature branch. Use when the branch is still
   needed locally (e.g. to build a follow-up PR on top of it).
 
   **This flag is consumed by this skill and must never reach the tool.** The
-  tool takes only the two positionals above — `squashMerge <subject> <sha>` —
+  tool takes only the three positionals above — subject, head SHA, base SHA —
   and how a forwarded `--keep-branch` fails depends on where it lands: first, it
   is read as the *subject* and rejected by commitlint; after the positionals
   (the position `ship-pr` forwards), it is **silently ignored**. The silent case
@@ -114,8 +117,8 @@ as-is.
    bun "$AGENT_TOOL" squashMerge 'feat(app): add widget'
    # or, to default to the PR title:
    bun "$AGENT_TOOL" squashMerge
-   # or, bind the merge to a specific reviewed head commit:
-   bun "$AGENT_TOOL" squashMerge 'feat(app): add widget' "$REVIEWED_SHA"
+   # or, bind the merge to a reviewed head/base pair:
+   bun "$AGENT_TOOL" squashMerge 'feat(app): add widget' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
    ```
 
    **Quote the subject in single quotes** so the shell does not expand
@@ -126,6 +129,8 @@ as-is.
 
    The tool:
    - Resolves the open PR for the current branch.
+   - Refuses to merge when a supplied reviewed base SHA no longer matches the
+     PR's current base snapshot.
    - Rejects a subject that spans multiple lines (upholds the subject-only
      guarantee).
    - Validates the subject — with any trailing `(#<n>)` stripped first — using

@@ -136,26 +136,32 @@ loop, subject-only squash, and `MERGED`-state verification.
    single push is preserved), snapshots the head — the pushed PR head when one
    is open, the local HEAD otherwise — reviews it, repairs blocking findings
    (committing locally when there is no PR, pushing when there is), and
-   re-reviews every head it changes. It reports back a **head SHA**, a
-   **verdict**, and the **repair rounds** it performed. The SHA is a reviewed
-   head on every verdict except **review-could-not-run**, where it is the
-   unreviewed candidate head — only reachable here via `--merge-anyway`.
+   re-reviews every head it changes. It reports back a **head SHA**, the exact
+   **base SHA** used for that review, a **verdict**, and the **repair rounds** it
+   performed. The head is reviewed on every verdict except
+   **review-could-not-run**, where it is the unreviewed candidate head — only
+   reachable here via `--merge-anyway`.
 
    Relay its output — which agent ran, whether it fell back, the findings, and
    what was repaired.
 
-   Take its reported head SHA as `REVIEWED_SHA` and confirm it is still the local
-   HEAD — and, when a PR is already open, the pushed head too:
+   Take its reported SHAs as `REVIEWED_SHA` and `REVIEWED_BASE_SHA`. Confirm the
+   head is still local `HEAD` — and, when a PR is already open, that both the
+   pushed head and PR base still match:
 
    ```bash
    REVIEWED_SHA=<final reviewed SHA reported by cross-agent-review>
+   REVIEWED_BASE_SHA=<final base SHA reported by cross-agent-review>
    test "$REVIEWED_SHA" = "$(git rev-parse HEAD)"
-   [ -z "$PR_NUMBER" ] || test "$REVIEWED_SHA" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)"
+   if [ -n "$PR_NUMBER" ]; then
+     PR_SHAS=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid -q '.headRefOid + " " + .baseRefOid')
+     test "$PR_SHAS" = "$REVIEWED_SHA $REVIEWED_BASE_SHA"
+   fi
    ```
 
-   If either differs, a commit landed after the loop finished. Discard the
-   result, reconcile safely, and re-run `cross-agent-review` on the new head.
-   Never carry a stale SHA into the later steps.
+   If either SHA differs, a head commit or base commit landed after the loop
+   finished. Discard the result, reconcile safely, and re-run
+   `cross-agent-review`. Never carry stale SHAs into the later steps.
 
    **Merge gate** — decide on the reported verdict:
    - **Clean, or non-blocking nits only** — carry that exact `REVIEWED_SHA`
@@ -191,17 +197,16 @@ loop, subject-only squash, and `MERGED`-state verification.
      with the reviewed repairs; do **not** call `open-pr`. Reuse its number, URL,
      and title.
 
-   Then confirm the pushed PR head is exactly the reviewed head, so step 4 binds
-   the merge to a commit a review actually read:
+   Then confirm the pushed PR head and base are exactly the reviewed pair:
 
    ```bash
    test "$REVIEWED_SHA" = "$(git rev-parse HEAD)"
-   test "$REVIEWED_SHA" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)"
+   PR_SHAS=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid -q '.headRefOid + " " + .baseRefOid')
+   test "$PR_SHAS" = "$REVIEWED_SHA $REVIEWED_BASE_SHA"
    ```
 
-   If either differs — `open-pr` committed a stray change, or the head moved —
-   reconcile and re-review before merging; never merge a head the review did not
-   read.
+   If either differs — `open-pr` committed a stray change, the head moved, or
+   the base advanced — reconcile and re-review before merging.
 
    **Sole exception — the pre-push co-author strip.** `checkCommitTrust`
    rejects `Co-authored-by` trailers; the only remedy is a message rewrite,
@@ -210,7 +215,7 @@ loop, subject-only squash, and `MERGED`-state verification.
 
    ```bash
    test "$(git rev-parse "$REVIEWED_SHA^{tree}")" = "$(git rev-parse "HEAD^{tree}")"
-   test "$(git merge-base "$REVIEWED_SHA" "origin/$DEFAULT_BRANCH")" = "$(git merge-base HEAD "origin/$DEFAULT_BRANCH")"
+   test "$(git merge-base "$REVIEWED_SHA" "$REVIEWED_BASE_SHA")" = "$(git merge-base HEAD "$REVIEWED_BASE_SHA")"
    REVIEWED_SHA=$(git rev-parse HEAD)
    ```
 
@@ -218,12 +223,21 @@ loop, subject-only squash, and `MERGED`-state verification.
    no review read even with equal trees. The message diff must remove only
    `Co-authored-by` lines; anything else keeps the rule above.
 
-4. **Squash-merge and clean up (bound to the reviewed head)** — invoke the
-   `squash-merge` skill, passing `REVIEWED_SHA` as its **second (head-SHA)
-   argument** so the merge runs with `--match-head-commit` and GitHub
-   **atomically** refuses to merge anything but the reviewed commit. This closes
-   the window between the gate decision and the merge — the guard is enforced by
-   GitHub at merge time, not by a racy preflight check.
+4. **Squash-merge and clean up (bound to the reviewed head and base)** — query
+   the PR base once more and return to step 2 if it differs from
+   `REVIEWED_BASE_SHA`:
+
+   ```bash
+   test "$REVIEWED_BASE_SHA" = "$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid)"
+   ```
+
+   Then invoke the `squash-merge` skill, passing
+   `REVIEWED_SHA` as its **second (head-SHA) argument** and
+   `REVIEWED_BASE_SHA` as its **third (base-SHA) argument**. The merge runs with
+   `--match-head-commit`, so GitHub
+   **atomically** refuses to merge anything but the reviewed head commit. This
+   closes the head-movement window at GitHub; the explicit base checks prevent a
+   known newer base from bypassing re-review.
 
    That skill also owns the post-merge cleanup: once GitHub confirms `MERGED`, it
    returns to the PR's base branch, fast-forwards it, verifies it contains the
@@ -238,13 +252,14 @@ loop, subject-only squash, and `MERGED`-state verification.
    `bun "$AGENT_TOOL" squashMerge …` merges the PR and silently skips the cleanup,
    leaving the feature branch checked out and undeleted.
 
-   Because the head SHA is the **second** positional argument, pass an empty
-   first argument to default the subject to the PR title — the skill takes the
-   same arguments this flow forwards:
+   The tool also snapshots the current PR base immediately before invoking the
+   merge and refuses when it differs from the reviewed base. Because the head
+   and base SHAs are the **second and third** positionals, pass an empty first
+   argument to default the subject to the PR title:
 
    ```text
-   squash-merge '' "$REVIEWED_SHA"            # subject defaults to the PR title
-   squash-merge '' "$REVIEWED_SHA" --keep-branch   # only when the caller gave it
+   squash-merge '' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
+   squash-merge '' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA" --keep-branch
    ```
 
    The empty subject falls back to the PR title captured when the PR was opened
@@ -302,13 +317,13 @@ loop, subject-only squash, and `MERGED`-state verification.
   of every changed head. This skill only reads the verdict it reports and
   decides whether to merge. `--repair-rounds` and `--passes` are forwarded, not
   interpreted.
-- **The merged head is the reviewed head** — `cross-agent-review` reports a SHA
-  it actually reviewed; this skill re-verifies it against the local head (and
-  against the pushed head once the PR is open) and passes it to `squash-merge`,
-  which binds the merge with `--match-head-commit`. GitHub then rejects the
-  merge outright if any commit landed after the review, so an unreviewed commit
-  can never be merged. (A message-only co-author strip keeps it: step 3 checks
-  tree and merge-base identity, then re-pins `REVIEWED_SHA`.) The lone exception
+- **The merged head and base are the reviewed pair** — `cross-agent-review`
+  reports the exact head and base it reviewed. This skill re-verifies both once
+  the PR is open and immediately before merge; `squash-merge` checks the base
+  snapshot again and binds the head with `--match-head-commit`. A head or base
+  change therefore sends the flow back through sync and review. (A message-only
+  co-author strip keeps it: step 3 checks tree and merge-base identity, then
+  re-pins `REVIEWED_SHA`.) The lone exception
   is an explicit `--merge-anyway` over a could-not-run verdict, where the bound
   head is a candidate that no review read — the merge is still pinned, but the
   reviewed-head guarantee is the thing the caller chose to waive.

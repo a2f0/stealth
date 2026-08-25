@@ -956,21 +956,40 @@ function pngBytes() {
 }
 
 function imagesFor(dimensions: { height?: number; width?: number } = {}) {
+  const readValidPng = async (stream: ReadableStream<Uint8Array>) => {
+    const actual = new Uint8Array(await new Response(stream).arrayBuffer());
+    const expected = pngBytes();
+    if (
+      actual.length !== expected.length ||
+      !actual.every((byte, index) => byte === expected[index])
+    ) {
+      throw new Error("Invalid test image");
+    }
+    return actual;
+  };
   return {
     info: async (stream: ReadableStream<Uint8Array>) => {
-      const actual = new Uint8Array(await new Response(stream).arrayBuffer());
-      const expected = pngBytes();
-      if (
-        actual.length !== expected.length ||
-        !actual.every((byte, index) => byte === expected[index])
-      ) {
-        throw new Error("Invalid test image");
-      }
+      const actual = await readValidPng(stream);
       return {
         fileSize: actual.length,
         format: "image/png",
         height: dimensions.height ?? 1,
         width: dimensions.width ?? 1,
+      };
+    },
+    input: (stream: ReadableStream<Uint8Array>) => {
+      const actual = readValidPng(stream);
+      return {
+        output: async (options: ImageOutputOptions) => {
+          if (options.anim !== false || options.format !== "image/png") {
+            throw new Error("Test images must be normalized without animation");
+          }
+          const normalized = await actual;
+          return {
+            contentType: () => "image/png",
+            image: () => new Blob([normalized]).stream(),
+          };
+        },
       };
     },
   } as unknown as ImagesBinding;

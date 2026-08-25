@@ -1,5 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import type { PrContext } from "../git/prContext";
 import { REVIEW_VERDICTS } from "./reviewOutput";
@@ -52,11 +51,25 @@ ${diff}
 - End with a verdict on its own line — \`VERDICT: X\` where X is ${REVIEW_VERDICTS.join(", ")} — naming the highest severity you found, or CLEAN when the diff needs no changes. Output with no verdict line is discarded and the review is retried with another agent.`;
 }
 
-export function readReviewInstructions(rootDir: string): string {
+type ReadAtRef = (rootDir: string, ref: string, filename: string) => string;
+
+function gitShow(rootDir: string, ref: string, filename: string): string {
+  return execFileSync("git", ["-C", rootDir, "show", `${ref}:${filename}`], {
+    encoding: "utf8",
+  });
+}
+
+/** Load review policy from the fetched base commit, never the untrusted branch. */
+export function readReviewInstructions(
+  rootDir: string,
+  baseRef: string,
+  readAtRef: ReadAtRef = gitShow,
+): string {
   for (const candidate of REVIEW_INSTRUCTION_FILES) {
-    const candidatePath = path.join(rootDir, candidate);
-    if (existsSync(candidatePath)) {
-      return readFileSync(candidatePath, "utf8");
+    try {
+      return readAtRef(rootDir, baseRef, candidate);
+    } catch {
+      // The policy filename is optional; try the next trusted candidate.
     }
   }
   return "";

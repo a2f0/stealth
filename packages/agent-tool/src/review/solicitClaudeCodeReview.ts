@@ -100,7 +100,7 @@ export function solicitClaudeCodeReview(
   const prompt = buildReviewPrompt({
     context,
     diff,
-    reviewInstructions: readReviewInstructions(rootDir),
+    reviewInstructions: readReviewInstructions(rootDir, context.baseRef),
     accessNote: CLAUDE_ACCESS_NOTE,
   });
 

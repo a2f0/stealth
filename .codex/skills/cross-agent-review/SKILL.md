@@ -343,13 +343,15 @@ Require a clean worktree before fetching or snapshotting anything:
      **candidate** head snapshotted in step 2 and label it plainly as
      *unreviewed*. Always report a SHA: a caller overriding the gate still needs
      a head to bind its merge to, and inventing one later would defeat the bind.
+   - **The base SHA** — `FETCHED_BASE`, the exact base commit merged before and
+     used by the final review round. Label it `REVIEWED_BASE_SHA` for callers.
    - **The final verdict** — clean, non-blocking nits only, unresolved blocking
      findings, or review-could-not-run
    - **Repair rounds performed**, and what was fixed in them
 
-   Callers gate on the last three. `ship-pr` binds its merge to the reported SHA
-   and refuses to merge on an unresolved-blocking or could-not-run verdict unless
-   it was told to override.
+   Callers gate on the last four. `ship-pr` binds its merge to the reported head
+   and base SHAs and refuses to merge on an unresolved-blocking or could-not-run
+   verdict unless it was told to override.
 
 ## Notes
 
@@ -368,6 +370,9 @@ Require a clean worktree before fetching or snapshotting anything:
   round — pushed when a PR is open, local when there is none. A caller that
   merges the reported SHA (after pushing it, if it was local) merges a commit that
   was reviewed.
+- **The reported base is the reviewed base.** `REVIEWED_BASE_SHA` is the exact
+  fetched commit merged before the final review. A caller must re-sync and
+  re-review if the PR base moves away from it before merge.
 - **A failed review is not a clean review.** If every agent and fallback fails,
   the verdict is *could-not-run* and no repair happens — repairing against absent
   findings would be inventing work.
@@ -380,6 +385,8 @@ Require a clean worktree before fetching or snapshotting anything:
 - The review scripts are non-interactive and stream output to stdout.
 - Reviews are based on the diff between the base branch and HEAD — the PR's base
   when a PR is open, the repository's default branch when there is none yet.
+- Review policy (`REVIEW.md`, falling back to `AGENTS.md`) is loaded from the
+  fetched base commit, never from the contributor-controlled feature tree.
 - **Each round merges the current base into the branch first**, so a branch cut
   from an older base is reviewed as it will actually merge — a signature change
   or a moved dependency that landed on the base surfaces during the review and
@@ -396,9 +403,11 @@ Require a clean worktree before fetching or snapshotting anything:
   further up the file, a source-shape baseline, the callers a signature change
   breaks. `Bash` is withheld because a review needs no shell, and the session's
   context is a PR diff — attacker-influenceable text.
-  The Codex reviewer is confined by `--sandbox read-only` with MCP
-  servers disabled (the sandbox confines shell commands, not MCP tools). The
-  repair rounds run in *this* session, not the reviewer's; the reviewer stays
+  The Codex reviewer is confined by `--sandbox read-only` with MCP servers
+  disabled (the sandbox confines shell commands, not MCP tools). Its primary
+  workspace is a fresh temporary directory, with the repository added only for
+  read access, so feature-branch `AGENTS.md` files are not auto-loaded as policy.
+  The repair rounds run in *this* session, not the reviewer's; the reviewer stays
   read-only no matter how many rounds run.
 - **Why a review can come back empty is not known.** The one observed failure —
   Claude exiting 0 after ~5s having emitted only "I'll review this PR diff..." —
