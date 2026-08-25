@@ -81,11 +81,21 @@ export interface AuditIssue {
   createdAt: string;
   description: string;
   id: string;
+  images: AuditIssueImage[];
   itemId: string;
   priority: string;
   status: "open" | "resolved";
   title: string;
   updatedAt: string;
+}
+
+export interface AuditIssueImage {
+  contentType: string;
+  createdAt: string;
+  filename: string;
+  id: string;
+  size: number;
+  uploadedBy: AuditTemplateVersionActor;
 }
 
 export interface OrganizationMember {
@@ -203,11 +213,38 @@ export function createAuditIssue(
   );
 }
 
-export function updateAuditIssue(issueId: string, status: "open" | "resolved") {
-  return request<{ status: string; updatedAt: string }>(
-    `/issues/${encodeURIComponent(issueId)}`,
-    { body: JSON.stringify({ status }), method: "PATCH" },
+export function updateAuditIssue(
+  issueId: string,
+  update: { assignedTo?: string | null; status?: "open" | "resolved" },
+) {
+  return request<{
+    assignedTo: string | null;
+    status: string;
+    updatedAt: string;
+  }>(`/issues/${encodeURIComponent(issueId)}`, {
+    body: JSON.stringify(update),
+    method: "PATCH",
+  });
+}
+
+export function uploadAuditIssueImage(issueId: string, file: File) {
+  const form = new FormData();
+  form.set("file", file);
+  return request<{ image: AuditIssueImage }>(
+    `/issues/${encodeURIComponent(issueId)}/images`,
+    { body: form, method: "POST" },
   );
+}
+
+export function deleteAuditIssueImage(issueId: string, imageId: string) {
+  return request<void>(
+    `/issues/${encodeURIComponent(issueId)}/images/${encodeURIComponent(imageId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export function auditIssueImageUrl(issueId: string, imageId: string) {
+  return `${apiUrl}/api/audits/issues/${encodeURIComponent(issueId)}/images/${encodeURIComponent(imageId)}`;
 }
 
 function templateSaveBody(template: AuditTemplate) {
@@ -224,9 +261,15 @@ async function request<T>(path: string, init?: RequestInit) {
     ...init,
     credentials: "include",
   };
-  if (init?.body) requestInit.headers = { "Content-Type": "application/json" };
+  if (init?.body && !(init.body instanceof FormData)) {
+    requestInit.headers = { "Content-Type": "application/json" };
+  }
   const response = await fetch(`${apiUrl}/api/audits${path}`, requestInit);
-  if (response.ok) return response.json() as Promise<T>;
+  if (response.ok) {
+    return response.status === 204
+      ? (undefined as T)
+      : (response.json() as Promise<T>);
+  }
   const body = (await response.json().catch(() => null)) as {
     error?: string;
   } | null;

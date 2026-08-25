@@ -4,12 +4,24 @@ import {
   type AuditDetail,
   type AuditIssue,
   type AuditTemplateItem,
+  auditIssueImageUrl,
   createAuditIssue,
+  deleteAuditIssueImage,
   getAuditRun,
   type OrganizationMember,
   saveAuditRun,
   updateAuditIssue,
+  uploadAuditIssueImage,
 } from "./auditApi";
+
+const acceptedImageTypes = [
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+];
+const maxIssueImages = 10;
+const maxIssueImageBytes = 10 * 1024 * 1024;
 
 interface AuditRunPageProps {
   id: string;
@@ -230,6 +242,7 @@ function IssuePanel({
 }) {
   const items = useMemo(() => allItems(definition), [definition]);
   const [showForm, setShowForm] = useState(false);
+  const [issueError, setIssueError] = useState<string>();
   return (
     <section className="auditIssues">
       <div className="sectionHeading">
@@ -244,19 +257,26 @@ function IssuePanel({
           {showForm ? "Cancel" : "+ Raise issue"}
         </button>
       </div>
+      {issueError && <div className="errorBanner">{issueError}</div>}
       {showForm && (
         <IssueForm
           auditId={auditId}
           items={items}
           members={members}
-          onCreated={async () => {
+          onCreated={async (warning) => {
             setShowForm(false);
+            setIssueError(warning);
             await onChange();
           }}
           responses={responses}
         />
       )}
-      <IssueList issues={issues} onChange={onChange} />
+      <IssueList
+        issues={issues}
+        members={members}
+        onChange={onChange}
+        onError={setIssueError}
+      />
     </section>
   );
 }
@@ -271,7 +291,7 @@ function IssueForm({
   auditId: string;
   items: AuditTemplateItem[];
   members: OrganizationMember[];
-  onCreated: () => Promise<void>;
+  onCreated: (warning?: string) => Promise<void>;
   responses: Record<string, string>;
 }) {
   const suggested =
@@ -281,6 +301,7 @@ function IssueForm({
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
   const [assignedTo, setAssignedTo] = useState("");
+  const [images, setImages] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -288,14 +309,24 @@ function IssueForm({
     setBusy(true);
     setError(undefined);
     try {
-      await createAuditIssue(auditId, {
+      const { issueId } = await createAuditIssue(auditId, {
         assignedTo: assignedTo || null,
         description,
         itemId,
         priority,
         title,
       });
-      await onCreated();
+      const uploads = await Promise.allSettled(
+        images.map((image) => uploadAuditIssueImage(issueId, image)),
+      );
+      const failedUploads = uploads.filter(
+        ({ status }) => status === "rejected",
+      ).length;
+      await onCreated(
+        failedUploads > 0
+          ? `${failedUploads} image${failedUploads === 1 ? "" : "s"} could not be attached. The issue was created.`
+          : undefined,
+      );
     } catch (cause) {
       setError(messageFrom(cause));
       setBusy(false);
@@ -305,14 +336,68 @@ function IssueForm({
   return (
     <div className="auditIssueForm">
       {error && <div className="errorBanner">{error}</div>}
+      <IssueTextFields
+        description={description}
+        itemId={itemId}
+        items={items}
+        onDescriptionChange={setDescription}
+        onItemChange={(nextId) => {
+          setItemId(nextId);
+          setTitle(items.find((item) => item.id === nextId)?.prompt ?? "");
+        }}
+        onTitleChange={setTitle}
+        responses={responses}
+        title={title}
+      />
+      <IssueImagePicker
+        files={images}
+        onChange={setImages}
+        onError={setError}
+      />
+      <IssueAssignmentFields
+        assignedTo={assignedTo}
+        members={members}
+        onAssignedToChange={setAssignedTo}
+        onPriorityChange={setPriority}
+        priority={priority}
+      />
+      <button
+        className="primaryButton"
+        disabled={busy || !itemId || !title.trim()}
+        onClick={() => void submit()}
+        type="button"
+      >
+        {busy ? "Creating…" : "Create issue"}
+      </button>
+    </div>
+  );
+}
+
+function IssueTextFields({
+  description,
+  itemId,
+  items,
+  onDescriptionChange,
+  onItemChange,
+  onTitleChange,
+  responses,
+  title,
+}: {
+  description: string;
+  itemId: string;
+  items: AuditTemplateItem[];
+  onDescriptionChange: (description: string) => void;
+  onItemChange: (itemId: string) => void;
+  onTitleChange: (title: string) => void;
+  responses: Record<string, string>;
+  title: string;
+}) {
+  return (
+    <>
       <label className="field">
         <span>Checklist item</span>
         <select
-          onChange={(event) => {
-            const nextId = event.target.value;
-            setItemId(nextId);
-            setTitle(items.find((item) => item.id === nextId)?.prompt ?? "");
-          }}
+          onChange={(event) => onItemChange(event.target.value)}
           value={itemId}
         >
           {items.map((item) => (
@@ -327,23 +412,86 @@ function IssueForm({
         <span>Issue title</span>
         <input
           maxLength={300}
-          onChange={(event) => setTitle(event.target.value)}
+          onChange={(event) => onTitleChange(event.target.value)}
           value={title}
         />
       </label>
       <label className="field auditIssueDescription">
-        <span>Details</span>
+        <span>Issue description</span>
         <textarea
           maxLength={2000}
-          onChange={(event) => setDescription(event.target.value)}
+          onChange={(event) => onDescriptionChange(event.target.value)}
+          placeholder="Describe the problem, evidence, and expected follow-up."
           rows={3}
           value={description}
         />
       </label>
+    </>
+  );
+}
+
+function IssueImagePicker({
+  files,
+  onChange,
+  onError,
+}: {
+  files: File[];
+  onChange: (files: File[]) => void;
+  onError: (error: string | undefined) => void;
+}) {
+  return (
+    <>
+      <label className="field auditIssueImagesField">
+        <span>Images</span>
+        <input
+          accept={acceptedImageTypes.join(",")}
+          multiple
+          onChange={(event) => {
+            const selected = validateImageFiles(
+              Array.from(event.target.files ?? []),
+              maxIssueImages,
+            );
+            if (typeof selected === "string") {
+              onError(selected);
+              event.target.value = "";
+              return;
+            }
+            onError(undefined);
+            onChange(selected);
+          }}
+          type="file"
+        />
+        <small>Up to 10 JPEG, PNG, GIF, or WebP images; 10 MB each.</small>
+      </label>
+      <SelectedIssueImages
+        files={files}
+        onRemove={(file) =>
+          onChange(files.filter((candidate) => candidate !== file))
+        }
+      />
+    </>
+  );
+}
+
+function IssueAssignmentFields({
+  assignedTo,
+  members,
+  onAssignedToChange,
+  onPriorityChange,
+  priority,
+}: {
+  assignedTo: string;
+  members: OrganizationMember[];
+  onAssignedToChange: (assignedTo: string) => void;
+  onPriorityChange: (priority: string) => void;
+  priority: string;
+}) {
+  return (
+    <>
       <label className="field">
         <span>Priority</span>
         <select
-          onChange={(event) => setPriority(event.target.value)}
+          onChange={(event) => onPriorityChange(event.target.value)}
           value={priority}
         >
           <option value="low">Low</option>
@@ -355,7 +503,7 @@ function IssueForm({
       <label className="field">
         <span>Assignee</span>
         <select
-          onChange={(event) => setAssignedTo(event.target.value)}
+          onChange={(event) => onAssignedToChange(event.target.value)}
           value={assignedTo}
         >
           <option value="">Unassigned</option>
@@ -366,55 +514,243 @@ function IssueForm({
           ))}
         </select>
       </label>
-      <button
-        className="primaryButton"
-        disabled={busy || !itemId || !title.trim()}
-        onClick={() => void submit()}
-        type="button"
-      >
-        {busy ? "Creating…" : "Create issue"}
-      </button>
-    </div>
+    </>
   );
 }
 
 function IssueList({
   issues,
+  members,
   onChange,
+  onError,
 }: {
   issues: AuditIssue[];
+  members: OrganizationMember[];
   onChange: () => Promise<void>;
+  onError: (error: string | undefined) => void;
 }) {
   if (!issues.length) return <p className="auditNoIssues">No issues raised.</p>;
   return (
     <div className="auditIssueList">
       {issues.map((issue) => (
-        <article key={issue.id}>
-          <span className={`auditPriority ${issue.priority}`}>
-            {issue.priority}
-          </span>
-          <div>
-            <h3>{issue.title}</h3>
-            {issue.description && <p>{issue.description}</p>}
-            <small>
-              {issue.assigneeName
-                ? `Assigned to ${issue.assigneeName}`
-                : "Unassigned"}
-            </small>
-          </div>
-          <button
-            onClick={async () => {
-              await updateAuditIssue(
-                issue.id,
-                issue.status === "open" ? "resolved" : "open",
-              );
-              await onChange();
-            }}
-            type="button"
+        <IssueCard
+          issue={issue}
+          key={issue.id}
+          members={members}
+          onChange={onChange}
+          onError={onError}
+        />
+      ))}
+    </div>
+  );
+}
+
+function IssueCard({
+  issue,
+  members,
+  onChange,
+  onError,
+}: {
+  issue: AuditIssue;
+  members: OrganizationMember[];
+  onChange: () => Promise<void>;
+  onError: (error: string | undefined) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function update(update: {
+    assignedTo?: string | null;
+    status?: "open" | "resolved";
+  }) {
+    setBusy(true);
+    onError(undefined);
+    try {
+      await updateAuditIssue(issue.id, update);
+      await onChange();
+    } catch (cause) {
+      onError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function attach(files: File[]) {
+    const selected = validateImageFiles(
+      files,
+      maxIssueImages - issue.images.length,
+    );
+    if (typeof selected === "string") {
+      onError(selected);
+      return;
+    }
+    setBusy(true);
+    onError(undefined);
+    try {
+      const uploads = await Promise.allSettled(
+        selected.map((file) => uploadAuditIssueImage(issue.id, file)),
+      );
+      const failure = uploads.find(({ status }) => status === "rejected");
+      if (failure?.status === "rejected") {
+        onError(messageFrom(failure.reason));
+      }
+      await onChange();
+    } catch (cause) {
+      onError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeImage(imageId: string) {
+    setBusy(true);
+    onError(undefined);
+    try {
+      await deleteAuditIssueImage(issue.id, imageId);
+      await onChange();
+    } catch (cause) {
+      onError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <article>
+      <span className={`auditPriority ${issue.priority}`}>
+        {issue.priority}
+      </span>
+      <div>
+        <h3>{issue.title}</h3>
+        {issue.description && <p>{issue.description}</p>}
+        <IssueImages
+          busy={busy}
+          issue={issue}
+          onAttach={attach}
+          onRemove={removeImage}
+        />
+      </div>
+      <div className="auditIssueActions">
+        <label>
+          <span>Assignee</span>
+          <select
+            disabled={busy}
+            onChange={(event) =>
+              void update({ assignedTo: event.target.value || null })
+            }
+            value={issue.assignedTo ?? ""}
           >
-            {issue.status === "open" ? "Resolve" : "Reopen"}
+            <option value="">Unassigned</option>
+            {members.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          disabled={busy}
+          onClick={() =>
+            void update({
+              status: issue.status === "open" ? "resolved" : "open",
+            })
+          }
+          type="button"
+        >
+          {issue.status === "open" ? "Resolve" : "Reopen"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function IssueImages({
+  busy,
+  issue,
+  onAttach,
+  onRemove,
+}: {
+  busy: boolean;
+  issue: AuditIssue;
+  onAttach: (files: File[]) => Promise<void>;
+  onRemove: (imageId: string) => Promise<void>;
+}) {
+  return (
+    <div className="auditIssueImages">
+      {issue.images.length > 0 && (
+        <div className="auditIssueImageGrid">
+          {issue.images.map((image) => (
+            <div key={image.id}>
+              <a
+                href={auditIssueImageUrl(issue.id, image.id)}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <img
+                  alt={image.filename}
+                  loading="lazy"
+                  src={auditIssueImageUrl(issue.id, image.id)}
+                />
+              </a>
+              <button
+                aria-label={`Remove ${image.filename}`}
+                disabled={busy}
+                onClick={() => void onRemove(image.id)}
+                type="button"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {issue.images.length < maxIssueImages && (
+        <label className="auditIssueAttachButton">
+          + Attach images
+          <input
+            accept={acceptedImageTypes.join(",")}
+            disabled={busy}
+            multiple
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              void onAttach(files);
+            }}
+            type="file"
+          />
+        </label>
+      )}
+    </div>
+  );
+}
+
+function SelectedIssueImages({
+  files,
+  onRemove,
+}: {
+  files: File[];
+  onRemove: (file: File) => void;
+}) {
+  const previews = useMemo(
+    () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
+    [files],
+  );
+  useEffect(
+    () => () => {
+      for (const preview of previews) URL.revokeObjectURL(preview.url);
+    },
+    [previews],
+  );
+  if (previews.length === 0) return null;
+  return (
+    <div className="auditSelectedImages">
+      {previews.map(({ file, url }) => (
+        <div key={`${file.name}-${file.lastModified}`}>
+          <img alt={file.name} src={url} />
+          <span>{file.name}</span>
+          <button onClick={() => onRemove(file)} type="button">
+            Remove
           </button>
-        </article>
+        </div>
       ))}
     </div>
   );
@@ -443,6 +779,24 @@ function RunLoading({
 
 function allItems(definition: AuditDefinition) {
   return definition.sections.flatMap((section) => section.items);
+}
+
+function validateImageFiles(files: File[], availableSlots: number) {
+  if (files.length > availableSlots) {
+    return `You can attach ${Math.max(availableSlots, 0)} more image${availableSlots === 1 ? "" : "s"}.`;
+  }
+  if (
+    files.some(
+      (file) =>
+        file.type && !acceptedImageTypes.includes(file.type.toLowerCase()),
+    )
+  ) {
+    return "Images must be JPEG, PNG, GIF, or WebP files.";
+  }
+  if (files.some((file) => file.size > maxIssueImageBytes)) {
+    return "Images must be 10 MB or smaller.";
+  }
+  return files;
 }
 
 function titleCase(value: string) {

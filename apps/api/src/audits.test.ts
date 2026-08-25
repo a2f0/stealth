@@ -40,6 +40,10 @@ interface IssueResponse {
   issueId: string;
 }
 
+interface IssueImageResponse {
+  image: { contentType: string; filename: string; id: string };
+}
+
 interface TestIdentity {
   organizationId?: string;
   role?: string;
@@ -220,6 +224,84 @@ describe("audits", () => {
     );
     expect(issue.response.status).toBe(201);
 
+    const invalidAssignee = await jsonRequest(
+      fixture,
+      `/issues/${issue.body.issueId}`,
+      "PATCH",
+      { assignedTo: "user-2" },
+    );
+    expect(invalidAssignee.response.status).toBe(400);
+
+    const unassigned = await jsonRequest(
+      fixture,
+      `/issues/${issue.body.issueId}`,
+      "PATCH",
+      { assignedTo: null },
+    );
+    expect(unassigned.response.status).toBe(200);
+    const reassigned = await jsonRequest(
+      fixture,
+      `/issues/${issue.body.issueId}`,
+      "PATCH",
+      { assignedTo: "user-1" },
+    );
+    expect(reassigned.response.status).toBe(200);
+
+    const invalidImageForm = new FormData();
+    invalidImageForm.set(
+      "file",
+      new File(["not an image"], "fake.png", { type: "image/png" }),
+    );
+    const invalidImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images`,
+      { body: invalidImageForm, method: "POST" },
+      fixture.bindings,
+    );
+    expect(invalidImage.status).toBe(400);
+    expect(fixture.stored.size).toBe(0);
+
+    const imageForm = new FormData();
+    imageForm.set(
+      "file",
+      new File(
+        [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+        "electrical-panel.png",
+        { type: "image/png" },
+      ),
+    );
+    const uploaded = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images`,
+      { body: imageForm, method: "POST" },
+      fixture.bindings,
+    );
+    expect(uploaded.status).toBe(201);
+    const uploadedBody = (await uploaded.json()) as IssueImageResponse;
+    expect(uploadedBody.image).toMatchObject({
+      contentType: "image/png",
+      filename: "electrical-panel.png",
+    });
+
+    const hiddenImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
+      {
+        headers: {
+          "x-test-organization-id": "org_user-2",
+          "x-test-user-id": "user-2",
+        },
+      },
+      fixture.bindings,
+    );
+    expect(hiddenImage.status).toBe(404);
+
+    const image = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
+      undefined,
+      fixture.bindings,
+    );
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toBe("image/png");
+    expect(image.headers.get("content-disposition")).toContain("inline");
+
     const detail = await fixture.app.request(
       `/runs/${started.body.auditId}`,
       undefined,
@@ -235,6 +317,14 @@ describe("audits", () => {
         {
           assignedTo: "user-1",
           assigneeName: "Example Person",
+          description: "Correct before the next shift.",
+          images: [
+            {
+              contentType: "image/png",
+              filename: "electrical-panel.png",
+              uploadedBy: { id: "user-1" },
+            },
+          ],
           priority: "high",
           status: "open",
         },
@@ -249,6 +339,14 @@ describe("audits", () => {
       { status: "resolved" },
     );
     expect(resolved.response.status).toBe(200);
+
+    const deletedImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(deletedImage.status).toBe(204);
+    expect(fixture.stored.size).toBe(0);
   });
 
   it("keeps every saved template version immutable", async () => {
@@ -596,13 +694,16 @@ describe("audits", () => {
 async function createFixture() {
   const database = await createLegacyDatabase();
   await applyMigration(database, "0022_version_audit_templates.sql");
-  const bindings = bindingsFor(database);
+  await applyMigration(database, "0024_create_audit_issue_images.sql");
+  const stored = new Map<string, Uint8Array>();
+  const bindings = bindingsFor(database, stored);
   const app = testApp();
-  return { app, bindings, database };
+  return { app, bindings, database, stored };
 }
 
 async function createLegacyDatabase() {
   const database = new Database(":memory:");
+  await applyMigration(database, "0001_create_objects.sql");
   await applyMigration(database, "0003_create_auth.sql");
   const insertUser = database.query(
     `INSERT INTO user
@@ -626,6 +727,7 @@ async function createLegacyDatabase() {
   }
   await applyMigration(database, "0004_create_organizations.sql");
   await applyMigration(database, "0005_create_audits.sql");
+  await applyMigration(database, "0006_scope_objects_to_organizations.sql");
   return database;
 }
 
@@ -674,7 +776,10 @@ async function jsonRequest<T = unknown>(
   return { body: (await response.json()) as T, response };
 }
 
-function bindingsFor(database: Database): Bindings {
+function bindingsFor(
+  database: Database,
+  stored: Map<string, Uint8Array> = new Map(),
+): Bindings {
   return {
     AUTH_EMAIL_FROM: "security@auth.tearleads.com",
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
@@ -683,8 +788,25 @@ function bindingsFor(database: Database): Bindings {
     DB: toD1(database),
     EMAIL: {} as SendEmail,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
-    STORAGE: {} as R2Bucket,
+    STORAGE: storageFor(stored),
   };
+}
+
+function storageFor(stored: Map<string, Uint8Array>) {
+  return {
+    delete: async (key: string) => stored.delete(key),
+    get: async (key: string) => {
+      const content = stored.get(key);
+      if (!content) return null;
+      return {
+        body: new Blob([content]).stream(),
+        httpEtag: '"test-etag"',
+      };
+    },
+    put: async (key: string, value: ArrayBuffer) => {
+      stored.set(key, new Uint8Array(value));
+    },
+  } as unknown as R2Bucket;
 }
 
 function toD1(database: Database) {

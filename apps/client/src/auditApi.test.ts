@@ -3,9 +3,12 @@ import {
   type AuditTemplate,
   copyAuditTemplate,
   createAuditTemplate,
+  deleteAuditIssueImage,
   getAuditTemplateVersion,
   listAuditTemplateVersions,
+  updateAuditIssue,
   updateAuditTemplate,
+  uploadAuditIssueImage,
 } from "./auditApi";
 import { apiUrl } from "./config";
 
@@ -69,6 +72,78 @@ describe("audit template API", () => {
           url: `${apiUrl}/api/audits/templates/template%2Fid/copies`,
         },
       ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("audit issue API", () => {
+  it("updates assignees and uploads and removes images", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{
+      init: RequestInit | undefined;
+      url: string;
+    }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input.toString();
+      requests.push({ init: init as RequestInit | undefined, url });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (init?.body instanceof FormData) {
+        return Response.json({
+          image: {
+            contentType: "image/png",
+            createdAt: "2026-08-25T12:00:00.000Z",
+            filename: "panel.png",
+            id: "image/id",
+            size: 8,
+            uploadedBy: {
+              email: "admin@example.com",
+              id: "admin-id",
+              name: "Admin",
+            },
+          },
+        });
+      }
+      return Response.json({
+        assignedTo: "user/id",
+        status: "open",
+        updatedAt: "2026-08-25T12:00:00.000Z",
+      });
+    }) as typeof fetch;
+
+    try {
+      await updateAuditIssue("issue/id", { assignedTo: "user/id" });
+      const file = new File(
+        [new Uint8Array([0x89, 0x50, 0x4e, 0x47])],
+        "panel.png",
+        { type: "image/png" },
+      );
+      await uploadAuditIssueImage("issue/id", file);
+      await deleteAuditIssueImage("issue/id", "image/id");
+
+      expect(requests).toHaveLength(3);
+      expect(requests[0]).toMatchObject({
+        init: {
+          body: JSON.stringify({ assignedTo: "user/id" }),
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+        },
+        url: `${apiUrl}/api/audits/issues/issue%2Fid`,
+      });
+      expect(requests[1]?.init?.body).toBeInstanceOf(FormData);
+      expect(requests[1]?.init?.headers).toBeUndefined();
+      const form = requests[1]?.init?.body as FormData;
+      expect((form.get("file") as File).name).toBe("panel.png");
+      expect(requests[1]).toMatchObject({
+        init: { credentials: "include", method: "POST" },
+        url: `${apiUrl}/api/audits/issues/issue%2Fid/images`,
+      });
+      expect(requests[2]).toMatchObject({
+        init: { credentials: "include", method: "DELETE" },
+        url: `${apiUrl}/api/audits/issues/issue%2Fid/images/image%2Fid`,
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }

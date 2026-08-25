@@ -5,6 +5,12 @@ import {
   parseAuditDefinition,
   validText,
 } from "./auditDefinition";
+import {
+  type AuditIssueImageRow,
+  auditIssueImages,
+  findAuditIssueImages,
+  toAuditIssueImage,
+} from "./auditIssueImages";
 import type { AuthVariables } from "./authMiddleware";
 import { nfpa70eStarter } from "./nfpa70eStarter";
 import type { Bindings } from "./types";
@@ -374,13 +380,17 @@ audits.get("/runs/:id", async (context) => {
     context.req.param("id"),
   );
   if (!audit) return context.json({ error: "Audit not found." }, 404);
-  const [issues, members] = await Promise.all([
+  const [issues, members, images] = await Promise.all([
     findIssues(context.env.DB, organizationId, audit.id),
     findMembers(context.env.DB, organizationId),
+    findAuditIssueImages(context.env.DB, organizationId, audit.id),
   ]);
+  const imagesByIssue = groupImagesByIssue(images);
   return context.json({
     audit: toAudit(audit),
-    issues: issues.map(toIssue),
+    issues: issues.map((issue) =>
+      toIssue(issue, imagesByIssue.get(issue.id) ?? []),
+    ),
     members: members.map((member) => ({ ...member })),
   });
 });
@@ -465,31 +475,56 @@ audits.post("/runs/:id/issues", async (context) => {
 
 audits.patch("/issues/:id", async (context) => {
   const body: unknown = await context.req.json().catch(() => null);
+  if (!isRecord(body))
+    return context.json({ error: "Invalid issue update." }, 400);
+  const organizationId = context.get("organizationId");
+  const issue = await context.env.DB.prepare(
+    `SELECT id, status, assigned_to
+     FROM audit_issues WHERE id = ? AND organization_id = ?`,
+  )
+    .bind(context.req.param("id"), organizationId)
+    .first<{ assigned_to: string | null; id: string; status: string }>();
+  if (!issue) return context.json({ error: "Issue not found." }, 404);
+  if (body.status === undefined && body.assignedTo === undefined) {
+    return context.json({ error: "No issue changes were provided." }, 400);
+  }
   if (
-    !isRecord(body) ||
-    (body.status !== "open" && body.status !== "resolved")
+    body.status !== undefined &&
+    body.status !== "open" &&
+    body.status !== "resolved"
   ) {
     return context.json(
       { error: "Issue status must be open or resolved." },
       400,
     );
   }
+  const assignedTo = parseAssignee(body.assignedTo, issue.assigned_to);
+  if (assignedTo === undefined) {
+    return context.json({ error: "Issue assignee is invalid." }, 400);
+  }
+  if (
+    assignedTo &&
+    !(await isMember(context.env.DB, organizationId, assignedTo))
+  ) {
+    return context.json({ error: "Issue assignee is not a member." }, 400);
+  }
+  const status =
+    body.status === "open" || body.status === "resolved"
+      ? body.status
+      : issue.status;
   const now = new Date().toISOString();
   const result = await context.env.DB.prepare(
-    `UPDATE audit_issues SET status = ?, updated_at = ?
+    `UPDATE audit_issues SET status = ?, assigned_to = ?, updated_at = ?
      WHERE id = ? AND organization_id = ?`,
   )
-    .bind(
-      body.status,
-      now,
-      context.req.param("id"),
-      context.get("organizationId"),
-    )
+    .bind(status, assignedTo, now, issue.id, organizationId)
     .run();
   return result.meta.changes > 0
-    ? context.json({ status: body.status, updatedAt: now })
+    ? context.json({ assignedTo, status, updatedAt: now })
     : context.json({ error: "Issue not found." }, 404);
 });
+
+audits.route("/issues", auditIssueImages);
 
 async function copyGlobalTemplate(
   database: D1Database,
@@ -650,6 +685,12 @@ function templateSaveInput(value: unknown): TemplateSaveInput | string {
 function positiveInteger(value: string) {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseAssignee(value: unknown, current: string | null) {
+  if (value === undefined) return current;
+  if (value === null || value === "") return null;
+  return validText(value, 100) ? value.trim() : undefined;
 }
 
 function hasRole(roles: string, role: string) {
@@ -818,6 +859,16 @@ function definitionItemIds(definition: AuditDefinition) {
   );
 }
 
+function groupImagesByIssue(images: AuditIssueImageRow[]) {
+  const grouped = new Map<string, AuditIssueImageRow[]>();
+  for (const image of images) {
+    const issueImages = grouped.get(image.issue_id) ?? [];
+    issueImages.push(image);
+    grouped.set(image.issue_id, issueImages);
+  }
+  return grouped;
+}
+
 function toTemplate(row: TemplateRow) {
   return {
     createdAt: row.created_at,
@@ -881,7 +932,7 @@ function toAuditSummary(row: AuditSummaryRow) {
   };
 }
 
-function toIssue(row: IssueRow) {
+function toIssue(row: IssueRow, images: AuditIssueImageRow[]) {
   return {
     assignedTo: row.assigned_to,
     assigneeEmail: row.assignee_email,
@@ -889,6 +940,7 @@ function toIssue(row: IssueRow) {
     createdAt: row.created_at,
     description: row.description,
     id: row.id,
+    images: images.map(toAuditIssueImage),
     itemId: row.item_id,
     priority: row.priority,
     status: row.status,
