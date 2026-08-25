@@ -277,15 +277,9 @@ bun run terraform:plan # preview Cloudflare infrastructure
 
 The `.codex/skills` and `.claude/skills` directories contain the shared review,
 open, squash-merge, reset, and end-to-end ship workflows. Their implementation
-is in `packages/agent-tool`, with these direct entry points available when a
-manual step is useful:
-
-```sh
-bun run review:claude
-bun run review:codex
-bun run pr:open "feat: describe the change"
-bun run merge:squash "feat: describe the change" <reviewed-head-sha> <reviewed-base-sha>
-```
+is in `packages/agent-tool`. Invoke the skills rather than running the feature
+checkout's package directly: each skill materializes the tool from the fetched,
+trusted base commit before exposing reviewer or GitHub credentials to it.
 
 The ship flow commits locally, requests a cross-agent review before the first
 push, opens one pull request, guards the squash merge with the reviewed head and

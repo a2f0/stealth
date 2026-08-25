@@ -9,14 +9,11 @@ Solicits a review of the current branch's diff from a local coding-agent CLI
 branch need not have a PR yet — with none open, the diff is taken against the
 default branch.
 
-```bash
-bun packages/agent-tool/src/index.ts solicitClaudeCodeReview        # effort: xhigh
-bun packages/agent-tool/src/index.ts solicitCodexReview             # effort: high
-# Override the reasoning effort (low | medium | high | xhigh | max):
-bun packages/agent-tool/src/index.ts solicitCodexReview xhigh
-# Pin a wrapper-fetched base and reject it if it moves during review:
-bun packages/agent-tool/src/index.ts solicitCodexReview high "$BASE_SHA"
-```
+Use the `cross-agent-review` skill. It materializes this package from the
+fetched base commit before invoking `solicitClaudeCodeReview` or
+`solicitCodexReview`, optionally with an explicit effort and pinned base SHA.
+Do not execute the copy in an untrusted feature checkout: the launcher runs
+before the reviewer sandbox and receives reviewer credentials.
 
 Both actions accept an optional second argument containing an expected base SHA
 and re-fetch that exact base after the reviewer exits successfully. This lets a
@@ -73,15 +70,9 @@ bounded repair loop live in the `cross-agent-review` skill *around* these calls
 Opens a pull request for the current branch with a **commitlint-conforming
 title**.
 
-```bash
-# Explicit title, body piped via stdin:
-bun packages/agent-tool/src/index.ts openPr 'feat(app): add widget' <<'EOF'
-## Summary
-What changed and why.
-EOF
-# Or omit the title to default to the branch's latest commit subject:
-bun packages/agent-tool/src/index.ts openPr </dev/null
-```
+Use the `open-pr` skill, which invokes `openPr` from a trusted base snapshot and
+accepts an explicit title and body or defaults the title to the latest commit
+subject.
 
 The title is validated with the trusted tool snapshot's side-effect-free copy
 of the repository's commitlint header policy, so conventional-commit syntax and
@@ -97,14 +88,8 @@ Errors if a matching open PR already exists. Backs the `open-pr` skill.
 Squash-merges the current PR with a **subject-only** commit message — no
 auto-generated body or extended message.
 
-```bash
-# Explicit subject:
-bun packages/agent-tool/src/index.ts squashMerge "feat(app): add widget"
-# Or omit to default to the PR title:
-bun packages/agent-tool/src/index.ts squashMerge
-# Bind the merge to the reviewed head/base pair:
-bun packages/agent-tool/src/index.ts squashMerge '' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"
-```
+Use the `squash-merge` skill, which invokes `squashMerge` from a trusted base
+snapshot and can bind the merge to an exact reviewed head/base pair.
 
 The subject is validated against the trusted tool snapshot's side-effect-free
 copy of the repository's commitlint header policy, so conventional-commit

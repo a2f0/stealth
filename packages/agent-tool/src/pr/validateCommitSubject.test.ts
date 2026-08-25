@@ -16,6 +16,12 @@ describe("validateCommitSubject", () => {
     ).not.toThrow();
   });
 
+  test("matches config-conventional by allowing mixed-case scopes", () => {
+    expect(() =>
+      validateCommitSubject(rootDir, "feat(Client): add x"),
+    ).not.toThrow();
+  });
+
   test("rejects a non-conventional subject", () => {
     expect(() => validateCommitSubject(rootDir, "just some text")).toThrow(
       /commitlint/,

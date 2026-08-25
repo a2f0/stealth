@@ -24,7 +24,7 @@ const baseConfig = {
       project: ["src/**/*.{astro,ts}"],
     },
     "packages/agent-tool": {
-      entry: ["src/**/*.test.ts"],
+      entry: ["src/index.ts", "src/**/*.test.ts"],
       project: ["src/**/*.ts"],
     },
   },

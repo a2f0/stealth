@@ -777,28 +777,40 @@ function SelectedIssueImages({
   files: File[];
   onRemove: (file: File) => void;
 }) {
-  const previews = useMemo(
-    () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
-    [files],
-  );
-  useEffect(
-    () => () => {
-      for (const preview of previews) URL.revokeObjectURL(preview.url);
-    },
-    [previews],
-  );
-  if (previews.length === 0) return null;
+  if (files.length === 0) return null;
   return (
     <div className="auditSelectedImages">
-      {previews.map(({ file, url }) => (
-        <div key={`${file.name}-${file.lastModified}`}>
-          <img alt={file.name} src={url} />
-          <span>{file.name}</span>
-          <button onClick={() => onRemove(file)} type="button">
-            Remove
-          </button>
-        </div>
+      {files.map((file) => (
+        <SelectedIssueImage
+          file={file}
+          key={`${file.name}-${file.lastModified}`}
+          onRemove={onRemove}
+        />
       ))}
+    </div>
+  );
+}
+
+function SelectedIssueImage({
+  file,
+  onRemove,
+}: {
+  file: File;
+  onRemove: (file: File) => void;
+}) {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    const nextUrl = URL.createObjectURL(file);
+    setUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [file]);
+  return (
+    <div>
+      {url && <img alt={file.name} src={url} />}
+      <span>{file.name}</span>
+      <button onClick={() => onRemove(file)} type="button">
+        Remove
+      </button>
     </div>
   );
 }
