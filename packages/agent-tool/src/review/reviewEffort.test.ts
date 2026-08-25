@@ -46,6 +46,7 @@ describe("resolveReviewEffort", () => {
 describe("buildClaudeReviewArgs", () => {
   test("passes --effort and keeps --print", () => {
     expect(buildClaudeReviewArgs("xhigh")).toEqual([
+      "--safe-mode",
       "--effort",
       "xhigh",
       "--print",
@@ -62,6 +63,10 @@ describe("buildClaudeReviewArgs", () => {
 
   test("withholds Bash: a review needs no shell, and the diff is untrusted", () => {
     expect(buildClaudeReviewArgs("high").at(-1)).not.toContain("Bash");
+  });
+
+  test("disables project hooks, plugins, settings, and MCP servers", () => {
+    expect(buildClaudeReviewArgs("high")).toContain("--safe-mode");
   });
 });
 

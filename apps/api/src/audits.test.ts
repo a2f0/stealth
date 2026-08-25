@@ -331,6 +331,9 @@ describe("audits", () => {
     expect(
       fixture.database.query(`SELECT COUNT(*) AS count FROM objects`).get(),
     ).toEqual({ count: 10 });
+    expect(
+      fixture.database.query(`SELECT DISTINCT kind FROM objects`).all(),
+    ).toEqual([{ kind: "audit_issue_image" }]);
 
     const hiddenImage = await fixture.app.request(
       `/issues/${issue.body.issueId}/images/${uploadedBody.image.id}`,
@@ -770,6 +773,7 @@ async function createFixture() {
   const database = await createLegacyDatabase();
   await applyMigration(database, "0022_version_audit_templates.sql");
   await applyMigration(database, "0024_create_audit_issue_images.sql");
+  await applyMigration(database, "0025_classify_objects.sql");
   const stored = new Map<string, Uint8Array>();
   const bindings = bindingsFor(database, stored);
   const app = testApp();

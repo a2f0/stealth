@@ -28,8 +28,9 @@ Both actions:
    one is retried once (the observed failure mode is stochastic), then reported
    as a nonzero exit.
 
-Claude reviews with read-only tools (`Read,Grep,Glob`, no `Bash`). Codex reviews
-via `codex exec` in a **read-only sandbox with the user config ignored**
+Claude reviews in safe mode, with project hooks, plugins, settings, and MCP
+servers disabled and only read-only tools (`Read,Grep,Glob`, no `Bash`). Codex
+reviews via `codex exec` in a **read-only sandbox with the user config ignored**
 (the sandbox confines shell commands, not user-configured MCP tools), and
 only its final message — captured with `--output-last-message` — is relayed, so
 the output is the review itself rather than the session's investigative

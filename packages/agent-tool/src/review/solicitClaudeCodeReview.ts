@@ -38,7 +38,14 @@ const REVIEW_TOOLS = ["Read", "Grep", "Glob"] as const;
  * level. The prompt itself goes over stdin, not argv.
  */
 export function buildClaudeReviewArgs(effort: ReviewEffort): string[] {
-  return ["--effort", effort, "--print", "--tools", REVIEW_TOOLS.join(",")];
+  return [
+    "--safe-mode",
+    "--effort",
+    effort,
+    "--print",
+    "--tools",
+    REVIEW_TOOLS.join(","),
+  ];
 }
 
 /**

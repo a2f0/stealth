@@ -72,8 +72,8 @@ auditIssueImages.post("/:issueId/images", async (context) => {
       context.env.DB.prepare(
         `INSERT INTO objects
          (id, organization_id, object_key, filename, content_type, size,
-          created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          created_at, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'audit_issue_image')`,
       ).bind(
         objectId,
         organizationId,
@@ -180,7 +180,8 @@ auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
   if (!row) return context.json({ error: "Issue image not found." }, 404);
   await context.env.STORAGE.delete(row.object_key);
   await context.env.DB.prepare(
-    `DELETE FROM objects WHERE id = ? AND organization_id = ?`,
+    `DELETE FROM objects
+     WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
   )
     .bind(row.object_id, organizationId)
     .run();

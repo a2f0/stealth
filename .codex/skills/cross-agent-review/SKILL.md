@@ -389,11 +389,13 @@ Require a clean worktree before fetching or snapshotting anything:
   report-only inert.
 - Both reviewers get the prompt/diff via stdin (not argv) to avoid
   "Argument list too long" failures on large PRs.
-- The Claude reviewer runs with read-only tools (`--tools "Read,Grep,Glob"`) and
-  no `Bash`. It needs to read: the best findings come from the code *around* the
-  diff — an unchanged branch further up the file, a source-shape baseline, the
-  callers a signature change breaks. `Bash` is withheld because a review needs no
-  shell, and the session's context is a PR diff — attacker-influenceable text.
+- The Claude reviewer runs in `--safe-mode`, disabling project hooks, plugins,
+  settings, MCP servers, and other branch-controlled customizations. It gets only
+  read-only tools (`--tools "Read,Grep,Glob"`) and no `Bash`. It needs to read:
+  the best findings come from the code *around* the diff — an unchanged branch
+  further up the file, a source-shape baseline, the callers a signature change
+  breaks. `Bash` is withheld because a review needs no shell, and the session's
+  context is a PR diff — attacker-influenceable text.
   The Codex reviewer is confined by `--sandbox read-only` with MCP
   servers disabled (the sandbox confines shell commands, not MCP tools). The
   repair rounds run in *this* session, not the reviewer's; the reviewer stays

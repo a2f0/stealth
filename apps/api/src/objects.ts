@@ -13,7 +13,7 @@ const maxUploadBytes = 25 * 1024 * 1024;
 objects.get("/", async (context) => {
   const result = await context.env.DB.prepare(
     `SELECT id, object_key, filename, content_type, size, created_at
-     FROM objects WHERE organization_id = ?
+     FROM objects WHERE organization_id = ? AND kind = 'library'
      ORDER BY created_at DESC LIMIT 100`,
   )
     .bind(context.get("organizationId"))
@@ -50,8 +50,8 @@ objects.post("/", async (context) => {
     await context.env.DB.prepare(
       `INSERT INTO objects
        (id, organization_id, object_key, filename, content_type, size,
-        created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        created_at, kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'library')`,
     )
       .bind(
         id,
@@ -125,7 +125,8 @@ objects.delete("/:id", async (context) => {
 
   await context.env.STORAGE.delete(row.object_key);
   await context.env.DB.prepare(
-    "DELETE FROM objects WHERE id = ? AND organization_id = ?",
+    `DELETE FROM objects
+     WHERE id = ? AND organization_id = ? AND kind = 'library'`,
   )
     .bind(row.id, organizationId)
     .run();
@@ -141,7 +142,8 @@ async function findObject(
   return database
     .prepare(
       `SELECT id, object_key, filename, content_type, size, created_at
-       FROM objects WHERE id = ? AND organization_id = ?`,
+       FROM objects
+       WHERE id = ? AND organization_id = ? AND kind = 'library'`,
     )
     .bind(id, organizationId)
     .first<StoredObjectRow>();
