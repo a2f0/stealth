@@ -477,6 +477,42 @@ describe("audits", () => {
       filename: "electrical-panel.png",
     });
 
+    fixture.databaseControl.commitThenThrowImageActivation = true;
+    fixture.databaseControl.failNextPendingUpdate = true;
+    const committedWithoutResponse = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images?filename=committed-without-response.png`,
+      imageUpload(pngBytes()),
+      fixture.bindings,
+    );
+    expect(committedWithoutResponse.status).toBe(201);
+    const committedWithoutResponseBody =
+      (await committedWithoutResponse.json()) as IssueImageResponse;
+    expect(
+      fixture.database
+        .query(
+          `SELECT deletion_pending FROM objects
+           WHERE filename = 'committed-without-response.png'`,
+        )
+        .get(),
+    ).toEqual({ deletion_pending: 0 });
+    expect(fixture.stored.size).toBe(2);
+    const retainedCommittedImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${committedWithoutResponseBody.image.id}`,
+      undefined,
+      fixture.bindings,
+    );
+    expect(retainedCommittedImage.status).toBe(200);
+    expect(fixture.databaseControl.commitThenThrowImageActivation).toBe(false);
+    expect(fixture.databaseControl.failNextPendingUpdate).toBe(true);
+    fixture.databaseControl.failNextPendingUpdate = false;
+    const deletedCommittedImage = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images/${committedWithoutResponseBody.image.id}`,
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(deletedCommittedImage.status).toBe(204);
+    expect(fixture.stored.size).toBe(1);
+
     fixture.storageControl.beforeNextPut = async () => {
       fixture.database
         .query(
@@ -1305,6 +1341,7 @@ async function createFixture() {
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,
+    commitThenThrowImageActivation: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -1414,6 +1451,7 @@ function bindingsFor(
   } = { failNextDelete: false },
   databaseControl = {
     activateBeforeCleanupClaim: false,
+    commitThenThrowImageActivation: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -1475,6 +1513,7 @@ function toD1(
   database: Database,
   control = {
     activateBeforeCleanupClaim: false,
+    commitThenThrowImageActivation: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -1525,6 +1564,14 @@ function toD1(
         ) {
           control.failNextImageActivation = false;
           throw new Error("Transient D1 image activation failure");
+        }
+        if (
+          control.commitThenThrowImageActivation &&
+          query.includes("SET size = ?, deletion_pending = 0")
+        ) {
+          control.commitThenThrowImageActivation = false;
+          database.query(query).run(...values);
+          throw new Error("D1 activation response was lost after commit");
         }
         if (
           control.failNextPendingUpdate &&

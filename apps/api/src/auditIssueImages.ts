@@ -367,13 +367,59 @@ async function persistAuditIssueImage(
       throw new Error("Issue image reservation could not be activated.");
     }
   } catch (cause) {
-    await recoverFailedAuditIssueImageActivation(
+    const activationCommitted = await recoverFailedAuditIssueImageActivation(
       environment,
       image,
       normalizedSize,
     );
+    if (activationCommitted) return;
     throw cause;
   }
+}
+
+interface AuditIssueImageActivationState {
+  deletion_pending: number;
+  object_key: string;
+  reservation_exists: number;
+}
+
+type ActivationStateRead =
+  | { known: true; state: AuditIssueImageActivationState | null }
+  | { known: false };
+
+async function readAuditIssueImageActivationState(
+  database: D1Database,
+  image: AuditIssueImageInsert,
+): Promise<ActivationStateRead> {
+  try {
+    const state = await database
+      .prepare(
+        `SELECT object_key, deletion_pending,
+                EXISTS (
+                  SELECT 1 FROM audit_issue_images
+                  WHERE object_id = objects.id AND issue_id = ?
+                ) AS reservation_exists
+         FROM objects
+         WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
+      )
+      .bind(image.issueId, image.objectId, image.organizationId)
+      .first<AuditIssueImageActivationState>();
+    return { known: true, state };
+  } catch {
+    return { known: false };
+  }
+}
+
+function isCommittedAuditIssueImageActivation(
+  read: ActivationStateRead,
+  image: AuditIssueImageInsert,
+) {
+  return (
+    read.known &&
+    read.state?.deletion_pending === 0 &&
+    read.state.object_key === image.objectKey &&
+    read.state.reservation_exists === 1
+  );
 }
 
 async function recoverFailedAuditIssueImageActivation(
@@ -381,12 +427,31 @@ async function recoverFailedAuditIssueImageActivation(
   image: AuditIssueImageInsert,
   size: number,
 ) {
+  const initialState = await readAuditIssueImageActivationState(
+    environment.DB,
+    image,
+  );
+  if (isCommittedAuditIssueImageActivation(initialState, image)) return true;
+  // A failed state read makes the activation result ambiguous. Retain R2 bytes
+  // so a committed image can never be turned into an active dangling row.
+  if (!initialState.known) return false;
+
   try {
     await restoreAuditIssueImageCleanupTombstone(environment.DB, image, size);
   } catch (tombstoneCause) {
+    const latestState = await readAuditIssueImageActivationState(
+      environment.DB,
+      image,
+    );
+    if (isCommittedAuditIssueImageActivation(latestState, image)) return true;
+    // Delete only after an authoritative read proves the object is absent or
+    // still pending. Unknown or unexpectedly active state retains the bytes.
+    if (!latestState.known || latestState.state?.deletion_pending === 0) {
+      return false;
+    }
     try {
       await environment.STORAGE.delete(image.objectKey);
-      return;
+      return false;
     } catch (deleteCause) {
       throw new AggregateError(
         [tombstoneCause, deleteCause],
@@ -394,7 +459,13 @@ async function recoverFailedAuditIssueImageActivation(
       );
     }
   }
+  const restoredState = await readAuditIssueImageActivationState(
+    environment.DB,
+    image,
+  );
+  if (isCommittedAuditIssueImageActivation(restoredState, image)) return true;
   await attemptPendingObjectCleanup(environment, image.objectId);
+  return false;
 }
 
 async function restoreAuditIssueImageCleanupTombstone(
@@ -421,7 +492,8 @@ async function restoreAuditIssueImageCleanupTombstone(
          cleanup_claimed_at = NULL,
          upload_token = NULL,
          upload_lease_expires_at = NULL
-       WHERE objects.kind = 'audit_issue_image'`,
+       WHERE objects.kind = 'audit_issue_image'
+         AND objects.deletion_pending = 1`,
     )
     .bind(
       image.objectId,
