@@ -6,6 +6,8 @@ import {
   assertPrHeadMatchesLocal,
   assertSameReviewContext,
   assertSpawnSucceeded,
+  captureReviewDiff,
+  MAX_REVIEW_DIFF_BYTES,
   selectOpenPrNumber,
   spawnExitCode,
 } from "./prContext";
@@ -16,6 +18,29 @@ describe("assertCleanReviewWorktree", () => {
     expect(() => assertCleanReviewWorktree(" M src/a.ts\n?? src/b.ts")).toThrow(
       "Review worktree is not clean",
     );
+  });
+});
+
+describe("captureReviewDiff", () => {
+  test("caps prompt capture and routes oversized diffs to fallback", () => {
+    expect(captureReviewDiff((maxBuffer) => String(maxBuffer))).toBe(
+      String(MAX_REVIEW_DIFF_BYTES),
+    );
+    expect(() =>
+      captureReviewDiff(() => {
+        throw Object.assign(new Error("stdout maxBuffer exceeded"), {
+          code: "ENOBUFS",
+        });
+      }),
+    ).toThrow("streaming file-by-file review fallback");
+  });
+
+  test("does not relabel unrelated git failures as oversized diffs", () => {
+    expect(() =>
+      captureReviewDiff(() => {
+        throw Object.assign(new Error("bad revision"), { code: 128 });
+      }),
+    ).toThrow("bad revision");
   });
 });
 

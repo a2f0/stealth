@@ -60,6 +60,9 @@ launched.
 The exit code is the reviewing CLI's exit code (or `1` for a review that failed
 the verdict gate), so callers can fall back to another reviewer on failure.
 Backs the `cross-agent-review` skill in `.claude/skills/` and `.codex/skills/`.
+Full-diff prompt capture is capped at 8 MiB before a reviewer starts; an
+oversized diff exits nonzero so the skill switches to its streaming,
+path-by-path in-session review rather than retaining an unbounded prompt.
 
 These actions **only review**. The fallback chain, the severity gate, and the
 bounded repair loop live in the `cross-agent-review` skill *around* these calls

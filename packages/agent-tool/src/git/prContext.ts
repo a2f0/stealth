@@ -37,17 +37,50 @@ interface SpawnResult {
   readonly error?: Error;
 }
 
-// Large diffs blow past execFileSync's default 1 MiB maxBuffer and throw
-// ENOBUFS before we can hand the diff to a reviewer, so capture generously.
-export const MAX_BUFFER_BYTES = 512 * 1024 * 1024;
+// Keep every pre-sandbox subprocess capture bounded. Oversized review diffs
+// deliberately fall back to the skills' streaming file-by-file path.
+export const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+export const MAX_REVIEW_DIFF_BYTES = 8 * 1024 * 1024;
 
-export function run(command: ToolCommand, args: string[]): string {
+export function run(
+  command: ToolCommand,
+  args: string[],
+  maxBuffer = MAX_BUFFER_BYTES,
+): string {
   return execFileSync(toolExecutable(command), args, {
     encoding: "utf8",
     env: toolEnvironment(),
     stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: MAX_BUFFER_BYTES,
+    maxBuffer,
   }).trim();
+}
+
+function errorCode(value: unknown): unknown {
+  return typeof value === "object" && value !== null
+    ? Reflect.get(value, "code")
+    : undefined;
+}
+
+export function captureReviewDiff(
+  runDiff: (maxBuffer: number) => string,
+  maxBuffer = MAX_REVIEW_DIFF_BYTES,
+): string {
+  try {
+    return runDiff(maxBuffer);
+  } catch (cause) {
+    if (errorCode(cause) === "ENOBUFS") {
+      throw new Error(
+        `Review diff exceeds the ${Math.floor(maxBuffer / (1024 * 1024))} MiB prompt capture limit; use the streaming file-by-file review fallback.`,
+      );
+    }
+    throw cause;
+  }
+}
+
+export function readReviewDiff(baseRef: string, headRef: string): string {
+  return captureReviewDiff((maxBuffer) =>
+    run("git", ["diff", `${baseRef}...${headRef}`], maxBuffer),
+  );
 }
 
 function tryRun(command: ToolCommand, args: string[]): string | null {

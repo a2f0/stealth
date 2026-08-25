@@ -7,8 +7,8 @@ import {
   assertSameReviewContext,
   ensureChanges,
   MAX_BUFFER_BYTES,
+  readReviewDiff,
   resolveReviewContext,
-  run,
   spawnExitCode,
 } from "../git/prContext";
 import { materializeTrackedCheckout } from "./materializeTrackedCheckout";
@@ -211,7 +211,7 @@ export function solicitClaudeCodeReview(
   const context = resolveReviewContext(expectedBaseRef);
   ensureChanges(context.baseRef, context.headRef);
 
-  const diff = run("git", ["diff", `${context.baseRef}...${context.headRef}`]);
+  const diff = readReviewDiff(context.baseRef, context.headRef);
   const prompt = buildReviewPrompt({
     context,
     diff,

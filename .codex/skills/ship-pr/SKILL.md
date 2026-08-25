@@ -8,9 +8,9 @@ description: Ship current work end-to-end — commit on a feature branch, cross-
 Run the full ship flow for the current work: **commit the work on a feature
 branch**, get a **cross-agent review** that repairs its own blocking findings,
 **open or resume its PR**, then **merge the reviewed pair** and clean up. The PR
-is opened
-*after* the review, so a fresh branch is pushed **once** — through the pre-push
-hook once — instead of once at open time and again for each repair round.
+is opened *after* the review, so a fresh branch is pushed **once**, with
+feature-controlled hooks bypassed, instead of once at open time and again for
+each repair round.
 Delegate PR creation, the review-and-repair loop, and the final merge to the
 `open-pr`, `cross-agent-review`, `squash-merge`, and `reset` skills. This skill
 owns the ordering and the merge gate; it does not re-implement the wrapped
@@ -191,10 +191,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    - **No PR yet** (the fresh path, `PR_NUMBER` empty): invoke `open-pr` with the
      title argument (or the title captured in step 1), piping the body via stdin.
      The worktree is clean after the review, so `open-pr` commits nothing new; it
-     pushes the branch
-     **once** — the only push of the flow, and the one that goes through the
-     pre-push hook — and opens the PR. Capture its number and URL, and set
-     `PR_NUMBER`. Stop if creation fails.
+     pushes the branch **once** — the only push of the flow, with hooks bypassed
+     after explicit validation and review — and opens the PR. Capture its number
+     and URL, and set `PR_NUMBER`. Stop if creation fails.
    - **A PR is already open** (the resume path from step 1): it is already pushed
      with the reviewed repairs; do **not** call `open-pr`. Reuse its number, URL,
      and title.
@@ -209,22 +208,6 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
 
    If either differs — `open-pr` committed a stray change, the head moved, or
    the base advanced — reconcile and re-review before merging.
-
-   **Sole exception — the pre-push co-author strip.** `checkCommitTrust`
-   rejects `Co-authored-by` trailers; the only remedy is a message rewrite,
-   which moves the SHA but not the content. When that is the only reason the
-   head moved, do **not** re-review. Verify and re-pin:
-
-   ```bash
-   test "$(git rev-parse "$REVIEWED_SHA^{tree}")" = "$(git rev-parse "HEAD^{tree}")"
-   test "$(git merge-base "$REVIEWED_SHA" "$REVIEWED_BASE_SHA")" = "$(git merge-base HEAD "$REVIEWED_BASE_SHA")"
-   REVIEWED_SHA=$(git rev-parse HEAD)
-   ```
-
-   The merge tree is derived from the reviewed head — changed ancestry could
-   merge a diff
-   no review read even with equal trees. The message diff must remove only
-   `Co-authored-by` lines; anything else keeps the rule above.
 
 4. **Merge and clean up (bound to the reviewed head and base)** — query
    the PR base once more and return to step 2 if it differs from
@@ -309,11 +292,11 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
   no PR; a failure after it leaves the PR in a safe, open state. Either way it is
   reported.
 - **One push, after the review** — on the fresh path the branch is pushed exactly
-  once, when the PR is opened, so the pre-push hook runs once rather than at open
-  time and again for every repair round. Reviewing local commits before the PR
-  exists is what buys this — and the base merge the review does first stays local
-  too while there is no PR, so it costs no extra push. (The resume path keeps its
-  already-open PR and pushes repairs, and now the base merge, to it, as before.)
+  once, when the PR is opened, with feature-controlled hooks bypassed after the
+  explicit gate. Reviewing local commits before the PR exists is what buys this
+  — and the base merge the review does first stays local too while there is no
+  PR, so it costs no extra push. (The resume path keeps its already-open PR and
+  pushes repairs, and now the base merge, to it, as before.)
 - **The review gates the merge** — this flow never silently merges over a verdict
   that reports unresolved blocking findings, and never merges an unreviewed head.
 - **Repair belongs to `cross-agent-review`** — including the severity vocabulary

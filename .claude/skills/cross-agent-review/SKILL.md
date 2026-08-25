@@ -208,13 +208,14 @@ Require a clean worktree before fetching or snapshotting anything:
    already current, or a later repair round where nothing new landed, it is a
    no-op. **When a PR is open**, push the updated head without force so the
    pushed head still matches what is reviewed — but **only when the merge
-   actually moved `HEAD`**, so an already-current branch does not fire the
-   (expensive) pre-push hook for nothing; **with no PR**, the merge stays local
+   actually moved `HEAD`**, so an already-current branch does not push for
+   nothing. The push bypasses feature-controlled hooks; **with no PR**, the
+   merge stays local
    and `open-pr` pushes it later, so the flow's single push is preserved:
 
    ```bash
    if [ -n "$PR_NUMBER" ] && [ "$(git rev-parse HEAD)" != "$PRE_SYNC_HEAD" ]; then
-     git push "$FEATURE_REMOTE" "HEAD:$BRANCH"
+     git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"
    fi
    ```
 
@@ -263,8 +264,10 @@ Require a clean worktree before fetching or snapshotting anything:
      ```
 
    - If the Claude Code review also fails (or was selected first and fails due
-     to nested-session restrictions, credits/quota/auth, or prompt-size limits),
-     perform an **in-session file-by-file review** (step 4).
+     to nested-session restrictions, credits/quota/auth, or the tool's bounded
+     prompt-capture limit), perform an **in-session file-by-file review** (step
+     4). The tool refuses to capture an oversized full diff before starting a
+     reviewer; step 4 streams the file list and reads one exact path at a time.
 
    - Only stop immediately for non-recoverable operational errors (missing PR,
      missing tool script, malformed args) where fallback would also fail.
@@ -368,10 +371,12 @@ Require a clean worktree before fetching or snapshotting anything:
        3. Run validation proportionate to the changes, including the repository's
           staged source-shape check before committing.
        4. Stage only the repair paths and commit with a valid conventional
-          subject. **When a PR is open, push without force** so the pushed head
-          tracks the repair; **with no PR, do not push** — the repairs stay local
-          and are pushed once, later, when the PR is opened. Stop if unrelated
-          changes are mixed into the worktree.
+          subject. **When a PR is open, push without force and with
+          `--no-verify`** so feature-controlled hooks cannot run with ambient
+          credentials; the explicit validation in step 3 remains authoritative.
+          **With no PR, do not push** — the repairs stay local and are pushed
+          once, later, when the PR is opened. Stop if unrelated changes are mixed
+          into the worktree.
        5. Increment `REPAIR_ROUND` — never reset it — and return to **step 2**,
           not step 1, so the new head is snapshotted and the **complete** PR diff
           is reviewed again while the round count survives.
@@ -440,7 +445,7 @@ Require a clean worktree before fetching or snapshotting anything:
 - **Each round merges the current base into the branch first**, so a branch cut
   from an older base is reviewed as it will actually merge — a signature change
   or a moved dependency that landed on the base surfaces during the review and
-  the pre-push checks, not after the merge. The merge (never a rebase, so no
+  explicit validation, not after the merge. The merge (never a rebase, so no
   force push) is local when there is no PR and pushed when there is; a conflict
   aborts and stops for the user. `--repair-rounds 0` skips it, keeping
   report-only inert, and refuses to proceed unless the current head already

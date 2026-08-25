@@ -506,13 +506,6 @@ audits.patch("/issues/:id", async (context) => {
   if (changesAssignee && assignedTo === undefined) {
     return context.json({ error: "Issue assignee is invalid." }, 400);
   }
-  if (
-    changesAssignee &&
-    assignedTo &&
-    !(await isMember(context.env.DB, organizationId, assignedTo))
-  ) {
-    return context.json({ error: "Issue assignee is not a member." }, 400);
-  }
   const status =
     body.status === "open" || body.status === "resolved"
       ? body.status
@@ -523,9 +516,24 @@ audits.patch("/issues/:id", async (context) => {
       ? await context.env.DB.prepare(
           `UPDATE audit_issues
            SET status = ?, assigned_to = ?, updated_at = ?
-           WHERE id = ? AND organization_id = ?`,
+           WHERE id = ? AND organization_id = ?
+             AND (
+               ? IS NULL OR EXISTS (
+                 SELECT 1 FROM member
+                 WHERE organizationId = ? AND userId = ?
+               )
+             )`,
         )
-          .bind(status, assignedTo, now, issue.id, organizationId)
+          .bind(
+            status,
+            assignedTo,
+            now,
+            issue.id,
+            organizationId,
+            assignedTo,
+            organizationId,
+            assignedTo,
+          )
           .run()
       : await context.env.DB.prepare(
           `UPDATE audit_issues SET status = ?, updated_at = ?
@@ -535,13 +543,35 @@ audits.patch("/issues/:id", async (context) => {
           .run()
     : await context.env.DB.prepare(
         `UPDATE audit_issues SET assigned_to = ?, updated_at = ?
-         WHERE id = ? AND organization_id = ?`,
+         WHERE id = ? AND organization_id = ?
+           AND (
+             ? IS NULL OR EXISTS (
+               SELECT 1 FROM member
+               WHERE organizationId = ? AND userId = ?
+             )
+           )`,
       )
-        .bind(assignedTo, now, issue.id, organizationId)
+        .bind(
+          assignedTo,
+          now,
+          issue.id,
+          organizationId,
+          assignedTo,
+          organizationId,
+          assignedTo,
+        )
         .run();
-  return result.meta.changes > 0
-    ? context.json({ assignedTo, status, updatedAt: now })
-    : context.json({ error: "Issue not found." }, 404);
+  if (result.meta.changes > 0) {
+    return context.json({ assignedTo, status, updatedAt: now });
+  }
+  if (
+    changesAssignee &&
+    assignedTo &&
+    !(await isMember(context.env.DB, organizationId, assignedTo))
+  ) {
+    return context.json({ error: "Issue assignee is not a member." }, 400);
+  }
+  return context.json({ error: "Issue not found." }, 404);
 });
 
 audits.route("/issues", auditIssueImages);

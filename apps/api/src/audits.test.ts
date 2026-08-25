@@ -357,6 +357,27 @@ describe("audits", () => {
     );
     expect(invalidAssignee.response.status).toBe(400);
 
+    fixture.database
+      .query(
+        `INSERT INTO member
+         (id, organizationId, userId, role, createdAt)
+         VALUES ('member-user-2-org-1', 'org_user-1', 'user-2', 'member', ?)`,
+      )
+      .run("2026-08-25T12:00:00.000Z");
+    fixture.databaseControl.deleteAssigneeBeforeIssueUpdate = true;
+    const removedDuringAssignment = await jsonRequest(
+      fixture,
+      `/issues/${issue.body.issueId}`,
+      "PATCH",
+      { assignedTo: "user-2" },
+    );
+    expect(removedDuringAssignment.response.status).toBe(400);
+    expect(
+      fixture.database
+        .query(`SELECT assigned_to FROM audit_issues WHERE id = ?`)
+        .get(issue.body.issueId),
+    ).toEqual({ assigned_to: "user-1" });
+
     const unassigned = await jsonRequest(
       fixture,
       `/issues/${issue.body.issueId}`,
@@ -1256,6 +1277,7 @@ async function createFixture() {
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,
+    deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
   };
@@ -1364,6 +1386,7 @@ function bindingsFor(
   } = { failNextDelete: false },
   databaseControl = {
     activateBeforeCleanupClaim: false,
+    deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
   },
@@ -1424,6 +1447,7 @@ function toD1(
   database: Database,
   control = {
     activateBeforeCleanupClaim: false,
+    deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
   },
@@ -1457,6 +1481,16 @@ function toD1(
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const runSync = () => {
+        if (
+          control.deleteAssigneeBeforeIssueUpdate &&
+          query.includes("UPDATE audit_issues") &&
+          query.includes("SELECT 1 FROM member")
+        ) {
+          control.deleteAssigneeBeforeIssueUpdate = false;
+          const organizationId = values.at(-2);
+          const userId = values.at(-1);
+          fixtureMemberDeletion(database, organizationId, userId);
+        }
         if (
           control.failNextImageActivation &&
           query.includes("SET size = ?, deletion_pending = 0")
@@ -1511,6 +1545,19 @@ function toD1(
       return statement;
     },
   } as unknown as D1Database;
+}
+
+function fixtureMemberDeletion(
+  database: Database,
+  organizationId: SQLQueryBindings | undefined,
+  userId: SQLQueryBindings | undefined,
+) {
+  if (typeof organizationId !== "string" || typeof userId !== "string") {
+    throw new Error("Assignee membership predicate bindings are missing");
+  }
+  database
+    .query(`DELETE FROM member WHERE organizationId = ? AND userId = ?`)
+    .run(organizationId, userId);
 }
 
 function imageUpload(

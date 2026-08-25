@@ -191,24 +191,19 @@ fi
 3. **Commit and push**: Run the repository's relevant preflight, review the
    final diff, stage only intended paths, and commit any uncommitted work with a
    valid conventional subject — and never with a `Co-authored-by` trailer,
-   which the pre-push hook rejects. Use separate commits for distinct changes
+   which repository policy rejects. Use separate commits for distinct changes
    when useful. Confirm the branch has commits ahead of
    `$BASE_HEAD`, then push without force to the resolved
    feature remote:
 
    ```bash
-   git push -u "$PUSH_REMOTE" "$BRANCH"
+   git push --no-verify -u "$PUSH_REMOTE" "$BRANCH"
    ```
 
-   If the push is rejected and `checkCommitTrust`'s co-author check is the
-   **only** failure, treat it as mechanical, not as a defect in the work:
-   rewrite the offending commit message(s) to delete the `Co-authored-by`
-   line(s) — `git commit --amend` for HEAD, a non-interactive reword for
-   earlier commits — without touching any tree, then push again. Report the
-   old and new head SHAs and state that the rewrite was message-only, so a
-   caller such as `ship-pr` can keep treating the content as reviewed instead
-   of triggering a re-review. Any other pre-push failure (missing signature,
-   failing checks) keeps its normal handling: fix it or stop and report.
+   `--no-verify` is required here: feature-controlled hooks must not run with
+   ambient GitHub or reviewer credentials. The explicit preflight above is the
+   validation gate. Inspect commit messages for forbidden co-author trailers
+   before the review; never rewrite the reviewed head during this push step.
 
 4. **Open the PR** (title single-quoted; body via a quoted heredoc):
 
@@ -240,8 +235,8 @@ fi
    - Rejects a body carrying Claude Code branding — the "Generated with Claude
      Code" attribution, its `claude.com/claude-code` or `claude.ai/code` links,
      or a Claude co-author trailer — and exits non-zero **without creating the
-     PR**. This mirrors the pre-push hook that strips co-author trailers from
-     commits: keep the attribution footer out of PR descriptions entirely.
+     PR**. This mirrors the repository's ban on co-author trailers: keep the
+     attribution footer out of PR descriptions entirely.
    - Resolves the branch's push repository and creates the PR with an explicit
      owner-qualified head (`owner:branch`). The base defaults to the repository's
      default branch; the qualified head prevents a same-named fork from being
