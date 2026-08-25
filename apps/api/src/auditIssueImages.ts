@@ -341,9 +341,72 @@ async function persistAuditIssueImage(
       throw new Error("Issue image reservation could not be activated.");
     }
   } catch (cause) {
-    await abandonAndCleanupAuditIssueImage(environment, image);
+    await recoverFailedAuditIssueImageActivation(
+      environment,
+      image,
+      normalizedSize,
+    );
     throw cause;
   }
+}
+
+async function recoverFailedAuditIssueImageActivation(
+  environment: Pick<Bindings, "DB" | "STORAGE">,
+  image: AuditIssueImageInsert,
+  size: number,
+) {
+  try {
+    await restoreAuditIssueImageCleanupTombstone(environment.DB, image, size);
+  } catch (tombstoneCause) {
+    try {
+      await environment.STORAGE.delete(image.objectKey);
+      return;
+    } catch (deleteCause) {
+      throw new AggregateError(
+        [tombstoneCause, deleteCause],
+        "Issue image activation and cleanup recovery both failed.",
+      );
+    }
+  }
+  await attemptPendingObjectCleanup(environment, image.objectId);
+}
+
+async function restoreAuditIssueImageCleanupTombstone(
+  database: D1Database,
+  image: AuditIssueImageInsert,
+  size: number,
+) {
+  await database
+    .prepare(
+      `INSERT INTO objects
+       (id, organization_id, object_key, filename, content_type, size,
+        created_at, kind, deletion_pending, cleanup_token,
+        cleanup_claimed_at, upload_token, upload_lease_expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'audit_issue_image', 1,
+               NULL, NULL, NULL, NULL)
+       ON CONFLICT(id) DO UPDATE SET
+         organization_id = excluded.organization_id,
+         object_key = excluded.object_key,
+         filename = excluded.filename,
+         content_type = excluded.content_type,
+         size = excluded.size,
+         deletion_pending = 1,
+         cleanup_token = NULL,
+         cleanup_claimed_at = NULL,
+         upload_token = NULL,
+         upload_lease_expires_at = NULL
+       WHERE objects.kind = 'audit_issue_image'`,
+    )
+    .bind(
+      image.objectId,
+      image.organizationId,
+      image.objectKey,
+      image.filename,
+      image.contentType,
+      size,
+      new Date().toISOString(),
+    )
+    .run();
 }
 
 async function refreshAuditIssueImageUploadLease(

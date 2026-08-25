@@ -373,6 +373,38 @@ describe("audits", () => {
     expect(deletedLeaseProtectedImage.status).toBe(204);
     expect(fixture.stored.size).toBe(1);
 
+    fixture.storageControl.beforeNextPut = async () => {
+      fixture.database
+        .query(
+          `UPDATE objects
+           SET created_at = '2000-01-01T00:00:00.000Z',
+               upload_lease_expires_at = '2000-01-01T00:00:00.000Z'
+           WHERE filename = 'expired-mid-write.png'`,
+        )
+        .run();
+      expect(
+        await purgePendingAuditIssueImages(
+          fixture.bindings,
+          "9999-12-31T23:59:59.999Z",
+          "9999-12-31T23:59:59.999Z",
+        ),
+      ).toBe(1);
+    };
+    const expiredMidWriteUpload = await fixture.app.request(
+      `/issues/${issue.body.issueId}/images?filename=expired-mid-write.png`,
+      imageUpload(pngBytes()),
+      fixture.bindings,
+    );
+    expect(expiredMidWriteUpload.status).toBe(500);
+    expect(fixture.stored.size).toBe(1);
+    expect(
+      fixture.database
+        .query(
+          `SELECT id FROM objects WHERE filename = 'expired-mid-write.png'`,
+        )
+        .get(),
+    ).toBeNull();
+
     fixture.databaseControl.failNextImageActivation = true;
     fixture.storageControl.failNextDelete = true;
     const failedUploadCleanup = await fixture.app.request(
