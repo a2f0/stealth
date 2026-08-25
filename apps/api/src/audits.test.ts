@@ -95,6 +95,34 @@ describe("audits", () => {
     expect(timedOutStreamCancelled).toBe(true);
   });
 
+  it("does not wait for a stalled request-stream cancellation", async () => {
+    const neverCancels = () => new Promise<void>(() => undefined);
+    const oversized = new ReadableStream<Uint8Array>({
+      cancel: neverCancels,
+      start(controller) {
+        controller.enqueue(new Uint8Array(8));
+      },
+    });
+    const oversizedOutcome = await Promise.race([
+      readBodyWithLimit(oversized, 7),
+      new Promise<"stalled">((resolve) =>
+        setTimeout(() => resolve("stalled"), 50),
+      ),
+    ]);
+    expect(oversizedOutcome).toBeNull();
+
+    const timedOut = new ReadableStream<Uint8Array>({
+      cancel: neverCancels,
+    });
+    const timeoutOutcome = await Promise.race([
+      readBodyWithLimit(timedOut, 7, 5).catch((cause: unknown) => cause),
+      new Promise<"stalled">((resolve) =>
+        setTimeout(() => resolve("stalled"), 50),
+      ),
+    ]);
+    expect(timeoutOutcome).toBeInstanceOf(ImageUploadReadTimeoutError);
+  });
+
   it("bounds concurrent maximum-size image upload memory", async () => {
     const fixture = await createFixture();
     const now = "2026-08-25T12:00:00.000Z";

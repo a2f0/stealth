@@ -588,6 +588,16 @@ async function parseImageUpload(
 
 export class ImageUploadReadTimeoutError extends Error {}
 
+function cancelBodyReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reason: unknown,
+) {
+  // Cancellation is cleanup, not part of the upload deadline. A hostile or
+  // broken source may never settle its cancel hook, so observe rejection
+  // without letting that hook retain the global and organization upload slots.
+  void reader.cancel(reason).catch(() => undefined);
+}
+
 /** Read a request stream with fixed memory and a cancellation deadline. */
 export async function readBodyWithLimit(
   body: ReadableStream<Uint8Array> | null,
@@ -610,7 +620,7 @@ export async function readBodyWithLimit(
       const { done, value } = await Promise.race([reader.read(), deadline]);
       if (done) return bytes.subarray(0, total);
       if (total + value.byteLength > maxBytes) {
-        await reader.cancel("request body exceeded image upload limit");
+        cancelBodyReader(reader, "request body exceeded image upload limit");
         return null;
       }
       bytes.set(value, total);
@@ -618,7 +628,7 @@ export async function readBodyWithLimit(
     }
   } catch (cause) {
     if (cause === timeoutError) {
-      await reader.cancel(timeoutError).catch(() => undefined);
+      cancelBodyReader(reader, timeoutError);
     }
     throw cause;
   } finally {
