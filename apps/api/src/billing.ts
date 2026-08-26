@@ -65,7 +65,11 @@ interface StripeCheckoutSession {
   customer: StripeExpandable | null;
   expires_at?: number;
   id: string;
-  metadata?: { organization_id?: string; [key: string]: string | undefined };
+  metadata?: {
+    checkout_claim_id?: string;
+    organization_id?: string;
+    [key: string]: string | undefined;
+  };
   status: string | null;
   subscription: StripeExpandable | StripeSubscription | null;
   url?: string | null;
@@ -90,7 +94,11 @@ interface StripeSubscription {
   customer: StripeExpandable;
   id: string;
   items: { data: StripeSubscriptionItem[] };
-  metadata?: { organization_id?: string; [key: string]: string | undefined };
+  metadata?: {
+    checkout_claim_id?: string;
+    organization_id?: string;
+    [key: string]: string | undefined;
+  };
   status: string;
 }
 
@@ -182,13 +190,7 @@ billing.post("/checkout", async (context) => {
     return checkoutDisabledResponse(context);
   const claimedPending = activePendingCheckout(record, state.nowSeconds);
   if (claimedPending) return context.json({ url: claimedPending.url });
-  if (
-    !checkoutClaim.owned ||
-    record?.checkout_claim_id !== checkoutClaim.id ||
-    !record.checkout_claim_price_id ||
-    !record.checkout_claim_quantity ||
-    !record.checkout_claim_expires_at
-  )
+  if (!checkoutClaim.owned || !completeCheckoutClaim(record, checkoutClaim.id))
     return checkoutInProgressResponse(context);
   const parameters = checkoutParameters(
     context.env.CORS_ORIGIN,
@@ -742,6 +744,7 @@ async function reconcilePendingCheckoutEntitlement(
         nowSeconds,
         organizationId,
         sessionId,
+        session.metadata?.checkout_claim_id,
       ))
     ) {
       throw new StripeApiError(
@@ -1028,6 +1031,7 @@ async function confirmCheckoutSession(
     Math.floor(Date.now() / 1000),
     organizationId,
     sessionId,
+    session.metadata?.checkout_claim_id,
   );
   if (!persisted) {
     throw new StripeApiError("Checkout did not create a subscription.", 409);
@@ -1054,6 +1058,7 @@ async function processStripeEvent(
         event.created,
         organizationId,
         session.id,
+        session.metadata?.checkout_claim_id,
       );
     }
     return;
@@ -1103,6 +1108,7 @@ async function refreshSubscription(
   eventCreated: number,
   knownOrganizationId?: string,
   checkoutSessionId?: string,
+  checkoutClaimId?: string,
 ) {
   const checkoutRefresh = Boolean(checkoutSessionId && knownOrganizationId);
   return withSubscriptionSyncLock(
@@ -1116,6 +1122,7 @@ async function refreshSubscription(
           environment.DB,
           knownOrganizationId,
           subscriptionId,
+          checkoutClaimId,
         ))
       ) {
         return true;
@@ -1132,6 +1139,7 @@ async function refreshSubscription(
           environment,
           knownOrganizationId,
           checkoutSessionId,
+          checkoutClaimId,
           subscription,
         ))
       ) {
@@ -1161,12 +1169,16 @@ async function checkoutSubscriptionAlreadyPersisted(
   database: D1Database,
   organizationId: string,
   subscriptionId: string,
+  checkoutClaimId: string | undefined,
 ) {
   const current = await findBilling(database, organizationId);
-  return (
+  const persisted =
     current?.stripe_subscription_id === subscriptionId &&
-    !current.pending_checkout_session_id
-  );
+    !current.pending_checkout_session_id;
+  if (persisted && checkoutClaimId) {
+    await releaseCheckoutClaim(database, organizationId, checkoutClaimId);
+  }
+  return persisted;
 }
 
 async function prepareCheckoutSubscriptionReplacement(
@@ -1179,6 +1191,7 @@ async function prepareCheckoutSubscriptionReplacement(
   >,
   organizationId: string,
   checkoutSessionId: string,
+  checkoutClaimId: string | undefined,
   subscription: StripeSubscription,
 ) {
   await clearExpiredCheckoutDeletionLease(
@@ -1186,6 +1199,14 @@ async function prepareCheckoutSubscriptionReplacement(
     organizationId,
     Math.floor(Date.now() / 1_000),
   );
+  if (checkoutClaimId) {
+    await attachCheckoutSessionToClaim(
+      environment.DB,
+      organizationId,
+      checkoutClaimId,
+      checkoutSessionId,
+    );
+  }
   const existing = await findBilling(environment.DB, organizationId);
   const matchesCurrent = existing?.stripe_subscription_id === subscription.id;
   const matchesPending =
@@ -1233,6 +1254,28 @@ async function prepareCheckoutSubscriptionReplacement(
     );
   }
   return true;
+}
+
+async function attachCheckoutSessionToClaim(
+  database: D1Database,
+  organizationId: string,
+  claimId: string,
+  sessionId: string,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET pending_checkout_session_id = ?, pending_checkout_url = NULL,
+           pending_checkout_expires_at = checkout_claim_expires_at,
+           pending_checkout_retry_at = NULL,
+           checkout_claim_id = NULL, checkout_claim_customer_id = NULL,
+           checkout_claim_price_id = NULL, checkout_claim_quantity = NULL,
+           checkout_claim_expires_at = NULL, updated_at = ?
+       WHERE organization_id = ? AND checkout_claim_id = ?
+         AND checkout_disabled_at IS NULL`,
+    )
+    .bind(sessionId, new Date().toISOString(), organizationId, claimId)
+    .run();
 }
 
 async function resolveRejectedCheckoutPersistence(
@@ -1718,25 +1761,30 @@ async function claimCheckout(
     )
     .run();
   const record = await findBilling(database, organizationId);
-  const reusableClaimId = activeCheckoutClaimId(record, nowSeconds);
   return {
-    id: reusableClaimId ?? claimId,
+    id: claimId,
     owned:
-      (Number(claimed.meta.changes) === 1 &&
-        record?.checkout_claim_id === claimId) ||
-      reusableClaimId !== null,
+      Number(claimed.meta.changes) === 1 &&
+      record?.checkout_claim_id === claimId,
     record,
   };
 }
 
-function activeCheckoutClaimId(record: BillingRow | null, nowSeconds: number) {
-  return record?.checkout_claim_id &&
-    record.checkout_claim_price_id &&
-    record.checkout_claim_quantity &&
-    record.checkout_claim_expires_at &&
-    record.checkout_claim_expires_at > nowSeconds
-    ? record.checkout_claim_id
-    : null;
+function completeCheckoutClaim(
+  record: BillingRow | null,
+  claimId: string,
+): record is BillingRow & {
+  checkout_claim_expires_at: number;
+  checkout_claim_id: string;
+  checkout_claim_price_id: string;
+  checkout_claim_quantity: number;
+} {
+  return Boolean(
+    record?.checkout_claim_id === claimId &&
+      record.checkout_claim_price_id &&
+      record.checkout_claim_quantity &&
+      record.checkout_claim_expires_at,
+  );
 }
 
 async function prepareCheckoutState(
@@ -1880,12 +1928,14 @@ function checkoutParameters(
   origin: string,
   organizationId: string,
   priceId: string,
-  claim: BillingRow,
+  claim: BillingRow & { checkout_claim_id: string },
 ) {
   const parameters = new URLSearchParams({
     "line_items[0][price]": priceId,
     "line_items[0][quantity]": String(claim.checkout_claim_quantity),
+    "metadata[checkout_claim_id]": claim.checkout_claim_id,
     "metadata[organization_id]": organizationId,
+    "subscription_data[metadata][checkout_claim_id]": claim.checkout_claim_id,
     "subscription_data[metadata][organization_id]": organizationId,
     cancel_url: `${origin}/organization/billing?checkout=canceled`,
     client_reference_id: organizationId,

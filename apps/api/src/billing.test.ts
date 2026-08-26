@@ -196,12 +196,11 @@ describe("billing", () => {
     }
   });
 
-  it("reuses one idempotency key for concurrent Checkout creation", async () => {
+  it("allows only the database claimant to create Checkout", async () => {
     const fixture = await createFixture();
     const originalFetch = globalThis.fetch;
     const idempotencyKeys: string[] = [];
     let markRequestStarted = () => {};
-    let markBothRequestsStarted = () => {};
     let releaseRequest = () => {};
     const requestStarted = new Promise<void>((resolve) => {
       markRequestStarted = resolve;
@@ -209,15 +208,11 @@ describe("billing", () => {
     const requestReleased = new Promise<void>((resolve) => {
       releaseRequest = resolve;
     });
-    const bothRequestsStarted = new Promise<void>((resolve) => {
-      markBothRequestsStarted = resolve;
-    });
     globalThis.fetch = (async (_input, init) => {
       idempotencyKeys.push(
         new Headers(init?.headers).get("Idempotency-Key") ?? "",
       );
       markRequestStarted();
-      if (idempotencyKeys.length === 2) markBothRequestsStarted();
       await requestReleased;
       const parameters = new URLSearchParams(String(init?.body));
       return Response.json({
@@ -239,12 +234,10 @@ describe("billing", () => {
         { method: "POST" },
         fixture.bindings,
       );
-      await bothRequestsStarted;
+      expect((await repeated).status).toBe(409);
       releaseRequest();
       expect((await winner).status).toBe(200);
-      expect((await repeated).status).toBe(200);
-      expect(idempotencyKeys).toHaveLength(2);
-      expect(new Set(idempotencyKeys).size).toBe(1);
+      expect(idempotencyKeys).toHaveLength(1);
       expect(
         fixture.database
           .query(
@@ -259,7 +252,7 @@ describe("billing", () => {
     }
   });
 
-  it("retries an ambiguous Checkout failure with the same claim", async () => {
+  it("reconciles an indeterminate Checkout through its webhook", async () => {
     const fixture = await createFixture();
     fixture.database
       .query(
@@ -272,25 +265,39 @@ describe("billing", () => {
     const originalConsoleError = console.error;
     const customers: Array<string | null> = [];
     const idempotencyKeys: string[] = [];
+    const checkoutClaimIds: Array<string | null> = [];
+    const subscriptionClaimIds: Array<string | null> = [];
     let requestCount = 0;
-    globalThis.fetch = (async (_input, init) => {
-      requestCount += 1;
-      idempotencyKeys.push(
-        new Headers(init?.headers).get("Idempotency-Key") ?? "",
-      );
-      customers.push(new URLSearchParams(String(init?.body)).get("customer"));
-      if (requestCount === 1) {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/v1/checkout/sessions")) {
+        requestCount += 1;
+        idempotencyKeys.push(
+          new Headers(init?.headers).get("Idempotency-Key") ?? "",
+        );
+        const parameters = new URLSearchParams(String(init?.body));
+        customers.push(parameters.get("customer"));
+        checkoutClaimIds.push(parameters.get("metadata[checkout_claim_id]"));
+        subscriptionClaimIds.push(
+          parameters.get("subscription_data[metadata][checkout_claim_id]"),
+        );
         return Response.json(
           { error: { message: "Stripe temporarily unavailable" } },
           { status: 500 },
         );
       }
-      return Response.json({
-        expires_at: Math.floor(Date.now() / 1_000) + 1_800,
-        id: "cs_ambiguous_retry",
-        status: "open",
-        url: "https://checkout.stripe.test/ambiguous-retry",
-      });
+      if (url.endsWith("/v1/subscriptions/sub_indeterminate")) {
+        return Response.json(
+          subscriptionEvent(
+            "unused_indeterminate",
+            101,
+            "active",
+            1,
+            "sub_indeterminate",
+          ).data.object,
+        );
+      }
+      throw new Error(`Unexpected Stripe request: ${url}`);
     }) as typeof fetch;
     console.error = () => {};
     try {
@@ -300,33 +307,85 @@ describe("billing", () => {
         fixture.bindings,
       );
       expect(failed.status).toBe(502);
-      expect(
-        fixture.database
-          .query(
-            `SELECT checkout_claim_id, checkout_claim_price_id
-             FROM organization_billing WHERE organization_id = ?`,
-          )
-          .get(organizationId),
-      ).toMatchObject({
-        checkout_claim_id: expect.any(String),
-        checkout_claim_price_id: proPriceId,
-      });
-      fixture.database
+      const claim = fixture.database
         .query(
-          `UPDATE organization_billing SET stripe_customer_id = 'cus_new'
-           WHERE organization_id = ?`,
+          `SELECT checkout_claim_id, checkout_claim_price_id
+           FROM organization_billing WHERE organization_id = ?`,
         )
-        .run(organizationId);
+        .get(organizationId) as {
+        checkout_claim_id: string;
+        checkout_claim_price_id: string;
+      };
+      const claimId = claim.checkout_claim_id;
+      expect(typeof claimId).toBe("string");
+      expect(claim.checkout_claim_price_id).toBe(proPriceId);
+      expect(checkoutClaimIds).toEqual([claimId]);
+      expect(subscriptionClaimIds).toEqual([claimId]);
 
       const retried = await fixture.app.request(
         "/checkout",
         { method: "POST" },
         fixture.bindings,
       );
-      expect(retried.status).toBe(200);
-      expect(idempotencyKeys).toHaveLength(2);
-      expect(new Set(idempotencyKeys).size).toBe(1);
-      expect(customers).toEqual(["cus_original", "cus_original"]);
+      expect(retried.status).toBe(409);
+      expect(requestCount).toBe(1);
+
+      const subscriptionCreated = subscriptionEvent(
+        "evt_indeterminate_subscription",
+        100,
+        "active",
+        1,
+        "sub_indeterminate",
+      );
+      expect((await sendWebhook(fixture, subscriptionCreated)).status).toBe(
+        200,
+      );
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_claim_id, stripe_subscription_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        checkout_claim_id: claimId,
+        stripe_subscription_id: "sub_indeterminate",
+      });
+
+      const completed = {
+        created: 101,
+        data: {
+          object: {
+            client_reference_id: organizationId,
+            id: "cs_indeterminate",
+            metadata: {
+              checkout_claim_id: claimId,
+              organization_id: organizationId,
+            },
+            subscription: "sub_indeterminate",
+          },
+        },
+        id: "evt_indeterminate_checkout",
+        type: "checkout.session.completed",
+      };
+      console.error = originalConsoleError;
+      expect((await sendWebhook(fixture, completed)).status).toBe(200);
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_claim_id, pending_checkout_session_id,
+                    stripe_status, stripe_subscription_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        checkout_claim_id: null,
+        pending_checkout_session_id: null,
+        stripe_status: "active",
+        stripe_subscription_id: "sub_indeterminate",
+      });
+      expect(idempotencyKeys).toHaveLength(1);
+      expect(customers).toEqual(["cus_original"]);
     } finally {
       console.error = originalConsoleError;
       globalThis.fetch = originalFetch;
@@ -412,10 +471,11 @@ describe("billing", () => {
         id: "cs_missing_url",
         status: "open",
       };
-      const missingUrl = await fixture.app.request(
+      const missingUrlFixture = await createFixture();
+      const missingUrl = await missingUrlFixture.app.request(
         "/checkout",
         { method: "POST" },
-        fixture.bindings,
+        missingUrlFixture.bindings,
       );
       expect(missingUrl.status).toBe(502);
       expect((await missingUrl.json()) as unknown).toEqual({
