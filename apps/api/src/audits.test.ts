@@ -1659,6 +1659,16 @@ describe("audits", () => {
 
   it("attributes built-in templates to a durable system actor", async () => {
     const fixture = await createFixture();
+    const bookmarked = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/templates/us_residential_core_global",
+      "GET",
+    );
+    expect(bookmarked.response.status).toBe(200);
+    expect(bookmarked.body.template.name).toBe(
+      "U.S. residential construction — comprehensive baseline",
+    );
+
     const firstOrganization = await jsonRequest<TemplateListResponse>(
       fixture,
       "/templates",

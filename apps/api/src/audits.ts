@@ -757,11 +757,23 @@ async function addTemplateVersion(
 }
 
 async function ensureStarterTemplates(database: D1Database) {
-  const now = new Date().toISOString();
   const starters = [
     { id: "nfpa70e_global", ...nfpa70eStarter },
     residentialCoreStarter,
   ];
+  const seeded = await database
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM audit_template_families AS family
+       JOIN audit_template_versions AS version
+         ON version.template_id = family.id AND version.version = 1
+       WHERE family.id IN (?, ?)`,
+    )
+    .bind(...starters.map(({ id }) => id))
+    .first<{ count: number }>();
+  if (Number(seeded?.count) === starters.length) return;
+
+  const now = new Date().toISOString();
   await database.batch(
     starters.flatMap((starter) => [
       database
@@ -788,20 +800,6 @@ async function ensureStarterTemplates(database: D1Database) {
           auditLibraryActor.id,
           now,
         ),
-      database
-        .prepare(
-          `UPDATE audit_template_families
-           SET created_by = ?
-           WHERE id = ? AND scope = 'global'`,
-        )
-        .bind(auditLibraryActor.id, starter.id),
-      database
-        .prepare(
-          `UPDATE audit_template_versions
-           SET created_by = ?
-           WHERE template_id = ? AND version = 1`,
-        )
-        .bind(auditLibraryActor.id, starter.id),
     ]),
   );
 }
@@ -812,6 +810,7 @@ async function findTemplate(
   id: string,
   version?: number,
 ) {
+  await ensureStarterTemplates(database);
   const versionJoin = version
     ? "version.version = ?"
     : "version.version = family.current_version";

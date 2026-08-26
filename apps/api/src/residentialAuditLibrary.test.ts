@@ -16,7 +16,7 @@ describe("residential audit library", () => {
 
   it("ships a substantial cross-trade residential baseline", () => {
     expect(residentialLibraryStats.sections).toBe(19);
-    expect(residentialLibraryStats.controls).toBeGreaterThanOrEqual(225);
+    expect(residentialLibraryStats.controls).toBe(253);
     expect(residentialLibraryStats.criticalControls).toBeGreaterThanOrEqual(50);
     expect(residentialLibraryStats.sources).toBeGreaterThanOrEqual(25);
   });
