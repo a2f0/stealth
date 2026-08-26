@@ -6,6 +6,7 @@ import { createAuth } from "./auth";
 import {
   type AuthVariables,
   requireAuth,
+  requireAuthOrganizationSeat,
   requireOrganization,
   requireRole,
 } from "./authMiddleware";
@@ -54,6 +55,7 @@ app.post("/api/auth/organization/leave", async (context) => {
   return response;
 });
 
+app.use("/api/auth/organization/*", requireAuth, requireAuthOrganizationSeat);
 app.all("/api/auth/*", (context) =>
   createAuth(context.env, (promise) =>
     context.executionCtx.waitUntil(promise),

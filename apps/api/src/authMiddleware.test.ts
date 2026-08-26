@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
-import { type AuthVariables, requireOrganization } from "./authMiddleware";
+import {
+  type AuthVariables,
+  requireAuthOrganizationSeat,
+  requireOrganization,
+} from "./authMiddleware";
 import type { Bindings } from "./types";
 
 describe("organization middleware", () => {
@@ -87,7 +91,49 @@ describe("organization middleware", () => {
         "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
     });
   });
+
+  it("blocks an unseated member from organization auth data but permits switching", async () => {
+    const bindings = {
+      DB: membershipDatabase(["active-org"], [], "owner-id"),
+    } as Bindings;
+    const protectedResponse = await authOrganizationApp().request(
+      "/api/auth/organization/list-members?organizationId=active-org",
+      undefined,
+      bindings,
+    );
+    expect(protectedResponse.status).toBe(403);
+    const switchResponse = await authOrganizationApp().request(
+      "/api/auth/organization/set-active",
+      {
+        body: JSON.stringify({ organizationId: "default-org" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      bindings,
+    );
+    expect(switchResponse.status).toBe(200);
+  });
 });
+
+function authOrganizationApp() {
+  const app = new Hono<{
+    Bindings: Bindings;
+    Variables: AuthVariables;
+  }>();
+  app.use("*", async (context, next) => {
+    context.set("authSession", {
+      session: { activeOrganizationId: "active-org" },
+      user: {
+        defaultOrganizationId: "active-org",
+        id: "user-id",
+      },
+    } as unknown as AuthSession);
+    await next();
+  });
+  app.use("*", requireAuthOrganizationSeat);
+  app.all("*", (context) => context.json({ ok: true }));
+  return app;
+}
 
 function testApp(
   activeOrganizationId: string | null,

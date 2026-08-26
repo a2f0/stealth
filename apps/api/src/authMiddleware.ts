@@ -1,3 +1,4 @@
+import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { AuthSession } from "./auth";
 import { createAuth } from "./auth";
@@ -14,6 +15,18 @@ type AuthEnv = {
   Bindings: Bindings;
   Variables: AuthVariables;
 };
+
+const organizationSeatRouteExemptions = new Set([
+  "/api/auth/organization/accept-invitation",
+  "/api/auth/organization/check-slug",
+  "/api/auth/organization/create",
+  "/api/auth/organization/get-invitation",
+  "/api/auth/organization/leave",
+  "/api/auth/organization/list",
+  "/api/auth/organization/list-user-invitations",
+  "/api/auth/organization/reject-invitation",
+  "/api/auth/organization/set-active",
+]);
 
 export const requireAuth = createMiddleware<AuthEnv>(async (context, next) => {
   const auth = createAuth(context.env, (promise) =>
@@ -89,6 +102,96 @@ export const requireOrganization = createMiddleware<AuthEnv>(
     return next();
   },
 );
+
+export const requireAuthOrganizationSeat = createMiddleware<AuthEnv>(
+  async (context, next) => {
+    if (organizationSeatRouteExemptions.has(context.req.path)) return next();
+    const session = context.get("authSession");
+    const target = await authOrganizationTarget(context, session);
+    if (!target) return next();
+    if (
+      !(await organizationUserHasSeat(
+        context.env.DB,
+        target,
+        session.user.id,
+        context.env.STRIPE_PRO_PRICE_ID,
+      ))
+    ) {
+      return context.json(
+        {
+          error:
+            "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+        },
+        403,
+      );
+    }
+    return next();
+  },
+);
+
+async function authOrganizationTarget(
+  context: Context<AuthEnv>,
+  session: AuthSession,
+) {
+  const body = (await context.req.raw
+    .clone()
+    .json()
+    .catch(() => null)) as {
+    invitationId?: unknown;
+    organizationId?: unknown;
+    organizationSlug?: unknown;
+    teamId?: unknown;
+    [key: string]: unknown;
+  } | null;
+  const explicitOrganizationId = stringValue(
+    body?.organizationId ?? context.req.query("organizationId"),
+  );
+  if (explicitOrganizationId) return explicitOrganizationId;
+
+  const organizationSlug = stringValue(
+    body?.organizationSlug ?? context.req.query("organizationSlug"),
+  );
+  if (organizationSlug) {
+    const organization = await context.env.DB.prepare(
+      `SELECT id FROM organization WHERE slug = ? AND deletedAt IS NULL`,
+    )
+      .bind(organizationSlug)
+      .first<{ id: string }>();
+    if (organization) return organization.id;
+  }
+
+  const teamId = stringValue(body?.teamId ?? context.req.query("teamId"));
+  if (teamId) {
+    const team = await context.env.DB.prepare(
+      `SELECT organizationId FROM team WHERE id = ?`,
+    )
+      .bind(teamId)
+      .first<{ organizationId: string }>();
+    if (team) return team.organizationId;
+  }
+
+  const invitationId = stringValue(
+    body?.invitationId ?? context.req.query("invitationId"),
+  );
+  if (invitationId) {
+    const invitation = await context.env.DB.prepare(
+      `SELECT organizationId FROM invitation WHERE id = ?`,
+    )
+      .bind(invitationId)
+      .first<{ organizationId: string }>();
+    if (invitation) return invitation.organizationId;
+  }
+
+  return (
+    session.session.activeOrganizationId ??
+    session.user.defaultOrganizationId ??
+    null
+  );
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
 
 function organizationCandidates(
   activeOrganizationId: string | null | undefined,

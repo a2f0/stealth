@@ -11,11 +11,18 @@ CREATE TABLE organization_billing (
     CHECK (cancel_at_period_end IN (0, 1)),
   current_period_end TEXT,
   stripe_event_created INTEGER NOT NULL DEFAULT 0,
+  checkout_claim_id TEXT,
+  checkout_claim_quantity INTEGER CHECK (checkout_claim_quantity > 0),
+  checkout_claim_expires_at INTEGER,
+  pending_checkout_session_id TEXT UNIQUE,
+  pending_checkout_url TEXT,
+  pending_checkout_expires_at INTEGER,
+  last_reconciled_at TEXT,
   updated_at TEXT NOT NULL
 );
 
 CREATE INDEX organization_billing_status_idx
-ON organization_billing (stripe_status, updated_at);
+ON organization_billing (stripe_status, last_reconciled_at);
 
 CREATE TABLE stripe_webhook_events (
   id TEXT NOT NULL PRIMARY KEY,

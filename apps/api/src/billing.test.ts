@@ -3,7 +3,12 @@ import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
-import { billing, handleStripeWebhook, syncOrganizationSeats } from "./billing";
+import {
+  billing,
+  handleStripeWebhook,
+  reconcileSubscriptionSeats,
+  syncOrganizationSeats,
+} from "./billing";
 import { purgeExpiredFreeAuditRuns } from "./billingRetention";
 import type { Bindings } from "./types";
 
@@ -29,6 +34,7 @@ describe("billing", () => {
       checkoutRequests.push(new URLSearchParams(String(init?.body)));
       return Response.json({
         client_reference_id: organizationId,
+        expires_at: Math.floor(Date.now() / 1_000) + 1_800,
         id: "cs_live_test",
         status: "open",
         url: "https://checkout.stripe.test/session",
@@ -55,6 +61,59 @@ describe("billing", () => {
           "subscription_data[metadata][organization_id]",
         ),
       ).toBe(organizationId);
+      const repeated = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      const repeatedBody: unknown = await repeated.json();
+      expect(repeatedBody).toEqual({
+        url: "https://checkout.stripe.test/session",
+      });
+      expect(checkoutRequests).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("deduplicates concurrent Checkout creation with one claim", async () => {
+    const fixture = await createFixture();
+    const originalFetch = globalThis.fetch;
+    const idempotencyKeys: string[] = [];
+    let releaseRequests = () => {};
+    const requestsStarted = new Promise<void>((resolve) => {
+      releaseRequests = resolve;
+    });
+    globalThis.fetch = (async (_input, init) => {
+      idempotencyKeys.push(
+        new Headers(init?.headers).get("Idempotency-Key") ?? "",
+      );
+      if (idempotencyKeys.length === 2) releaseRequests();
+      await requestsStarted;
+      const parameters = new URLSearchParams(String(init?.body));
+      return Response.json({
+        expires_at: Number(parameters.get("expires_at")),
+        id: "cs_concurrent_test",
+        status: "open",
+        url: "https://checkout.stripe.test/concurrent",
+      });
+    }) as typeof fetch;
+    try {
+      const responses = await Promise.all([
+        fixture.app.request("/checkout", { method: "POST" }, fixture.bindings),
+        fixture.app.request("/checkout", { method: "POST" }, fixture.bindings),
+      ]);
+      expect(responses.map(({ status }) => status)).toEqual([200, 200]);
+      expect(new Set(idempotencyKeys).size).toBe(1);
+      expect(idempotencyKeys).toHaveLength(2);
+      expect(
+        fixture.database
+          .query(
+            `SELECT pending_checkout_session_id FROM organization_billing
+             WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ pending_checkout_session_id: "cs_concurrent_test" });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -63,44 +122,71 @@ describe("billing", () => {
   it("uses signed, idempotent, ordered webhooks as the entitlement source", async () => {
     const fixture = await createFixture();
     const active = subscriptionEvent("evt_active", 100, "active", 3);
-    const first = await sendWebhook(fixture, active);
-    expect(first.status).toBe(200);
-    expect((await first.json()) as unknown).toEqual({ received: true });
-    expect((await sendWebhook(fixture, active)).status).toBe(200);
-    expect(
-      fixture.database
-        .query(
-          `SELECT stripe_status, seat_quantity, stripe_event_created
-           FROM organization_billing WHERE organization_id = ?`,
-        )
-        .get(organizationId),
-    ).toEqual({
-      seat_quantity: 3,
-      stripe_event_created: 100,
-      stripe_status: "active",
-    });
-    expect(
-      fixture.database
-        .query("SELECT COUNT(*) AS count FROM stripe_webhook_events")
-        .get(),
-    ).toEqual({ count: 1 });
+    let currentSubscription = active.data.object;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(currentSubscription)) as typeof fetch;
+    try {
+      const first = await sendWebhook(fixture, active);
+      expect(first.status).toBe(200);
+      expect((await first.json()) as unknown).toEqual({ received: true });
+      expect((await sendWebhook(fixture, active)).status).toBe(200);
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_status, seat_quantity, stripe_event_created
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        seat_quantity: 3,
+        stripe_event_created: 100,
+        stripe_status: "active",
+      });
+      expect(
+        fixture.database
+          .query("SELECT COUNT(*) AS count FROM stripe_webhook_events")
+          .get(),
+      ).toEqual({ count: 1 });
 
-    await sendWebhook(fixture, subscriptionEvent("evt_old", 99, "canceled", 3));
-    expect(
-      fixture.database
-        .query(
-          `SELECT stripe_status FROM organization_billing
-           WHERE organization_id = ?`,
-        )
-        .get(organizationId),
-    ).toEqual({ stripe_status: "active" });
+      await sendWebhook(
+        fixture,
+        subscriptionEvent("evt_old", 99, "canceled", 3),
+      );
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_status FROM organization_billing
+             WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ stripe_status: "active" });
 
-    await sendWebhook(
-      fixture,
-      subscriptionEvent("evt_canceled", 101, "canceled", 3),
-    );
-    const summary = await fixture.app.request("/", undefined, fixture.bindings);
-    expect(await summary.json()).toMatchObject({ plan: "free" });
+      await sendWebhook(
+        fixture,
+        subscriptionEvent("evt_same_second_stale", 100, "canceled", 3),
+      );
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_status FROM organization_billing
+             WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ stripe_status: "active" });
+
+      const canceled = subscriptionEvent("evt_canceled", 101, "canceled", 3);
+      currentSubscription = canceled.data.object;
+      await sendWebhook(fixture, canceled);
+      const summary = await fixture.app.request(
+        "/",
+        undefined,
+        fixture.bindings,
+      );
+      expect(await summary.json()).toMatchObject({ plan: "free" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("synchronizes Stripe quantity to active organization members", async () => {
@@ -139,6 +225,39 @@ describe("billing", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("reconciles every subscription when more than one batch is active", async () => {
+    const fixture = await createFixture();
+    const now = new Date().toISOString();
+    for (let index = 0; index < 30; index += 1) {
+      const target =
+        index < 3 ? `org_user-${index + 1}` : `org_reconcile-${index}`;
+      if (index >= 3) {
+        const userId = `reconcile-${index}`;
+        insertUser(fixture.database, userId);
+        fixture.database
+          .query(
+            `INSERT INTO organization (id, name, slug, createdAt)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(target, `Reconcile ${index}`, `reconcile-${index}`, now);
+        addMember(fixture.database, userId, target);
+      }
+      fixture.database
+        .query(
+          `INSERT INTO organization_billing
+           (organization_id, stripe_subscription_item_id, stripe_price_id,
+            stripe_status, seat_quantity, stripe_event_created, updated_at)
+           VALUES (?, ?, ?, 'active', 1, 1, ?)`,
+        )
+        .run(target, `si_${index}`, proPriceId, now);
+    }
+
+    await reconcileSubscriptionSeats(fixture.bindings);
+    expect(reconciledCount(fixture.database)).toEqual({ count: 25 });
+    await reconcileSubscriptionSeats(fixture.bindings);
+    expect(reconciledCount(fixture.database)).toEqual({ count: 30 });
   });
 
   it("purges old Free audit history without touching Pro history", async () => {
@@ -333,6 +452,15 @@ function insertAudit(
                'completed', 'user-1', ?, ?)`,
     )
     .run(id, target, createdAt, createdAt);
+}
+
+function reconciledCount(database: Database) {
+  return database
+    .query(
+      `SELECT COUNT(*) AS count FROM organization_billing
+       WHERE last_reconciled_at IS NOT NULL`,
+    )
+    .get();
 }
 
 interface TestStatement {

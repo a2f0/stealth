@@ -133,6 +133,16 @@ describe("api", () => {
 
     expect(response.status).toBe(401);
   });
+
+  it("requires authentication for organization member data", async () => {
+    const response = await app.request(
+      "/api/auth/organization/list-members",
+      undefined,
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
 });
 
 function authBindings(): Bindings {
