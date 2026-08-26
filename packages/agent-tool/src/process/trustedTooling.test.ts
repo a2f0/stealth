@@ -260,6 +260,17 @@ test("shipping skills isolate preflights and disable contributor hooks", () => {
       ),
     ).toBe(true);
   }
+
+  for (const skillPath of [
+    ".claude/skills/squash-merge/SKILL.md",
+    ".codex/skills/squash-merge/SKILL.md",
+  ]) {
+    const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
+    expect(content).toContain(
+      'git rev-parse --verify "refs/heads/$MERGED_BRANCH^{commit}"',
+    );
+    expect(content).not.toContain('git rev-parse "$MERGED_BRANCH"');
+  }
 });
 
 test("reset reaches the exact fetched upstream before installing hooks", () => {

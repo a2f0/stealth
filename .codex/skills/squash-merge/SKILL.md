@@ -273,7 +273,7 @@ as-is.
      [ "$REMOTE_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$REMOTE_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH moved to $REMOTE_BRANCH_SHA after merge; refusing remote delete" >&2; exit 1; }
      git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --force-with-lease="refs/heads/$MERGED_BRANCH:$REMOTE_BRANCH_SHA" "$FEATURE_REPO_URL" ":refs/heads/$MERGED_BRANCH" || { echo "Error: could not lease-delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }
    fi
-   LOCAL_BRANCH_SHA=$(git rev-parse "$MERGED_BRANCH")
+   LOCAL_BRANCH_SHA=$(git rev-parse --verify "refs/heads/$MERGED_BRANCH^{commit}") || { echo "Error: could not resolve local branch $MERGED_BRANCH; refusing local delete" >&2; exit 1; }
    [ "$LOCAL_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$LOCAL_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: local $MERGED_BRANCH moved after merge; refusing local delete" >&2; exit 1; }
    git branch -D "$MERGED_BRANCH" || { echo "Error: could not delete local $MERGED_BRANCH" >&2; exit 1; }
    ```

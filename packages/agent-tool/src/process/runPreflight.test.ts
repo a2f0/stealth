@@ -258,7 +258,8 @@ test.skipIf(
       );
       writeFileSync(
         path.join(repositoryRoot, "hang.ts"),
-        "setInterval(() => {}, 1_000);\n",
+        `process.on("SIGTERM", () => {});\n` +
+          `setInterval(() => {}, 1_000);\n`,
       );
       writeFileSync(
         path.join(repositoryRoot, "fill.ts"),

@@ -55,7 +55,13 @@ shift 4
 
 terminate_group() {
   trap - TERM INT HUP
-  [ -z "$child" ] || kill -TERM "-$child" 2>/dev/null || true
+  if [ -n "$child" ]; then
+    kill -TERM "-$child" 2>/dev/null || true
+    /bin/sleep 1
+    kill -KILL "-$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+  fi
+  exit 143
 }
 
 check_storage() {
