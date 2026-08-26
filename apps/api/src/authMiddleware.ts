@@ -63,7 +63,10 @@ export const requireOrganizationPluginAccess = createMiddleware<AuthEnv>(
     if (listsCurrentUsersTeamsAcrossOrganizations(context, session.user.id)) {
       return filterTeamsRequiringTwoFactor(context, next);
     }
-    const requestedOrganizationIds = await organizationIdsFromRequest(context);
+    const requestedOrganizationIds = await organizationIdsFromRequest(
+      context,
+      session.session.activeTeamId,
+    );
     if (requestedOrganizationIds.length > 1) {
       return context.json(
         { error: "Conflicting organization references are not allowed." },
@@ -209,7 +212,10 @@ async function authorizeOrganization(
   return next();
 }
 
-async function organizationIdsFromRequest(context: Context<AuthEnv>) {
+async function organizationIdsFromRequest(
+  context: Context<AuthEnv>,
+  activeTeamId: string | null | undefined,
+) {
   const organizationIds: string[] = [];
   const addOrganizationId = (organizationId: string | undefined) => {
     if (organizationId && !organizationIds.includes(organizationId)) {
@@ -231,6 +237,15 @@ async function organizationIdsFromRequest(context: Context<AuthEnv>) {
         await organizationIdForRecord(context.env.DB, table, resourceId),
       );
     }
+  }
+  if (
+    activeTeamId &&
+    organizationPluginPathsUsingActiveTeam.has(context.req.path) &&
+    !searchParams.has("teamId")
+  ) {
+    addOrganizationId(
+      await organizationIdForRecord(context.env.DB, "team", activeTeamId),
+    );
   }
   const body = await context.req.raw
     .clone()
@@ -268,6 +283,11 @@ const organizationResourceSelectors = [
   ["member", "memberId"],
   ["team", "teamId"],
 ] as const;
+
+const organizationPluginPathsUsingActiveTeam = new Set([
+  "/api/auth/organization/get-active-team",
+  "/api/auth/organization/list-team-members",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

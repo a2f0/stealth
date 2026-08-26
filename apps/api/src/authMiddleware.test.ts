@@ -204,6 +204,26 @@ describe("organization plugin middleware", () => {
     expect(body).toEqual([{ id: "active-team", organizationId: "active-org" }]);
   });
 
+  it("checks the organization of a stale active team", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/list-team-members",
+      null,
+      "active-org",
+      ["active-org", "protected-org"],
+      ["protected-org"],
+      { team: { "protected-team": "protected-org" } },
+      undefined,
+      "protected-team",
+    );
+
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      code: "TWO_FACTOR_SETUP_REQUIRED",
+      error: "Set up two-factor authentication before using this organization.",
+    });
+  });
+
   it("allows organization creation without an existing organization", async () => {
     const response = await pluginRequest(
       "/api/auth/organization/create",
@@ -286,6 +306,7 @@ function pluginRequest(
   twoFactorRequiredOrganizations: string[],
   resourceOrganizations: ResourceOrganizations = {},
   responseBody?: unknown,
+  activeTeamId: string | null = null,
 ) {
   const app = new Hono<{
     Bindings: Bindings;
@@ -293,7 +314,11 @@ function pluginRequest(
   }>();
   app.use("*", async (context, next) => {
     context.set("authSession", {
-      session: { activeOrganizationId, twoFactorVerified: false },
+      session: {
+        activeOrganizationId,
+        activeTeamId,
+        twoFactorVerified: false,
+      },
       user: {
         defaultOrganizationId: activeOrganizationId,
         id: "user-id",
