@@ -21,6 +21,7 @@ import { getWorkspaceOrganizations } from "./organizationSettingsApi";
 import {
   createOrganizationSlug,
   isOrganizationPath,
+  organizationPathRequiresAccess,
   resolveActiveOrganizationId,
   type WorkspaceOrganization,
 } from "./organizationState";
@@ -211,7 +212,9 @@ function AuthenticatedWorkspace({
   if (pathname === "/admin" && !hasRole(session.user.role, "admin")) {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
-  if (pathname === "/finance" && access.isPending) return <LoadingScreen />;
+  if (organizationPathRequiresAccess(pathname) && access.isPending) {
+    return <LoadingScreen />;
+  }
   if (
     pathname === "/finance" &&
     !access.twoFactorRequirement &&
@@ -345,10 +348,6 @@ function OrganizationTwoFactorRequired({
       </section>
     </>
   );
-}
-
-function organizationPathRequiresAccess(pathname: string) {
-  return !["/account/security", "/admin", "/invite"].includes(pathname);
 }
 
 function NoOrganization() {

@@ -60,7 +60,14 @@ export const requireOrganizationPluginAccess = createMiddleware<AuthEnv>(
       return next();
     }
     const session = context.get("authSession");
-    const requestedOrganizationId = await organizationIdFromRequest(context);
+    const requestedOrganizationIds = await organizationIdsFromRequest(context);
+    if (requestedOrganizationIds.length > 1) {
+      return context.json(
+        { error: "Conflicting organization references are not allowed." },
+        400,
+      );
+    }
+    const requestedOrganizationId = requestedOrganizationIds[0];
     const candidates = requestedOrganizationId
       ? [requestedOrganizationId]
       : organizationCandidates(
@@ -136,43 +143,62 @@ async function authorizeOrganization(
   return next();
 }
 
-async function organizationIdFromRequest(context: Context<AuthEnv>) {
+async function organizationIdsFromRequest(context: Context<AuthEnv>) {
+  const organizationIds: string[] = [];
+  const addOrganizationId = (organizationId: string | undefined) => {
+    if (organizationId && !organizationIds.includes(organizationId)) {
+      organizationIds.push(organizationId);
+    }
+  };
   const searchParams = new URL(context.req.url).searchParams;
-  const queryOrganizationId = searchParams.get("organizationId");
-  if (queryOrganizationId) return queryOrganizationId;
+  addOrganizationId(searchParams.get("organizationId") ?? undefined);
   const queryOrganizationSlug = searchParams.get("organizationSlug");
   if (queryOrganizationSlug) {
-    return organizationIdForSlug(context.env.DB, queryOrganizationSlug);
+    addOrganizationId(
+      await organizationIdForSlug(context.env.DB, queryOrganizationSlug),
+    );
   }
   const body = await context.req.raw
     .clone()
     .json()
     .catch(() => null);
-  if (!isRecord(body)) return undefined;
-  const bodyOrganizationId = stringProperty(body, "organizationId");
-  if (bodyOrganizationId) return bodyOrganizationId;
+  if (!isRecord(body)) return organizationIds;
+  addOrganizationId(stringProperty(body, "organizationId"));
   const bodyOrganizationSlug = stringProperty(body, "organizationSlug");
   if (bodyOrganizationSlug) {
-    return organizationIdForSlug(context.env.DB, bodyOrganizationSlug);
+    addOrganizationId(
+      await organizationIdForSlug(context.env.DB, bodyOrganizationSlug),
+    );
   }
   const data = Reflect.get(body, "data");
   if (isRecord(data)) {
-    const dataOrganizationId = stringProperty(data, "organizationId");
-    if (dataOrganizationId) return dataOrganizationId;
+    addOrganizationId(stringProperty(data, "organizationId"));
+    const dataOrganizationSlug = stringProperty(data, "organizationSlug");
+    if (dataOrganizationSlug) {
+      addOrganizationId(
+        await organizationIdForSlug(context.env.DB, dataOrganizationSlug),
+      );
+    }
   }
   const invitationId = stringProperty(body, "invitationId");
   if (invitationId) {
-    return organizationIdForRecord(context.env.DB, "invitation", invitationId);
+    addOrganizationId(
+      await organizationIdForRecord(context.env.DB, "invitation", invitationId),
+    );
   }
   const memberId = stringProperty(body, "memberId");
   if (memberId) {
-    return organizationIdForRecord(context.env.DB, "member", memberId);
+    addOrganizationId(
+      await organizationIdForRecord(context.env.DB, "member", memberId),
+    );
   }
   const teamId = stringProperty(body, "teamId");
   if (teamId) {
-    return organizationIdForRecord(context.env.DB, "team", teamId);
+    addOrganizationId(
+      await organizationIdForRecord(context.env.DB, "team", teamId),
+    );
   }
-  return undefined;
+  return organizationIds;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

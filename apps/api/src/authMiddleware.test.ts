@@ -151,6 +151,22 @@ describe("organization plugin middleware", () => {
     });
   });
 
+  it("rejects conflicting organization references", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/update?organizationId=active-org",
+      { organizationId: "protected-org" },
+      "active-org",
+      ["active-org", "protected-org"],
+      ["protected-org"],
+    );
+
+    expect(response.status).toBe(400);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      error: "Conflicting organization references are not allowed.",
+    });
+  });
+
   it("allows organization creation without an existing organization", async () => {
     const response = await pluginRequest(
       "/api/auth/organization/create",

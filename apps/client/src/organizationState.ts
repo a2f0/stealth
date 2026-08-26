@@ -9,6 +9,10 @@ export function isOrganizationPath(pathname: string) {
   return pathname === "/organization" || pathname.startsWith("/organization/");
 }
 
+export function organizationPathRequiresAccess(pathname: string) {
+  return !["/account/security", "/admin", "/invite"].includes(pathname);
+}
+
 export function organizationSettingsPage(
   pathname: string,
 ): OrganizationSettingsPage {
