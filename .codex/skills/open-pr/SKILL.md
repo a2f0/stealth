@@ -182,11 +182,17 @@ fi
        echo "Error: local $DEFAULT_BRANCH has unique or diverged commits" >&2
        exit 1
      fi
-     if git show-ref --verify --quiet "refs/heads/$NEW_BRANCH" ||
-       git ls-remote --exit-code --heads "$FEATURE_REMOTE" "$NEW_BRANCH" >/dev/null; then
+     if git show-ref --verify --quiet "refs/heads/$NEW_BRANCH"; then
        echo "Error: branch already exists: $NEW_BRANCH" >&2
        exit 1
      fi
+     REMOTE_BRANCH_STATUS=0
+     git ls-remote --exit-code --heads "$FEATURE_REMOTE" "$NEW_BRANCH" >/dev/null || REMOTE_BRANCH_STATUS=$?
+     case "$REMOTE_BRANCH_STATUS" in
+       0) echo "Error: branch already exists: $NEW_BRANCH" >&2; exit 1 ;;
+       2) ;;
+       *) echo "Error: could not inspect $FEATURE_REMOTE for $NEW_BRANCH" >&2; exit 1 ;;
+     esac
      ```
 
      If the ancestry check fails, stop rather than rebasing or resetting local

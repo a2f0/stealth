@@ -127,6 +127,47 @@ test("shipping skills bootstrap tools outside the feature checkout", () => {
   }
 });
 
+test("shipping skills fail closed without mutating report-only reviews", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+
+  for (const skillRoot of [".claude/skills", ".codex/skills"]) {
+    const review = readFileSync(
+      path.join(repositoryRoot, skillRoot, "cross-agent-review/SKILL.md"),
+      "utf8",
+    );
+    const mergeGuard = review.indexOf('if [ "$REPAIR_ROUNDS" -ne 0 ]; then');
+    const merge = review.indexOf(
+      'git -c core.hooksPath=/dev/null -c commit.gpgSign=false merge --no-edit "$FETCHED_BASE"',
+    );
+    const push = review.indexOf(
+      'git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"',
+    );
+    expect(mergeGuard).toBeGreaterThan(-1);
+    expect(merge).toBeGreaterThan(mergeGuard);
+    expect(push).toBeGreaterThan(merge);
+
+    const openPr = readFileSync(
+      path.join(repositoryRoot, skillRoot, "open-pr/SKILL.md"),
+      "utf8",
+    );
+    expect(openPr).toContain(
+      'git ls-remote --exit-code --heads "$FEATURE_REMOTE" "$NEW_BRANCH" >/dev/null || REMOTE_BRANCH_STATUS=$?',
+    );
+    expect(openPr).toContain("2) ;;");
+    expect(openPr).toContain(
+      '*) echo "Error: could not inspect $FEATURE_REMOTE for $NEW_BRANCH" >&2; exit 1 ;;',
+    );
+
+    const reset = readFileSync(
+      path.join(repositoryRoot, skillRoot, "reset/SKILL.md"),
+      "utf8",
+    );
+    expect(reset.indexOf('if [ -z "$TARGET_BRANCH" ]; then')).toBeLessThan(
+      reset.indexOf("GH_BIN=$(resolve_bootstrap_tool gh)"),
+    );
+  }
+});
+
 test("shipping skills isolate preflights and disable contributor hooks", () => {
   const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
   const mirroredSkillPaths = [

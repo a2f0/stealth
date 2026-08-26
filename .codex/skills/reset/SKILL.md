@@ -90,16 +90,21 @@ resolve_bootstrap_tool() {
 }
 
 GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
-GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
-PATH="${GIT_BIN%/*}:${GH_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH="${GIT_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 HOOKS_SCRIPT="$ROOT_DIR/scripts/git/install-hooks.sh"
 
-# Only when no target branch argument was given:
-TARGET_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name) || { echo "Error: gh repo view failed (authenticated?)" >&2; exit 1; }
-[ -n "$TARGET_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
+# TARGET_BRANCH is the parsed optional branch argument. Only resolve gh when it
+# was omitted and the repository default must be discovered:
+if [ -z "$TARGET_BRANCH" ]; then
+  GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
+  PATH="${GIT_BIN%/*}:${GH_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+  export PATH
+  TARGET_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name) || { echo "Error: gh repo view failed (authenticated?)" >&2; exit 1; }
+  [ -n "$TARGET_BRANCH" ] || { echo "Error: repository default branch is unavailable" >&2; exit 1; }
+fi
 ```
 
 ## Workflow

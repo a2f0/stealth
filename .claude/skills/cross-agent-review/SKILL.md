@@ -220,17 +220,24 @@ Require a clean worktree before fetching or snapshotting anything:
    fi
    ```
 
-   Then **merge** the exact fetched base in — merge `$FETCHED_BASE`, which was
-   validated against the PR snapshot when a PR is open, rather than an ambient
-   remote-tracking ref that may belong to a stale fork:
+   Unless this is report-only mode, **merge** the exact fetched base in — merge
+   `$FETCHED_BASE`, which was validated against the PR snapshot when a PR is
+   open, rather than an ambient remote-tracking ref that may belong to a stale
+   fork:
 
    ```bash
-   PRE_SYNC_HEAD=$(git rev-parse HEAD)
-   git -c core.hooksPath=/dev/null -c commit.gpgSign=false merge --no-edit "$FETCHED_BASE" || {
-     git -c core.hooksPath=/dev/null merge --abort
-     echo "Error: merging the latest $BASE_REF into $BRANCH conflicts — resolve it and re-run" >&2
-     exit 1
-   }
+   if [ "$REPAIR_ROUNDS" -ne 0 ]; then
+     PRE_SYNC_HEAD=$(git rev-parse HEAD)
+     git -c core.hooksPath=/dev/null -c commit.gpgSign=false merge --no-edit "$FETCHED_BASE" || {
+       git -c core.hooksPath=/dev/null merge --abort
+       echo "Error: merging the latest $BASE_REF into $BRANCH conflicts — resolve it and re-run" >&2
+       exit 1
+     }
+
+     if [ -n "$PR_NUMBER" ] && [ "$(git rev-parse HEAD)" != "$PRE_SYNC_HEAD" ]; then
+       git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"
+     fi
+   fi
    ```
 
    **Merge, not rebase, and never force.** Every branch mutation in these skills
@@ -247,12 +254,6 @@ Require a clean worktree before fetching or snapshotting anything:
    nothing. The push bypasses feature-controlled hooks; **with no PR**, the
    merge stays local
    and `open-pr` pushes it later, so the flow's single push is preserved:
-
-   ```bash
-   if [ -n "$PR_NUMBER" ] && [ "$(git rev-parse HEAD)" != "$PRE_SYNC_HEAD" ]; then
-     git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"
-   fi
-   ```
 
    Then snapshot the head under review — the integrated head when the sync ran,
    the current head when it was skipped:
