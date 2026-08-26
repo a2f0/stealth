@@ -1403,6 +1403,31 @@ describe("billing", () => {
     ).toBe(1);
   });
 
+  it("keeps history while organization deletion is in flight", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_status, checkout_disabled_at,
+          checkout_disabled_expires_at, updated_at)
+         VALUES (?, 'canceled', 'deletion-in-flight', 2000000000, ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+    insertAudit(
+      fixture.database,
+      "deletion-in-flight-old",
+      organizationId,
+      "2026-06-01",
+    );
+
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(0);
+    expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
+      { id: "deletion-in-flight-old" },
+    ]);
+  });
+
   it("reconciles a completed stale Checkout before retention", async () => {
     const fixture = await createFixture();
     insertStalePendingCheckout(fixture.database, "cs_retention_complete");

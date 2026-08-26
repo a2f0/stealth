@@ -42,6 +42,10 @@ export async function purgeExpiredFreeAuditRuns(
              billing.checkout_claim_id IS NOT NULL
              AND COALESCE(billing.checkout_claim_expires_at, 0) > unixepoch()
            )
+           AND NOT (
+             billing.checkout_disabled_at IS NOT NULL
+             AND COALESCE(billing.checkout_disabled_expires_at, 0) > unixepoch()
+           )
            AND datetime(COALESCE(audit.completed_at, audit.updated_at)) <
                datetime(?)
            AND NOT (
