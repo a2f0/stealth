@@ -1,6 +1,6 @@
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
-import { normalizeFilename } from "./filenames";
+import { maxFilenameBytes, normalizeFilename } from "./filenames";
 import { auditIssueImageUploadGraceMilliseconds } from "./objectLifecycle";
 import type { Bindings } from "./types";
 
@@ -307,8 +307,12 @@ function normalizedImageFilename(filename: string, extension: string) {
   const dotIndex = normalized.lastIndexOf(".");
   const stem = dotIndex > 0 ? normalized.slice(0, dotIndex) : normalized;
   const suffix = `.${extension}`;
-  const trimmedStem =
-    [...stem].slice(0, 255 - suffix.length).join("") || "issue-image";
+  const suffixBytes = new TextEncoder().encode(suffix).byteLength;
+  const trimmedStem = normalizeFilename(
+    stem,
+    "issue-image",
+    maxFilenameBytes - suffixBytes,
+  );
   return `${trimmedStem}${suffix}`;
 }
 

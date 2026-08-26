@@ -236,7 +236,10 @@ describe("audits", () => {
     );
     expect(unicodeUpload.status).toBe(201);
     const unicodeBody = (await unicodeUpload.json()) as IssueImageResponse;
-    expect(unicodeBody.image.filename).toBe(`${"😀".repeat(251)}.png`);
+    expect(unicodeBody.image.filename).toBe(`${"😀".repeat(62)}.png`);
+    expect(
+      new TextEncoder().encode(unicodeBody.image.filename).byteLength,
+    ).toBe(252);
     expect(() => encodeURIComponent(unicodeBody.image.filename)).not.toThrow();
   });
 

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
-import { normalizeFilename } from "./filenames";
+import { maxFilenameBytes, normalizeFilename } from "./filenames";
 import type { Bindings, StoredObjectRow } from "./types";
 import { toStoredObject } from "./types";
 
@@ -9,6 +9,7 @@ const objects = new Hono<{
   Variables: AuthVariables;
 }>();
 const maxUploadBytes = 25 * 1024 * 1024;
+const maxR2ObjectKeyBytes = 1_024;
 
 objects.get("/", async (context) => {
   const result = await context.env.DB.prepare(
@@ -36,8 +37,21 @@ objects.post("/", async (context) => {
 
   const id = crypto.randomUUID();
   const organizationId = context.get("organizationId");
-  const filename = normalizeFilename(file.name);
-  const objectKey = `organizations/${organizationId}/uploads/${id}/${filename}`;
+  const objectKeyPrefix = `organizations/${organizationId}/uploads/${id}/`;
+  const filenameByteBudget =
+    maxR2ObjectKeyBytes - new TextEncoder().encode(objectKeyPrefix).byteLength;
+  if (filenameByteBudget < 1) {
+    return context.json(
+      { error: "Organization storage path is too long." },
+      500,
+    );
+  }
+  const filename = normalizeFilename(
+    file.name,
+    "upload",
+    Math.min(maxFilenameBytes, filenameByteBudget),
+  );
+  const objectKey = `${objectKeyPrefix}${filename}`;
   const contentType = file.type || "application/octet-stream";
   const createdAt = new Date().toISOString();
 

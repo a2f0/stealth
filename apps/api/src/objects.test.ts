@@ -97,6 +97,25 @@ describe("organization uploads", () => {
         .get(uploadBody.object.id),
     ).toEqual({ kind: "library", organization_id: "org_user-1" });
 
+    const unicodeForm = new FormData();
+    unicodeForm.set(
+      "file",
+      new File(["unicode upload"], `${"😀".repeat(255)}.txt`),
+    );
+    const unicodeUpload = await fixture.firstApp.request(
+      "/",
+      { body: unicodeForm, method: "POST" },
+      fixture.bindings,
+    );
+    expect(unicodeUpload.status).toBe(201);
+    const unicodeBody = (await unicodeUpload.json()) as ObjectResponse;
+    expect(
+      new TextEncoder().encode(unicodeBody.object.filename).byteLength,
+    ).toBe(252);
+    expect(
+      new TextEncoder().encode(unicodeBody.object.objectKey).byteLength,
+    ).toBeLessThan(1_024);
+
     const hiddenFromOtherOrganization = await fixture.secondApp.request(
       `/${uploadBody.object.id}`,
       undefined,
