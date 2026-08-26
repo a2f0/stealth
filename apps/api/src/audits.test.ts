@@ -29,6 +29,7 @@ interface TemplateListResponse {
     definition: AuditDefinition;
     id: string;
     name: string;
+    savedBy: { email: string; id: string; name: string };
     scope: "global" | "organization";
     version: number;
   }>;
@@ -1654,6 +1655,52 @@ describe("audits", () => {
         templateVersion: 2,
       },
     });
+  });
+
+  it("attributes built-in templates to a durable system actor", async () => {
+    const fixture = await createFixture();
+    const firstOrganization = await jsonRequest<TemplateListResponse>(
+      fixture,
+      "/templates",
+      "GET",
+    );
+    expect(firstOrganization.response.status).toBe(200);
+
+    const otherOrganization = await jsonRequest<TemplateListResponse>(
+      fixture,
+      "/templates",
+      "GET",
+      undefined,
+      { organizationId: "org_user-2", userId: "user-2" },
+    );
+    const builtIns = otherOrganization.body.templates.filter(({ id }) =>
+      ["nfpa70e_global", "us_residential_core_global"].includes(id),
+    );
+    expect(builtIns).toHaveLength(2);
+    for (const template of builtIns) {
+      expect(template.savedBy).toEqual({
+        email: "audit-library@system.invalid",
+        id: "system:audit-library",
+        name: "Stealth audit library",
+      });
+    }
+    expect(JSON.stringify(otherOrganization.body)).not.toContain(
+      "person@example.com",
+    );
+
+    expect(
+      fixture.database.query("DELETE FROM user WHERE id = 'user-1'").run()
+        .changes,
+    ).toBe(1);
+    expect(
+      fixture.database
+        .query(
+          `SELECT COUNT(*) AS count
+           FROM audit_template_families
+           WHERE id IN ('nfpa70e_global', 'us_residential_core_global')`,
+        )
+        .get(),
+    ).toEqual({ count: 2 });
   });
 
   it("consolidates organization starters into one global template", async () => {

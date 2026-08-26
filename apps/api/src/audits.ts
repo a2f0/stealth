@@ -125,10 +125,16 @@ const templateSelect = `
 
 const auditRunPageSize = 100;
 
+const auditLibraryActor = {
+  createdAt: "2026-01-01T00:00:00.000Z",
+  email: "audit-library@system.invalid",
+  id: "system:audit-library",
+  name: "Stealth audit library",
+} as const;
+
 audits.get("/templates", async (context) => {
   const organizationId = context.get("organizationId");
-  const userId = context.get("authSession").user.id;
-  await ensureStarterTemplates(context.env.DB, userId);
+  await ensureStarterTemplates(context.env.DB);
   const result = await context.env.DB.prepare(
     `${templateSelect}
      WHERE family.scope = 'global' OR family.organization_id = ?
@@ -751,22 +757,37 @@ async function addTemplateVersion(
   ]);
 }
 
-async function ensureStarterTemplates(database: D1Database, userId: string) {
+async function ensureStarterTemplates(database: D1Database) {
   const now = new Date().toISOString();
   const starters = [
     { id: "nfpa70e_global", ...nfpa70eStarter },
     residentialCoreStarter,
   ];
-  await database.batch(
-    starters.flatMap((starter) => [
+  await database.batch([
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO user
+         (id, name, email, emailVerified, createdAt, updatedAt, role, banned,
+          banReason)
+         VALUES (?, ?, ?, 1, ?, ?, 'system', 1, ?)`,
+      )
+      .bind(
+        auditLibraryActor.id,
+        auditLibraryActor.name,
+        auditLibraryActor.email,
+        auditLibraryActor.createdAt,
+        auditLibraryActor.createdAt,
+        "Reserved application actor for built-in audit templates.",
+      ),
+    ...starters.flatMap((starter) => [
       database
         .prepare(
           `INSERT OR IGNORE INTO audit_template_families
-           (id, scope, organization_id, current_version, created_by, created_at,
-            updated_at)
+           (id, scope, organization_id, current_version, created_by,
+            created_at, updated_at)
            VALUES (?, 'global', NULL, 1, ?, ?, ?)`,
         )
-        .bind(starter.id, userId, now, now),
+        .bind(starter.id, auditLibraryActor.id, now, now),
       database
         .prepare(
           `INSERT OR IGNORE INTO audit_template_versions
@@ -780,11 +801,25 @@ async function ensureStarterTemplates(database: D1Database, userId: string) {
           starter.name,
           starter.description,
           JSON.stringify(starter.definition),
-          userId,
+          auditLibraryActor.id,
           now,
         ),
+      database
+        .prepare(
+          `UPDATE audit_template_families
+           SET created_by = ?
+           WHERE id = ? AND scope = 'global'`,
+        )
+        .bind(auditLibraryActor.id, starter.id),
+      database
+        .prepare(
+          `UPDATE audit_template_versions
+           SET created_by = ?
+           WHERE template_id = ? AND version = 1`,
+        )
+        .bind(auditLibraryActor.id, starter.id),
     ]),
-  );
+  ]);
 }
 
 async function findTemplate(
