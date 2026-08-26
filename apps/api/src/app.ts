@@ -7,6 +7,7 @@ import {
   type AuthVariables,
   requireAuth,
   requireOrganization,
+  requireOrganizationPluginAccess,
   requireRole,
 } from "./authMiddleware";
 import { businesses } from "./businesses";
@@ -33,7 +34,11 @@ app.use(
   }),
 );
 
-app.use("/api/auth/organization/*", requireAuth, requireOrganization);
+app.use(
+  "/api/auth/organization/*",
+  requireAuth,
+  requireOrganizationPluginAccess,
+);
 
 app.all("/api/auth/*", (context) =>
   createAuth(context.env, (promise) =>

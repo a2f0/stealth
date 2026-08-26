@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
-import { type AuthVariables, requireOrganization } from "./authMiddleware";
+import {
+  type AuthVariables,
+  requireOrganization,
+  requireOrganizationPluginAccess,
+} from "./authMiddleware";
 import type { Bindings } from "./types";
 
 describe("organization middleware", () => {
@@ -129,6 +133,39 @@ describe("organization middleware", () => {
   });
 });
 
+describe("organization plugin middleware", () => {
+  it("checks the requested organization instead of the active one", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/update",
+      { organizationId: "protected-org" },
+      "active-org",
+      ["active-org", "protected-org"],
+      ["protected-org"],
+    );
+
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      code: "TWO_FACTOR_SETUP_REQUIRED",
+      error: "Set up two-factor authentication before using this organization.",
+    });
+  });
+
+  it("allows organization creation without an existing organization", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/create",
+      { name: "Recovery Organization" },
+      null,
+      [],
+      [],
+    );
+
+    expect(response.status).toBe(200);
+    const body: unknown = await response.json();
+    expect(body).toEqual({ request: { name: "Recovery Organization" } });
+  });
+});
+
 interface TwoFactorState {
   twoFactorEnabled?: boolean;
   twoFactorRequired?: boolean;
@@ -183,15 +220,54 @@ function requestOrganization(
     DB: membershipDatabase(
       memberships,
       deletedMemberships,
-      twoFactorState.twoFactorRequired ?? false,
+      twoFactorState.twoFactorRequired ? memberships : [],
     ),
   } as Bindings);
+}
+
+function pluginRequest(
+  path: string,
+  body: Record<string, unknown>,
+  activeOrganizationId: string | null,
+  memberships: string[],
+  twoFactorRequiredOrganizations: string[],
+) {
+  const app = new Hono<{
+    Bindings: Bindings;
+    Variables: AuthVariables;
+  }>();
+  app.use("*", async (context, next) => {
+    context.set("authSession", {
+      session: { activeOrganizationId, twoFactorVerified: false },
+      user: {
+        defaultOrganizationId: activeOrganizationId,
+        id: "user-id",
+        twoFactorEnabled: false,
+      },
+    } as unknown as AuthSession);
+    await next();
+  });
+  app.use("/api/auth/organization/*", requireOrganizationPluginAccess);
+  app.post("/api/auth/organization/*", async (context) =>
+    context.json({ request: await context.req.json() }),
+  );
+  return app.request(
+    path,
+    {
+      body: JSON.stringify(body),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    },
+    {
+      DB: membershipDatabase(memberships, [], twoFactorRequiredOrganizations),
+    } as Bindings,
+  );
 }
 
 function membershipDatabase(
   memberships: string[],
   deletedMemberships: string[],
-  twoFactorRequired: boolean,
+  twoFactorRequiredOrganizations: string[],
 ) {
   return {
     prepare: (query: string) => ({
@@ -209,7 +285,8 @@ function membershipDatabase(
                   .map((organizationId) => ({
                     organizationId,
                     role: "member",
-                    twoFactorRequired,
+                    twoFactorRequired:
+                      twoFactorRequiredOrganizations.includes(organizationId),
                   }))
               : [],
         }),
