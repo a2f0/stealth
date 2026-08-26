@@ -4,6 +4,8 @@ import type { WorkspaceOrganization } from "./organizationState";
 export interface OrganizationMember {
   id: string;
   role: string;
+  twoFactorEnabled: boolean;
+  twoFactorRequired: boolean;
   user: { email: string; id: string; name: string };
 }
 
@@ -45,6 +47,22 @@ export async function getOrganizationPeople() {
     credentials: "include",
   });
   return parseResponse<OrganizationPeopleData>(response);
+}
+
+export async function updateMemberTwoFactorRequirement(
+  memberId: string,
+  required: boolean,
+) {
+  const response = await fetch(
+    `${apiUrl}/api/organization-settings/people/${encodeURIComponent(memberId)}/two-factor-required`,
+    {
+      body: JSON.stringify({ required }),
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    },
+  );
+  return parseResponse<{ memberId: string; required: boolean }>(response);
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {

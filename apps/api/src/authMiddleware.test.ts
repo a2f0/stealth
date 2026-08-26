@@ -71,11 +71,74 @@ describe("organization middleware", () => {
       error: "A default organization is required.",
     });
   });
+
+  it("requires two-factor setup for a protected membership", async () => {
+    const response = await requestOrganization(
+      "active-org",
+      null,
+      ["active-org"],
+      [],
+      {
+        twoFactorRequired: true,
+      },
+    );
+
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      code: "TWO_FACTOR_SETUP_REQUIRED",
+      error: "Set up two-factor authentication before using this organization.",
+    });
+  });
+
+  it("requires the current session to have passed two-factor", async () => {
+    const response = await requestOrganization(
+      "active-org",
+      null,
+      ["active-org"],
+      [],
+      {
+        twoFactorEnabled: true,
+        twoFactorRequired: true,
+      },
+    );
+
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      code: "TWO_FACTOR_VERIFICATION_REQUIRED",
+      error:
+        "Sign in with two-factor authentication before using this organization.",
+    });
+  });
+
+  it("allows a two-factor-verified session into a protected membership", async () => {
+    const response = await requestOrganization(
+      "active-org",
+      null,
+      ["active-org"],
+      [],
+      {
+        twoFactorEnabled: true,
+        twoFactorRequired: true,
+        twoFactorVerified: true,
+      },
+    );
+
+    expect(response.status).toBe(200);
+  });
 });
+
+interface TwoFactorState {
+  twoFactorEnabled?: boolean;
+  twoFactorRequired?: boolean;
+  twoFactorVerified?: boolean;
+}
 
 function testApp(
   activeOrganizationId: string | null,
   defaultOrganizationId: string | null,
+  twoFactorState: TwoFactorState,
 ) {
   const app = new Hono<{
     Bindings: Bindings;
@@ -83,8 +146,15 @@ function testApp(
   }>();
   app.use("*", async (context, next) => {
     context.set("authSession", {
-      session: { activeOrganizationId },
-      user: { defaultOrganizationId, id: "user-id" },
+      session: {
+        activeOrganizationId,
+        twoFactorVerified: twoFactorState.twoFactorVerified ?? false,
+      },
+      user: {
+        defaultOrganizationId,
+        id: "user-id",
+        twoFactorEnabled: twoFactorState.twoFactorEnabled ?? false,
+      },
     } as unknown as AuthSession);
     await next();
   });
@@ -103,17 +173,25 @@ function requestOrganization(
   defaultOrganizationId: string | null,
   memberships: string[],
   deletedMemberships: string[] = [],
+  twoFactorState: TwoFactorState = {},
 ) {
-  return testApp(activeOrganizationId, defaultOrganizationId).request(
-    "/",
-    undefined,
-    { DB: membershipDatabase(memberships, deletedMemberships) } as Bindings,
-  );
+  return testApp(
+    activeOrganizationId,
+    defaultOrganizationId,
+    twoFactorState,
+  ).request("/", undefined, {
+    DB: membershipDatabase(
+      memberships,
+      deletedMemberships,
+      twoFactorState.twoFactorRequired ?? false,
+    ),
+  } as Bindings);
 }
 
 function membershipDatabase(
   memberships: string[],
   deletedMemberships: string[],
+  twoFactorRequired: boolean,
 ) {
   return {
     prepare: (query: string) => ({
@@ -131,6 +209,7 @@ function membershipDatabase(
                   .map((organizationId) => ({
                     organizationId,
                     role: "member",
+                    twoFactorRequired,
                   }))
               : [],
         }),

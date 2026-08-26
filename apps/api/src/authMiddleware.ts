@@ -45,7 +45,8 @@ export const requireOrganization = createMiddleware<AuthEnv>(
     }
     const placeholders = candidates.map(() => "?").join(", ");
     const memberships = await context.env.DB.prepare(
-      `SELECT member."organizationId", member."role"
+      `SELECT member."organizationId", member."role",
+              member."twoFactorRequired"
        FROM "member"
        JOIN "organization"
          ON organization.id = member."organizationId"
@@ -54,7 +55,11 @@ export const requireOrganization = createMiddleware<AuthEnv>(
          AND organization."deletedAt" IS NULL`,
     )
       .bind(session.user.id, ...candidates)
-      .all<{ organizationId: string; role: string }>();
+      .all<{
+        organizationId: string;
+        role: string;
+        twoFactorRequired: boolean | number;
+      }>();
     const membershipByOrganization = new Map(
       memberships.results.map((membership) => [
         membership.organizationId,
@@ -66,6 +71,28 @@ export const requireOrganization = createMiddleware<AuthEnv>(
       .find((candidate) => candidate !== undefined);
     if (!membership) {
       return context.json({ error: "Organization membership required." }, 403);
+    }
+    if (membership.twoFactorRequired) {
+      if (!session.user.twoFactorEnabled) {
+        return context.json(
+          {
+            code: "TWO_FACTOR_SETUP_REQUIRED",
+            error:
+              "Set up two-factor authentication before using this organization.",
+          },
+          403,
+        );
+      }
+      if (!session.session.twoFactorVerified) {
+        return context.json(
+          {
+            code: "TWO_FACTOR_VERIFICATION_REQUIRED",
+            error:
+              "Sign in with two-factor authentication before using this organization.",
+          },
+          403,
+        );
+      }
     }
     context.set("organizationId", membership.organizationId);
     context.set("organizationRole", membership.role);

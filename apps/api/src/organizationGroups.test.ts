@@ -197,6 +197,8 @@ async function createFixture() {
       "owner-user",
     );
   await applyMigration(database, "0010_create_organization_groups.sql");
+  await applyMigration(database, "0020_add_two_factor_authentication.sql");
+  await applyMigration(database, "0031_require_member_two_factor.sql");
   return { bindings: bindingsFor(database), database };
 }
 

@@ -2,6 +2,28 @@ import { apiUrl } from "./config";
 import type { OrganizationMember } from "./organizationSettingsApi";
 
 export type OrganizationCapability = "finance";
+export type OrganizationTwoFactorRequirement = "setup" | "verification";
+
+export class OrganizationApiError extends Error {
+  readonly code: string | undefined;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "OrganizationApiError";
+    this.code = code;
+  }
+}
+
+export function twoFactorRequirementFrom(
+  cause: unknown,
+): OrganizationTwoFactorRequirement | undefined {
+  if (!(cause instanceof OrganizationApiError)) return undefined;
+  if (cause.code === "TWO_FACTOR_SETUP_REQUIRED") return "setup";
+  if (cause.code === "TWO_FACTOR_VERIFICATION_REQUIRED") {
+    return "verification";
+  }
+  return undefined;
+}
 
 export interface OrganizationGroup {
   capabilities: OrganizationCapability[];
@@ -67,9 +89,11 @@ async function request<T>(path: string, init?: RequestInit) {
       : ((await response.json()) as T);
   }
   const body = (await response.json().catch(() => null)) as {
+    code?: string;
     error?: string;
   } | null;
-  throw new Error(
+  throw new OrganizationApiError(
     body?.error ?? `Request failed with status ${response.status}.`,
+    body?.code,
   );
 }

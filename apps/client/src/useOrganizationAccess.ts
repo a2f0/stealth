@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   getOrganizationAccess,
   type OrganizationCapability,
+  type OrganizationTwoFactorRequirement,
+  twoFactorRequirementFrom,
 } from "./organizationGroupsApi";
 
 interface AccessState {
@@ -19,13 +21,18 @@ export function useOrganizationAccess(
   const [state, setState] = useState<AccessState>();
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string>();
+  const [twoFactorRequirement, setTwoFactorRequirement] =
+    useState<OrganizationTwoFactorRequirement>();
   const refresh = useCallback(async () => {
     if (!userId || !organizationId) {
       setState(undefined);
+      setLoadError(undefined);
+      setTwoFactorRequirement(undefined);
       return;
     }
     setLoading(true);
     setLoadError(undefined);
+    setTwoFactorRequirement(undefined);
     try {
       const result = await getOrganizationAccess();
       setState({
@@ -36,6 +43,7 @@ export function useOrganizationAccess(
         userId,
       });
     } catch (cause) {
+      setTwoFactorRequirement(twoFactorRequirementFrom(cause));
       setLoadError(
         cause instanceof Error
           ? cause.message
@@ -65,5 +73,6 @@ export function useOrganizationAccess(
     memberRole: current?.memberRole || undefined,
     ownerCount: current?.ownerCount ?? 0,
     refresh,
+    twoFactorRequirement,
   };
 }

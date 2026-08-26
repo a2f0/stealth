@@ -1,6 +1,8 @@
 interface OrganizationMember {
   id: string;
   role: string;
+  twoFactorEnabled: boolean;
+  twoFactorRequired: boolean;
   user: {
     email: string;
     id: string;
@@ -13,6 +15,8 @@ interface OrganizationMemberRow {
   id: string;
   name: string;
   role: string;
+  two_factor_enabled: number | boolean;
+  two_factor_required: number | boolean;
   user_id: string;
 }
 
@@ -22,8 +26,10 @@ export async function listOrganizationMembers(
 ) {
   const result = await database
     .prepare(
-      `SELECT member.id, member.role, user.id AS user_id,
-              user.name, user.email
+      `SELECT member.id, member.role,
+              member.twoFactorRequired AS two_factor_required,
+              user.id AS user_id, user.name, user.email,
+              user.twoFactorEnabled AS two_factor_enabled
        FROM member
        JOIN user ON user.id = member.userId
        WHERE member.organizationId = ?
@@ -32,9 +38,19 @@ export async function listOrganizationMembers(
     .bind(organizationId)
     .all<OrganizationMemberRow>();
   return result.results.map(
-    ({ email, id, name, role, user_id: userId }): OrganizationMember => ({
+    ({
+      email,
+      id,
+      name,
+      role,
+      two_factor_enabled: twoFactorEnabled,
+      two_factor_required: twoFactorRequired,
+      user_id: userId,
+    }): OrganizationMember => ({
       id,
       role,
+      twoFactorEnabled: Boolean(twoFactorEnabled),
+      twoFactorRequired: Boolean(twoFactorRequired),
       user: { email, id: userId, name },
     }),
   );

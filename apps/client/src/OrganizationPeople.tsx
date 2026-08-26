@@ -5,6 +5,7 @@ import {
   type OrganizationInvitation,
   type OrganizationMember,
   type OrganizationPeopleData,
+  updateMemberTwoFactorRequirement,
 } from "./organizationSettingsApi";
 import {
   assignableOrganizationRoles,
@@ -24,52 +25,11 @@ export function OrganizationPeople({
 }) {
   const state = useOrganizationPeopleData(organization.id);
   const canManage = canManageOrganization(state.data?.memberRole);
-
-  async function cancelInvitation(invitationId: string) {
-    state.startAction();
-    try {
-      const result = await authClient.organization.cancelInvitation({
-        invitationId,
-      });
-      if (result.error) {
-        throw new Error(
-          result.error.message ?? "Could not cancel this invitation.",
-        );
-      }
-      state.setNotice("Invitation canceled.");
-      await state.load();
-    } catch (cause) {
-      state.setError(messageFrom(cause));
-    } finally {
-      state.setBusy(false);
-    }
-  }
-
-  async function updateMemberRole(
-    member: OrganizationMember,
-    role: OrganizationInvitationRole,
-  ) {
-    if (organizationRoleValue(member.role) === role) return;
-    state.startAction();
-    try {
-      const result = await authClient.organization.updateMemberRole({
-        memberId: member.id,
-        organizationId: organization.id,
-        role,
-      });
-      if (result.error) {
-        throw new Error(
-          result.error.message ?? "Could not update this member’s role.",
-        );
-      }
-      state.setNotice(`${member.user.name} is now an organization ${role}.`);
-      await Promise.all([state.load(), onAccessChanged()]);
-    } catch (cause) {
-      state.setError(messageFrom(cause));
-    } finally {
-      state.setBusy(false);
-    }
-  }
+  const actions = organizationPeopleActions(
+    state,
+    organization,
+    onAccessChanged,
+  );
 
   return (
     <>
@@ -93,13 +53,14 @@ export function OrganizationPeople({
             busy={state.busy}
             managerRole={state.data.memberRole}
             members={state.data.members}
-            onRoleChange={updateMemberRole}
+            onRoleChange={actions.updateMemberRole}
+            onTwoFactorRequiredChange={actions.updateTwoFactorRequirement}
           />
           {canManage && state.data.invitations.length > 0 && (
             <PendingInvitations
               busy={state.busy}
               invitations={state.data.invitations}
-              onCancel={cancelInvitation}
+              onCancel={actions.cancelInvitation}
             />
           )}
         </div>
@@ -154,6 +115,85 @@ function useOrganizationPeopleData(organizationId: string) {
     setError,
     setNotice,
     startAction,
+  };
+}
+
+function organizationPeopleActions(
+  state: ReturnType<typeof useOrganizationPeopleData>,
+  organization: WorkspaceOrganization,
+  onAccessChanged: () => Promise<void>,
+) {
+  async function cancelInvitation(invitationId: string) {
+    state.startAction();
+    try {
+      const result = await authClient.organization.cancelInvitation({
+        invitationId,
+      });
+      if (result.error) {
+        throw new Error(
+          result.error.message ?? "Could not cancel this invitation.",
+        );
+      }
+      state.setNotice("Invitation canceled.");
+      await state.load();
+    } catch (cause) {
+      state.setError(messageFrom(cause));
+    } finally {
+      state.setBusy(false);
+    }
+  }
+
+  async function updateMemberRole(
+    member: OrganizationMember,
+    role: OrganizationInvitationRole,
+  ) {
+    if (organizationRoleValue(member.role) === role) return;
+    state.startAction();
+    try {
+      const result = await authClient.organization.updateMemberRole({
+        memberId: member.id,
+        organizationId: organization.id,
+        role,
+      });
+      if (result.error) {
+        throw new Error(
+          result.error.message ?? "Could not update this member’s role.",
+        );
+      }
+      state.setNotice(`${member.user.name} is now an organization ${role}.`);
+      await Promise.all([state.load(), onAccessChanged()]);
+    } catch (cause) {
+      state.setError(messageFrom(cause));
+    } finally {
+      state.setBusy(false);
+    }
+  }
+
+  async function updateTwoFactorRequirement(
+    member: OrganizationMember,
+    required: boolean,
+  ) {
+    if (member.twoFactorRequired === required) return;
+    state.startAction();
+    try {
+      await updateMemberTwoFactorRequirement(member.id, required);
+      state.setNotice(
+        required
+          ? `${member.user.name} must use two-factor authentication for this organization.`
+          : `${member.user.name} is no longer required to use two-factor authentication for this organization.`,
+      );
+      await Promise.all([state.load(), onAccessChanged()]);
+    } catch (cause) {
+      state.setError(messageFrom(cause));
+    } finally {
+      state.setBusy(false);
+    }
+  }
+
+  return {
+    cancelInvitation,
+    updateMemberRole,
+    updateTwoFactorRequirement,
   };
 }
 
@@ -261,6 +301,7 @@ function OrganizationMembers({
   managerRole,
   members,
   onRoleChange,
+  onTwoFactorRequiredChange,
 }: {
   busy: boolean;
   managerRole: string;
@@ -269,8 +310,13 @@ function OrganizationMembers({
     member: OrganizationMember,
     role: OrganizationInvitationRole,
   ) => Promise<void>;
+  onTwoFactorRequiredChange: (
+    member: OrganizationMember,
+    required: boolean,
+  ) => Promise<void>;
 }) {
   const memberRoles = members.map(({ role }) => role);
+  const canManage = canManageOrganization(managerRole);
   return (
     <section className="settingsCard organizationPeople">
       <div>
@@ -289,30 +335,55 @@ function OrganizationMembers({
             <div key={member.id}>
               <span>
                 <strong>{member.user.name}</strong>
-                <small>{member.user.email}</small>
+                <small>
+                  {member.user.email}
+                  {canManage &&
+                    ` · 2FA ${member.twoFactorEnabled ? "enabled" : "not set up"}`}
+                </small>
               </span>
-              {roles.length > 0 ? (
-                <select
-                  aria-label={`Role for ${member.user.name}`}
-                  className="memberRoleSelect"
-                  disabled={busy || roles.length === 1}
-                  onChange={(event) =>
-                    void onRoleChange(
-                      member,
-                      event.target.value as OrganizationInvitationRole,
-                    )
-                  }
-                  value={role}
-                >
-                  {roles.map((assignableRole) => (
-                    <option key={assignableRole} value={assignableRole}>
-                      {formatRole(assignableRole)}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <b>{role}</b>
-              )}
+              <div className="organizationMemberControls">
+                {canManage ? (
+                  <label className="memberTwoFactorToggle">
+                    <input
+                      aria-label={`Require two-factor authentication for ${member.user.name}`}
+                      checked={member.twoFactorRequired}
+                      disabled={busy}
+                      onChange={(event) =>
+                        void onTwoFactorRequiredChange(
+                          member,
+                          event.target.checked,
+                        )
+                      }
+                      type="checkbox"
+                    />
+                    <span>2FA required</span>
+                  </label>
+                ) : (
+                  member.twoFactorRequired && <b>2FA required</b>
+                )}
+                {roles.length > 0 ? (
+                  <select
+                    aria-label={`Role for ${member.user.name}`}
+                    className="memberRoleSelect"
+                    disabled={busy || roles.length === 1}
+                    onChange={(event) =>
+                      void onRoleChange(
+                        member,
+                        event.target.value as OrganizationInvitationRole,
+                      )
+                    }
+                    value={role}
+                  >
+                    {roles.map((assignableRole) => (
+                      <option key={assignableRole} value={assignableRole}>
+                        {formatRole(assignableRole)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <b>{role}</b>
+                )}
+              </div>
             </div>
           );
         })}

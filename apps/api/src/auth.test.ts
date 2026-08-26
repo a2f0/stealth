@@ -313,6 +313,11 @@ describe("password authentication", () => {
         password: originalPassword,
       }),
     );
+    expect(
+      await (
+        await get(fixture.auth, "/get-session", enrollmentCookies.header())
+      ).json(),
+    ).toMatchObject({ session: { twoFactorVerified: false } });
 
     const enabled = await post(
       fixture.auth,
@@ -366,6 +371,11 @@ describe("password authentication", () => {
         )
         .get(email),
     ).toEqual({ twoFactorEnabled: 1, verified: 1 });
+    expect(
+      await (
+        await get(fixture.auth, "/get-session", enrollmentCookies.header())
+      ).json(),
+    ).toMatchObject({ session: { twoFactorVerified: true } });
 
     const loginCookies = new CookieJar();
     const passwordStep = await post(fixture.auth, "/sign-in/email", {
@@ -402,7 +412,10 @@ describe("password authentication", () => {
       await (
         await get(fixture.auth, "/get-session", loginCookies.header())
       ).json(),
-    ).toMatchObject({ user: { email, twoFactorEnabled: true } });
+    ).toMatchObject({
+      session: { twoFactorVerified: true },
+      user: { email, twoFactorEnabled: true },
+    });
     const missingCompanionCookie = await post(
       fixture.auth,
       "/multi-session/revoke",
@@ -908,6 +921,7 @@ async function createFixture() {
   await applyMigration(database, "0010_create_organization_groups.sql");
   await applyMigration(database, "0020_add_two_factor_authentication.sql");
   await applyMigration(database, "0021_track_terms_acceptance.sql");
+  await applyMigration(database, "0031_require_member_two_factor.sql");
 
   return { auth, database, messages, pending };
 }

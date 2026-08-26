@@ -109,6 +109,7 @@ app.route("/api/organization-groups", organizationGroups);
 app.use("/api/organization-settings", requireAuth);
 app.use("/api/organization-settings/*", requireAuth);
 app.use("/api/organization-settings/people", requireOrganization);
+app.use("/api/organization-settings/people/*", requireOrganization);
 app.use("/api/organization-settings/current", requireOrganization);
 app.route("/api/organization-settings", organizationSettings);
 
