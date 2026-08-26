@@ -2550,8 +2550,61 @@ button:disabled {
 }
 
 .auditIssueForm .errorBanner,
-.auditIssueDescription {
+.auditIssueDescription,
+.auditIssueImagesField,
+.auditSelectedImages {
   grid-column: 1 / -1;
+}
+
+.auditIssueImagesField small {
+  color: #85857c;
+  font-size: 9px;
+}
+
+.auditIssueImageGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.auditSelectedImages {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.auditSelectedImages > div,
+.auditIssueImageGrid > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.auditIssueImageGrid img {
+  width: 100%;
+  height: 86px;
+  border: 1px solid #d7d6ce;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.auditSelectedImages span {
+  overflow: hidden;
+  color: #66665e;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auditSelectedImages button,
+.auditIssueImageGrid button {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  color: #8d3c30;
+  background: transparent;
+  cursor: pointer;
+  font-size: 9px;
 }
 
 .auditIssueForm > button {
@@ -2588,6 +2641,55 @@ button:disabled {
 .auditNoIssues {
   color: #898980;
   font-size: 9px;
+}
+
+.auditIssueActions {
+  display: grid;
+  min-width: 150px;
+  gap: 8px;
+}
+
+.auditIssueActions label {
+  display: grid;
+  gap: 4px;
+}
+
+.auditIssueActions label > span {
+  color: #898980;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.auditIssueActions select {
+  max-width: 190px;
+  padding: 7px 9px;
+  border: 1px solid #cecec5;
+  border-radius: 7px;
+  color: #4d4e46;
+  background: #fdfcf8;
+  font-size: 9px;
+}
+
+.auditIssueActions > button {
+  justify-self: end;
+}
+
+.auditIssueImages {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+}
+
+.auditIssueAttachButton {
+  justify-self: start;
+  color: #55554e;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.auditIssueAttachButton input {
+  display: none;
 }
 
 .auditIssueList button {
@@ -3206,8 +3308,22 @@ button:disabled {
   .auditRunList > button,
   .auditRunQuestion,
   .auditQuestionEditor,
-  .auditIssueForm {
+  .auditIssueForm,
+  .auditIssueList article {
     grid-template-columns: 1fr;
+  }
+
+  .auditIssueActions {
+    min-width: 0;
+  }
+
+  .auditIssueActions select {
+    width: 100%;
+    max-width: none;
+  }
+
+  .auditIssueActions > button {
+    justify-self: start;
   }
 
   .auditRunList > button {

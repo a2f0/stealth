@@ -30,9 +30,9 @@ describe("organization uploads", () => {
     const fixture = await createFixture();
     expect(
       fixture.database
-        .query("SELECT organization_id FROM objects WHERE id = ?")
+        .query("SELECT organization_id, kind FROM objects WHERE id = ?")
         .get("legacy-object"),
-    ).toEqual({ organization_id: "org_user-1" });
+    ).toEqual({ kind: "library", organization_id: "org_user-1" });
 
     const firstList = await fixture.firstApp.request(
       "/",
@@ -52,6 +52,25 @@ describe("organization uploads", () => {
         },
       ],
     });
+
+    const hiddenAuditImage = await fixture.firstApp.request(
+      "/audit-image-object",
+      undefined,
+      fixture.bindings,
+    );
+    expect(hiddenAuditImage.status).toBe(404);
+    const auditImageDelete = await fixture.firstApp.request(
+      "/audit-image-object",
+      { method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(auditImageDelete.status).toBe(404);
+    expect(
+      fixture.database
+        .query("SELECT kind FROM objects WHERE id = ?")
+        .get("audit-image-object"),
+    ).toEqual({ kind: "audit_issue_image" });
+    expect(fixture.stored.has("audit-images/evidence.png")).toBe(true);
 
     const otherObject = await fixture.firstApp.request(
       "/other-object",
@@ -74,9 +93,28 @@ describe("organization uploads", () => {
     );
     expect(
       fixture.database
-        .query("SELECT organization_id FROM objects WHERE id = ?")
+        .query("SELECT organization_id, kind FROM objects WHERE id = ?")
         .get(uploadBody.object.id),
-    ).toEqual({ organization_id: "org_user-1" });
+    ).toEqual({ kind: "library", organization_id: "org_user-1" });
+
+    const unicodeForm = new FormData();
+    unicodeForm.set(
+      "file",
+      new File(["unicode upload"], `${"😀".repeat(255)}.txt`),
+    );
+    const unicodeUpload = await fixture.firstApp.request(
+      "/",
+      { body: unicodeForm, method: "POST" },
+      fixture.bindings,
+    );
+    expect(unicodeUpload.status).toBe(201);
+    const unicodeBody = (await unicodeUpload.json()) as ObjectResponse;
+    expect(
+      new TextEncoder().encode(unicodeBody.object.filename).byteLength,
+    ).toBe(252);
+    expect(
+      new TextEncoder().encode(unicodeBody.object.objectKey).byteLength,
+    ).toBeLessThan(1_024);
 
     const hiddenFromOtherOrganization = await fixture.secondApp.request(
       `/${uploadBody.object.id}`,
@@ -92,6 +130,11 @@ describe("organization uploads", () => {
     );
     expect(deleted.status).toBe(204);
     expect(fixture.stored.has(uploadBody.object.objectKey)).toBe(false);
+    expect(
+      fixture.database
+        .query("SELECT id FROM deleted_object_cleanup WHERE id = ?")
+        .get(uploadBody.object.id),
+    ).toBeNull();
   });
 });
 
@@ -116,9 +159,28 @@ async function createFixture() {
       "2026-08-18T12:00:00.000Z",
     );
   await applyMigration(database, "0006_scope_objects_to_organizations.sql");
+  await applyMigration(database, "0025_classify_objects.sql");
+  await applyMigration(database, "0030_queue_deleted_objects.sql");
+  database
+    .query(
+      `INSERT INTO objects
+       (id, organization_id, object_key, filename, content_type, size,
+        created_at, kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'audit_issue_image')`,
+    )
+    .run(
+      "audit-image-object",
+      "org_user-1",
+      "audit-images/evidence.png",
+      "evidence.png",
+      "image/png",
+      8,
+      "2026-08-19T12:00:00.000Z",
+    );
   addSecondOrganization(database);
   const stored = new Map([
     ["uploads/legacy-object/legacy.txt", new TextEncoder().encode("legacy")],
+    ["audit-images/evidence.png", new Uint8Array(8)],
   ]);
   const bindings = bindingsFor(database, stored);
   return {
@@ -224,6 +286,7 @@ function bindingsFor(
     CORS_ORIGIN: "https://app.test",
     DB: toD1(database),
     EMAIL: {} as SendEmail,
+    IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: storageFor(stored),
   };

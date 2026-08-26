@@ -7,9 +7,11 @@ ignore:
   - "**/.*"
   - node_modules
   - apps/*/node_modules
+  - packages/*/node_modules
   - dist
   - apps/*/dist
   - .turbo
   - apps/*/.turbo
+  - packages/*/.turbo
   - apps/*/.astro
   - apps/*/.wrangler

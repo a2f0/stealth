@@ -81,11 +81,21 @@ export interface AuditIssue {
   createdAt: string;
   description: string;
   id: string;
+  images: AuditIssueImage[];
   itemId: string;
   priority: string;
   status: "open" | "resolved";
   title: string;
   updatedAt: string;
+}
+
+export interface AuditIssueImage {
+  contentType: string;
+  createdAt: string;
+  filename: string;
+  id: string;
+  size: number;
+  uploadedBy: AuditTemplateVersionActor;
 }
 
 export interface OrganizationMember {
@@ -98,6 +108,16 @@ export interface AuditDetail {
   audit: AuditRun;
   issues: AuditIssue[];
   members: OrganizationMember[];
+}
+
+export class AuditApiError extends Error {
+  readonly response: Response;
+
+  constructor(message: string, response: Response) {
+    super(message);
+    this.name = "AuditApiError";
+    this.response = response;
+  }
 }
 
 export async function listAuditTemplates() {
@@ -203,11 +223,45 @@ export function createAuditIssue(
   );
 }
 
-export function updateAuditIssue(issueId: string, status: "open" | "resolved") {
-  return request<{ status: string; updatedAt: string }>(
-    `/issues/${encodeURIComponent(issueId)}`,
-    { body: JSON.stringify({ status }), method: "PATCH" },
+export function updateAuditIssue(
+  issueId: string,
+  update: { assignedTo?: string | null; status?: "open" | "resolved" },
+) {
+  return request<{
+    assignedTo: string | null;
+    status: string;
+    updatedAt: string;
+  }>(`/issues/${encodeURIComponent(issueId)}`, {
+    body: JSON.stringify(update),
+    method: "PATCH",
+  });
+}
+
+export function uploadAuditIssueImage(issueId: string, file: File) {
+  return request<{ image: AuditIssueImage }>(
+    `/issues/${encodeURIComponent(issueId)}/images?filename=${encodeURIComponent(file.name)}`,
+    {
+      body: file,
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      method: "POST",
+    },
   );
+}
+
+export function deleteAuditIssueImage(issueId: string, imageId: string) {
+  return request<void>(
+    `/issues/${encodeURIComponent(issueId)}/images/${encodeURIComponent(imageId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export function auditIssueImageUrl(
+  issueId: string,
+  imageId: string,
+  variant?: "thumbnail",
+) {
+  const query = variant === "thumbnail" ? "?variant=thumbnail" : "";
+  return `${apiUrl}/api/audits/issues/${encodeURIComponent(issueId)}/images/${encodeURIComponent(imageId)}${query}`;
 }
 
 function templateSaveBody(template: AuditTemplate) {
@@ -224,13 +278,20 @@ async function request<T>(path: string, init?: RequestInit) {
     ...init,
     credentials: "include",
   };
-  if (init?.body) requestInit.headers = { "Content-Type": "application/json" };
+  if (init?.body && !(init.body instanceof FormData) && !init.headers) {
+    requestInit.headers = { "Content-Type": "application/json" };
+  }
   const response = await fetch(`${apiUrl}/api/audits${path}`, requestInit);
-  if (response.ok) return response.json() as Promise<T>;
+  if (response.ok) {
+    return response.status === 204
+      ? (undefined as T)
+      : (response.json() as Promise<T>);
+  }
   const body = (await response.json().catch(() => null)) as {
     error?: string;
   } | null;
-  throw new Error(
+  throw new AuditApiError(
     body?.error ?? `Request failed with status ${response.status}.`,
+    response,
   );
 }

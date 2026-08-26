@@ -1,15 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AuditApiError,
   type AuditDefinition,
   type AuditDetail,
   type AuditIssue,
   type AuditTemplateItem,
+  auditIssueImageUrl,
   createAuditIssue,
+  deleteAuditIssueImage,
   getAuditRun,
   type OrganizationMember,
   saveAuditRun,
   updateAuditIssue,
+  uploadAuditIssueImage,
 } from "./auditApi";
+
+const acceptedImageTypes = [
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+];
+const maxIssueImages = 10;
+const maxIssueImageBytes = 10 * 1024 * 1024;
 
 interface AuditRunPageProps {
   id: string;
@@ -230,6 +243,7 @@ function IssuePanel({
 }) {
   const items = useMemo(() => allItems(definition), [definition]);
   const [showForm, setShowForm] = useState(false);
+  const [issueError, setIssueError] = useState<string>();
   return (
     <section className="auditIssues">
       <div className="sectionHeading">
@@ -244,19 +258,26 @@ function IssuePanel({
           {showForm ? "Cancel" : "+ Raise issue"}
         </button>
       </div>
+      {issueError && <div className="errorBanner">{issueError}</div>}
       {showForm && (
         <IssueForm
           auditId={auditId}
           items={items}
           members={members}
-          onCreated={async () => {
+          onCreated={async (warning) => {
             setShowForm(false);
+            setIssueError(warning);
             await onChange();
           }}
           responses={responses}
         />
       )}
-      <IssueList issues={issues} onChange={onChange} />
+      <IssueList
+        issues={issues}
+        members={members}
+        onChange={onChange}
+        onError={setIssueError}
+      />
     </section>
   );
 }
@@ -271,7 +292,7 @@ function IssueForm({
   auditId: string;
   items: AuditTemplateItem[];
   members: OrganizationMember[];
-  onCreated: () => Promise<void>;
+  onCreated: (warning?: string) => Promise<void>;
   responses: Record<string, string>;
 }) {
   const suggested =
@@ -281,6 +302,7 @@ function IssueForm({
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
   const [assignedTo, setAssignedTo] = useState("");
+  const [images, setImages] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -288,14 +310,21 @@ function IssueForm({
     setBusy(true);
     setError(undefined);
     try {
-      await createAuditIssue(auditId, {
+      const { issueId } = await createAuditIssue(auditId, {
         assignedTo: assignedTo || null,
         description,
         itemId,
         priority,
         title,
       });
-      await onCreated();
+      const failedUploads = (
+        await uploadIssueImagesSequentially(issueId, images)
+      ).length;
+      await onCreated(
+        failedUploads > 0
+          ? `${failedUploads} image${failedUploads === 1 ? "" : "s"} could not be attached. The issue was created.`
+          : undefined,
+      );
     } catch (cause) {
       setError(messageFrom(cause));
       setBusy(false);
@@ -305,14 +334,68 @@ function IssueForm({
   return (
     <div className="auditIssueForm">
       {error && <div className="errorBanner">{error}</div>}
+      <IssueTextFields
+        description={description}
+        itemId={itemId}
+        items={items}
+        onDescriptionChange={setDescription}
+        onItemChange={(nextId) => {
+          setItemId(nextId);
+          setTitle(items.find((item) => item.id === nextId)?.prompt ?? "");
+        }}
+        onTitleChange={setTitle}
+        responses={responses}
+        title={title}
+      />
+      <IssueImagePicker
+        files={images}
+        onChange={setImages}
+        onError={setError}
+      />
+      <IssueAssignmentFields
+        assignedTo={assignedTo}
+        members={members}
+        onAssignedToChange={setAssignedTo}
+        onPriorityChange={setPriority}
+        priority={priority}
+      />
+      <button
+        className="primaryButton"
+        disabled={busy || !itemId || !title.trim()}
+        onClick={() => void submit()}
+        type="button"
+      >
+        {busy ? "Creating…" : "Create issue"}
+      </button>
+    </div>
+  );
+}
+
+function IssueTextFields({
+  description,
+  itemId,
+  items,
+  onDescriptionChange,
+  onItemChange,
+  onTitleChange,
+  responses,
+  title,
+}: {
+  description: string;
+  itemId: string;
+  items: AuditTemplateItem[];
+  onDescriptionChange: (description: string) => void;
+  onItemChange: (itemId: string) => void;
+  onTitleChange: (title: string) => void;
+  responses: Record<string, string>;
+  title: string;
+}) {
+  return (
+    <>
       <label className="field">
         <span>Checklist item</span>
         <select
-          onChange={(event) => {
-            const nextId = event.target.value;
-            setItemId(nextId);
-            setTitle(items.find((item) => item.id === nextId)?.prompt ?? "");
-          }}
+          onChange={(event) => onItemChange(event.target.value)}
           value={itemId}
         >
           {items.map((item) => (
@@ -327,23 +410,87 @@ function IssueForm({
         <span>Issue title</span>
         <input
           maxLength={300}
-          onChange={(event) => setTitle(event.target.value)}
+          onChange={(event) => onTitleChange(event.target.value)}
           value={title}
         />
       </label>
       <label className="field auditIssueDescription">
-        <span>Details</span>
+        <span>Issue description</span>
         <textarea
           maxLength={2000}
-          onChange={(event) => setDescription(event.target.value)}
+          onChange={(event) => onDescriptionChange(event.target.value)}
+          placeholder="Describe the problem, evidence, and expected follow-up."
           rows={3}
           value={description}
         />
       </label>
+    </>
+  );
+}
+
+function IssueImagePicker({
+  files,
+  onChange,
+  onError,
+}: {
+  files: File[];
+  onChange: (files: File[]) => void;
+  onError: (error: string | undefined) => void;
+}) {
+  return (
+    <>
+      <label className="field auditIssueImagesField">
+        <span>Images</span>
+        <input
+          accept={acceptedImageTypes.join(",")}
+          multiple
+          onChange={(event) => {
+            const selected = appendIssueImageSelection(
+              files,
+              Array.from(event.target.files ?? []),
+            );
+            if (typeof selected === "string") {
+              onError(selected);
+              event.target.value = "";
+              return;
+            }
+            onError(undefined);
+            onChange(selected);
+            event.target.value = "";
+          }}
+          type="file"
+        />
+        <small>Up to 10 JPEG, PNG, GIF, or WebP images; 10 MB each.</small>
+      </label>
+      <SelectedIssueImages
+        files={files}
+        onRemove={(file) =>
+          onChange(files.filter((candidate) => candidate !== file))
+        }
+      />
+    </>
+  );
+}
+
+function IssueAssignmentFields({
+  assignedTo,
+  members,
+  onAssignedToChange,
+  onPriorityChange,
+  priority,
+}: {
+  assignedTo: string;
+  members: OrganizationMember[];
+  onAssignedToChange: (assignedTo: string) => void;
+  onPriorityChange: (priority: string) => void;
+  priority: string;
+}) {
+  return (
+    <>
       <label className="field">
         <span>Priority</span>
         <select
-          onChange={(event) => setPriority(event.target.value)}
+          onChange={(event) => onPriorityChange(event.target.value)}
           value={priority}
         >
           <option value="low">Low</option>
@@ -355,7 +502,7 @@ function IssueForm({
       <label className="field">
         <span>Assignee</span>
         <select
-          onChange={(event) => setAssignedTo(event.target.value)}
+          onChange={(event) => onAssignedToChange(event.target.value)}
           value={assignedTo}
         >
           <option value="">Unassigned</option>
@@ -366,55 +513,330 @@ function IssueForm({
           ))}
         </select>
       </label>
-      <button
-        className="primaryButton"
-        disabled={busy || !itemId || !title.trim()}
-        onClick={() => void submit()}
-        type="button"
-      >
-        {busy ? "Creating…" : "Create issue"}
-      </button>
-    </div>
+    </>
   );
 }
 
 function IssueList({
   issues,
+  members,
   onChange,
+  onError,
 }: {
   issues: AuditIssue[];
+  members: OrganizationMember[];
   onChange: () => Promise<void>;
+  onError: (error: string | undefined) => void;
 }) {
   if (!issues.length) return <p className="auditNoIssues">No issues raised.</p>;
   return (
     <div className="auditIssueList">
       {issues.map((issue) => (
-        <article key={issue.id}>
-          <span className={`auditPriority ${issue.priority}`}>
-            {issue.priority}
-          </span>
-          <div>
-            <h3>{issue.title}</h3>
-            {issue.description && <p>{issue.description}</p>}
-            <small>
-              {issue.assigneeName
-                ? `Assigned to ${issue.assigneeName}`
-                : "Unassigned"}
-            </small>
-          </div>
-          <button
-            onClick={async () => {
-              await updateAuditIssue(
-                issue.id,
-                issue.status === "open" ? "resolved" : "open",
-              );
-              await onChange();
+        <IssueCard
+          issue={issue}
+          key={issue.id}
+          members={members}
+          onChange={onChange}
+          onError={onError}
+        />
+      ))}
+    </div>
+  );
+}
+
+function IssueCard({
+  issue,
+  members,
+  onChange,
+  onError,
+}: {
+  issue: AuditIssue;
+  members: OrganizationMember[];
+  onChange: () => Promise<void>;
+  onError: (error: string | undefined) => void;
+}) {
+  const { attach, busy, removeImage, update } = useIssueCardActions({
+    issue,
+    onChange,
+    onError,
+  });
+
+  return (
+    <article>
+      <span className={`auditPriority ${issue.priority}`}>
+        {issue.priority}
+      </span>
+      <div>
+        <h3>{issue.title}</h3>
+        {issue.description && <p>{issue.description}</p>}
+        <IssueImages
+          busy={busy}
+          issue={issue}
+          onAttach={attach}
+          onRemove={removeImage}
+        />
+      </div>
+      <IssueCardActions
+        busy={busy}
+        issue={issue}
+        members={members}
+        onUpdate={update}
+      />
+    </article>
+  );
+}
+
+function IssueCardActions({
+  busy,
+  issue,
+  members,
+  onUpdate,
+}: {
+  busy: boolean;
+  issue: AuditIssue;
+  members: OrganizationMember[];
+  onUpdate: (update: {
+    assignedTo?: string | null;
+    status?: "open" | "resolved";
+  }) => Promise<void>;
+}) {
+  const assignedMemberIsMissing =
+    Boolean(issue.assignedTo) &&
+    !members.some((member) => member.id === issue.assignedTo);
+  return (
+    <div className="auditIssueActions">
+      <label>
+        <span>Assignee</span>
+        <select
+          disabled={busy}
+          onChange={(event) =>
+            void onUpdate({ assignedTo: event.target.value || null })
+          }
+          value={issue.assignedTo ?? ""}
+        >
+          <option value="">Unassigned</option>
+          {assignedMemberIsMissing && (
+            <option disabled value={issue.assignedTo ?? ""}>
+              {issue.assigneeName ?? issue.assigneeEmail ?? "Former member"} ·
+              no longer a member
+            </option>
+          )}
+          {members.map((member) => (
+            <option key={member.id} value={member.id}>
+              {member.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        disabled={busy}
+        onClick={() =>
+          void onUpdate({
+            status: issue.status === "open" ? "resolved" : "open",
+          })
+        }
+        type="button"
+      >
+        {issue.status === "open" ? "Resolve" : "Reopen"}
+      </button>
+    </div>
+  );
+}
+
+function useIssueCardActions({
+  issue,
+  onChange,
+  onError,
+}: {
+  issue: AuditIssue;
+  onChange: () => Promise<void>;
+  onError: (error: string | undefined) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true);
+    onError(undefined);
+    try {
+      await action();
+      await onChange();
+    } catch (cause) {
+      onError(messageFrom(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return {
+    attach: async (files: File[]) => {
+      const selected = validateImageFiles(
+        files,
+        maxIssueImages - issue.images.length,
+      );
+      if (typeof selected === "string") {
+        onError(selected);
+        return;
+      }
+      await run(async () => {
+        const [failure] = await uploadIssueImagesSequentially(
+          issue.id,
+          selected,
+        );
+        if (failure !== undefined) onError(messageFrom(failure));
+      });
+    },
+    busy,
+    removeImage: (imageId: string) =>
+      run(() => deleteAuditIssueImage(issue.id, imageId)),
+    update: (update: {
+      assignedTo?: string | null;
+      status?: "open" | "resolved";
+    }) => run(() => updateAuditIssue(issue.id, update)),
+  };
+}
+
+type IssueImageUploader = (issueId: string, file: File) => Promise<unknown>;
+
+type WaitForRetry = (milliseconds: number) => Promise<void>;
+
+const maxIssueImageUploadRetries = 9;
+const maxIssueImageRetryDelay = 10_000;
+
+export async function uploadIssueImagesSequentially(
+  issueId: string,
+  files: File[],
+  upload: IssueImageUploader = uploadAuditIssueImage,
+  wait: WaitForRetry = waitForRetry,
+) {
+  const failures: unknown[] = [];
+  // Keep at most one decoded upload in a Worker isolate for this browser. A
+  // user can select ten 10 MB files, so firing them all at once can exhaust the
+  // isolate's shared memory before image normalization completes.
+  for (const file of files) {
+    let retryAttempt = 0;
+    while (true) {
+      try {
+        await upload(issueId, file);
+        break;
+      } catch (retryCause) {
+        const retryDelay = issueImageRetryDelay(retryCause, retryAttempt);
+        if (
+          retryDelay === undefined ||
+          retryAttempt >= maxIssueImageUploadRetries
+        ) {
+          failures.push(retryCause);
+          break;
+        }
+        retryAttempt += 1;
+        await wait(retryDelay);
+      }
+    }
+  }
+  return failures;
+}
+
+function issueImageRetryDelay(cause: unknown, retryAttempt: number) {
+  if (!(cause instanceof AuditApiError) || cause.response.status !== 429) {
+    return undefined;
+  }
+  const header = cause.response.headers.get("retry-after");
+  if (header === null) return undefined;
+  const seconds = /^\d+$/.test(header) ? Number(header) : undefined;
+  const milliseconds =
+    seconds === undefined ? Date.parse(header) - Date.now() : seconds * 1_000;
+  if (!Number.isFinite(milliseconds)) return undefined;
+  const exponentialDelay = Math.min(
+    1_000 * 2 ** retryAttempt,
+    maxIssueImageRetryDelay,
+  );
+  return Math.min(
+    Math.max(milliseconds, exponentialDelay),
+    maxIssueImageRetryDelay,
+  );
+}
+
+function waitForRetry(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function IssueImages({
+  busy,
+  issue,
+  onAttach,
+  onRemove,
+}: {
+  busy: boolean;
+  issue: AuditIssue;
+  onAttach: (files: File[]) => Promise<void>;
+  onRemove: (imageId: string) => Promise<void>;
+}) {
+  return (
+    <div className="auditIssueImages">
+      {issue.images.length > 0 && (
+        <div className="auditIssueImageGrid">
+          {issue.images.map((image) => (
+            <div key={image.id}>
+              <a
+                href={auditIssueImageUrl(issue.id, image.id)}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <img
+                  alt={image.filename}
+                  decoding="async"
+                  loading="lazy"
+                  src={auditIssueImageUrl(issue.id, image.id, "thumbnail")}
+                />
+              </a>
+              <button
+                aria-label={`Remove ${image.filename}`}
+                disabled={busy}
+                onClick={() => void onRemove(image.id)}
+                type="button"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {issue.images.length < maxIssueImages && (
+        <label className="auditIssueAttachButton">
+          + Attach images
+          <input
+            accept={acceptedImageTypes.join(",")}
+            disabled={busy}
+            multiple
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              void onAttach(files);
             }}
-            type="button"
-          >
-            {issue.status === "open" ? "Resolve" : "Reopen"}
+            type="file"
+          />
+        </label>
+      )}
+    </div>
+  );
+}
+
+function SelectedIssueImages({
+  files,
+  onRemove,
+}: {
+  files: File[];
+  onRemove: (file: File) => void;
+}) {
+  if (files.length === 0) return null;
+  return (
+    <div className="auditSelectedImages">
+      {files.map((file) => (
+        <div key={issueImageSelectionKey(file)}>
+          <span title={file.name}>{file.name}</span>
+          <button onClick={() => onRemove(file)} type="button">
+            Remove
           </button>
-        </article>
+        </div>
       ))}
     </div>
   );
@@ -443,6 +865,54 @@ function RunLoading({
 
 function allItems(definition: AuditDefinition) {
   return definition.sections.flatMap((section) => section.items);
+}
+
+function validateImageFiles(files: File[], availableSlots: number) {
+  if (files.length > availableSlots) {
+    return `You can attach ${Math.max(availableSlots, 0)} more image${availableSlots === 1 ? "" : "s"}.`;
+  }
+  if (
+    files.some(
+      (file) =>
+        file.type && !acceptedImageTypes.includes(file.type.toLowerCase()),
+    )
+  ) {
+    return "Images must be JPEG, PNG, GIF, or WebP files.";
+  }
+  if (files.some((file) => file.size > maxIssueImageBytes)) {
+    return "Images must be 10 MB or smaller.";
+  }
+  return files;
+}
+
+export function appendIssueImageSelection(
+  existingFiles: File[],
+  selectedFiles: File[],
+) {
+  const identities = new Set(existingFiles.map(issueImageSelectionKey));
+  const additions = selectedFiles.filter((file) => {
+    const identity = issueImageSelectionKey(file);
+    if (identities.has(identity)) return false;
+    identities.add(identity);
+    return true;
+  });
+  const validated = validateImageFiles(
+    additions,
+    maxIssueImages - existingFiles.length,
+  );
+  return typeof validated === "string"
+    ? validated
+    : [...existingFiles, ...validated];
+}
+
+function issueImageSelectionKey(file: File) {
+  return JSON.stringify([
+    file.name,
+    file.size,
+    file.lastModified,
+    file.type,
+    file.webkitRelativePath,
+  ]);
 }
 
 function titleCase(value: string) {

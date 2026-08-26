@@ -6,6 +6,7 @@ export interface Bindings {
   DB: D1Database;
   EMAIL: SendEmail;
   INBOUND_EMAIL_DOMAIN: string;
+  IMAGES: ImagesBinding;
   PLAID_CLIENT_ID?: string;
   PLAID_ENV?: "development" | "production" | "sandbox";
   PLAID_REDIRECT_URI?: string;

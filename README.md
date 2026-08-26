@@ -8,8 +8,8 @@ A small Bun monorepo for a Cloudflare-native product:
 - `terraform` — D1, R2, and `tearleads.com` Worker-domain infrastructure.
 
 The tooling follows the useful core of Tearleads (Bun, Turborepo, TypeScript,
-and Biome) without carrying over its mature product architecture. There is no
-shared package yet; add one only when two apps have real code to share.
+and Biome) without carrying over its mature product architecture. Repository
+automation shared by the agent workflows lives in `packages/agent-tool`.
 
 ## Start locally
 
@@ -94,7 +94,14 @@ to the Worker but never places it in Wrangler configuration or Terraform state.
 Authenticated users can build organization-scoped checklist templates at
 `/audits`, start audits from them, record pass/fail/N/A or text responses, and
 raise issues with priorities and optional organization-member assignees. Audit
-runs snapshot their template so later template edits do not rewrite history.
+issues can include a description, be reassigned, and have up to ten JPEG, PNG,
+GIF, or WebP images attached. Image metadata is organization-scoped in D1 and
+the private image bytes are stored under organization and issue prefixes in R2.
+The Cloudflare Images binding validates image structure, type, and dimensions
+and normalizes uploads to a single non-animated frame before anything is written
+to storage.
+Audit runs snapshot their template so later template edits do not rewrite
+history.
 Customizing a global template creates a new organization-scoped form instead
 of changing the shared template or its version history. Platform administrators
 use a separate management action when they intentionally publish a new global
@@ -265,6 +272,18 @@ bun run format    # format source and Markdown
 bun run deploy    # deploy and verify production
 bun run terraform:plan # preview Cloudflare infrastructure
 ```
+
+## Agent pull request flow
+
+The `.codex/skills` and `.claude/skills` directories contain the shared review,
+open, squash-merge, reset, and end-to-end ship workflows. Their implementation
+is in `packages/agent-tool`. Invoke the skills rather than running the feature
+checkout's package directly: each skill materializes the tool from the fetched,
+trusted base commit before exposing reviewer or GitHub credentials to it.
+
+The ship flow commits locally, requests a cross-agent review before the first
+push, opens one pull request, guards the squash merge with the reviewed head and
+base SHAs, and restores a clean, current `main` branch afterward.
 
 The lint suite is adapted from Tearleads and runs Biome, Markdownlint,
 ls-lint, Knip, and strict TypeScript checks. Installed Git hooks lint staged

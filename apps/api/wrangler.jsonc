@@ -7,6 +7,9 @@
   "observability": {
     "enabled": true
   },
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
   "vars": {
     "AUTH_EMAIL_FROM": "security@auth.tearleads.com",
     "BETTER_AUTH_URL": "https://api.tearleads.com",
@@ -31,6 +34,9 @@
       "bucket_name": "stealth-objects"
     }
   ],
+  "images": {
+    "binding": "IMAGES"
+  },
   "send_email": [
     {
       "name": "EMAIL",

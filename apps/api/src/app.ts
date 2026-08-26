@@ -28,6 +28,7 @@ app.use(
     allowHeaders: ["Authorization", "Content-Type"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
+    exposeHeaders: ["Retry-After"],
     origin: (_origin, context) => context.env.CORS_ORIGIN,
   }),
 );

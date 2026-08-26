@@ -1,0 +1,13 @@
+{
+  "name": "@tearleads/agent-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test src"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.11"
+  }
+}

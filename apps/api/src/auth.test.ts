@@ -896,6 +896,7 @@ async function createFixture() {
         return { messageId: "test-message" };
       },
     } as unknown as SendEmail,
+    IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: {} as R2Bucket,
   } satisfies Bindings;
