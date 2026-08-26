@@ -305,12 +305,13 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    Then invoke the `squash-merge` compatibility skill, passing
    `REVIEWED_SHA` as its **second (head-SHA) argument** and
    `REVIEWED_BASE_SHA` as its **third (base-SHA) argument**. The guarded merge
-   selects a server-side strategy from the effective branch policy: exact
-   two-ref leases when unprotected, or GitHub's API when strict up-to-date policy
-   also guards the reviewed base and all requirements are already clean. The
-   guarded path never arms delayed auto-merge. Pending requirements, active
-   merge queues, and weaker protected configurations stop safely because they
-   cannot preserve the reviewed head/base pair and squash method.
+   uses GitHub's merge API with `--match-head-commit`, after inspecting the
+   effective branch policy and freshly confirming the reviewed base. GitHub's
+   transaction rechecks the PR state, reviews, mergeability, policy, and exact
+   head while merging; protected branches must also enforce strict up-to-date
+   checks so their policy guards base movement. The guarded path never arms
+   delayed auto-merge. Pending requirements, active merge queues, and weaker
+   protected configurations stop safely.
 
    That skill also owns the post-merge cleanup: once GitHub confirms `MERGED`, it
    returns to the PR's base branch, fast-forwards it, verifies it contains the
@@ -391,9 +392,10 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
   interpreted.
 - **The merged head and base are the reviewed pair** — `cross-agent-review`
   reports the exact head and base it reviewed. This skill re-verifies both once
-  the PR is open and immediately before merge; `squash-merge` then uses exact
-  leases on both reviewed refs or a strict server policy that guards both sides.
-  A head or base change therefore sends the flow back through sync and review.
+  the PR is open and immediately before merge; `squash-merge` then binds GitHub's
+  merge transaction to the exact reviewed head, while strict protected-branch
+  policy guards the freshly checked base. A detected head or base change
+  therefore sends the flow back through sync and review.
   (A message-only
   co-author strip keeps it: step 3 checks tree and merge-base identity, then
   re-pins `REVIEWED_SHA`.) The lone exception
