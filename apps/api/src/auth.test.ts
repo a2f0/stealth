@@ -480,22 +480,65 @@ describe("password authentication", () => {
     );
     expect(forbidden.status).toBe(403);
 
+    const nullableRoleEmail = "null-role@example.com";
+    expect(
+      (
+        await post(fixture.auth, "/sign-up/email", {
+          email: nullableRoleEmail,
+          name: "Nullable Role",
+          password: originalPassword,
+          termsAccepted: true,
+        })
+      ).status,
+    ).toBe(200);
     fixture.database
       .query('UPDATE "user" SET role = ? WHERE email = ?')
       .run("admin", email);
+    fixture.database
+      .query('UPDATE "user" SET role = NULL WHERE email = ?')
+      .run(nullableRoleEmail);
+    fixture.database
+      .query(
+        `INSERT INTO "user"
+         (id, name, email, emailVerified, createdAt, updatedAt, role, banned)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "system:audit-library",
+        "Stealth audit library",
+        "audit-library+auth-test@system.invalid",
+        true,
+        "2026-08-26T12:00:00.000Z",
+        "2026-08-26T12:00:00.000Z",
+        "system",
+        true,
+      );
     const adminSignIn = await post(fixture.auth, "/sign-in/email", {
       email,
       password: originalPassword,
     });
     const adminCookie = adminSignIn.headers.get("set-cookie");
-    const listing = await get(
+    const firstPage = await get(
       fixture.auth,
-      "/admin/list-users?limit=25&sortBy=createdAt&sortDirection=desc",
+      "/admin/list-users?filterField=id&filterOperator=ne&filterValue=system%3Aaudit-library&limit=1&offset=0&sortBy=email&sortDirection=asc",
       adminCookie,
     );
-    expect(listing.status).toBe(200);
-    expect(await listing.json()).toMatchObject({
-      total: 1,
+    const secondPage = await get(
+      fixture.auth,
+      "/admin/list-users?filterField=id&filterOperator=ne&filterValue=system%3Aaudit-library&limit=1&offset=1&sortBy=email&sortDirection=asc",
+      adminCookie,
+    );
+    expect(firstPage.status).toBe(200);
+    expect(secondPage.status).toBe(200);
+    expect(await firstPage.json()).toMatchObject({
+      limit: 1,
+      total: 2,
+      users: [{ email: nullableRoleEmail, role: null }],
+    });
+    expect(await secondPage.json()).toMatchObject({
+      limit: 1,
+      offset: 1,
+      total: 2,
       users: [{ email, role: "admin" }],
     });
   });
