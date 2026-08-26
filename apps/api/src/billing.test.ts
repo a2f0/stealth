@@ -120,6 +120,59 @@ describe("billing", () => {
     }
   });
 
+  it("releases a Checkout claim after a definitive Stripe rejection", async () => {
+    const fixture = await createFixture();
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    const idempotencyKeys: string[] = [];
+    let requestCount = 0;
+    globalThis.fetch = (async (_input, init) => {
+      requestCount += 1;
+      idempotencyKeys.push(
+        new Headers(init?.headers).get("Idempotency-Key") ?? "",
+      );
+      if (requestCount === 1) {
+        return Response.json(
+          { error: { message: "Invalid Stripe price" } },
+          { status: 400 },
+        );
+      }
+      return Response.json({
+        expires_at: Math.floor(Date.now() / 1_000) + 1_800,
+        id: "cs_retry_success",
+        status: "open",
+        url: "https://checkout.stripe.test/retry",
+      });
+    }) as typeof fetch;
+    console.error = () => {};
+    try {
+      const rejected = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(rejected.status).toBe(502);
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_claim_id FROM organization_billing
+             WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ checkout_claim_id: null });
+      const retried = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(retried.status).toBe(200);
+      expect(new Set(idempotencyKeys).size).toBe(2);
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("invalidates an in-flight Checkout before organization deletion", async () => {
     const fixture = await createFixture();
     const originalFetch = globalThis.fetch;
@@ -517,6 +570,21 @@ describe("billing", () => {
     expect(
       fixture.database.query("SELECT COUNT(*) AS count FROM audits").get(),
     ).toEqual({ count: 0 });
+  });
+
+  it("fails closed when retention billing configuration is missing", async () => {
+    const fixture = await createFixture();
+    insertAudit(fixture.database, "must-retain", organizationId, "2026-06-01");
+    const { STRIPE_PRO_PRICE_ID: _priceId, ...missingPriceBindings } =
+      fixture.bindings;
+    await expect(
+      purgeExpiredFreeAuditRuns(missingPriceBindings, "2026-07-27"),
+    ).rejects.toThrow(
+      "Stripe Pro price configuration is required for retention cleanup.",
+    );
+    expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
+      { id: "must-retain" },
+    ]);
   });
 });
 

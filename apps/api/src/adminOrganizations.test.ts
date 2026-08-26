@@ -141,6 +141,23 @@ describe("admin organizations", () => {
     });
   });
 
+  it("returns not found without creating billing for an unknown organization", async () => {
+    const database = await createDeletionFixture();
+    const response = await testApp(database).request("/org_missing", {
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(404);
+    expect(
+      database
+        .query(
+          `SELECT COUNT(*) AS count FROM organization_billing
+           WHERE organization_id = 'org_missing'`,
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
   it("cancels paid billing before an admin deletes the organization", async () => {
     const database = await createDeletionFixture();
     insertPaidBilling(database);

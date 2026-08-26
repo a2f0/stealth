@@ -10,6 +10,12 @@ export async function purgeExpiredFreeAuditRuns(
     Date.now() - freeRetentionDays * 24 * 60 * 60 * 1_000,
   ).toISOString(),
 ) {
+  const proPriceId = environment.STRIPE_PRO_PRICE_ID;
+  if (!proPriceId) {
+    throw new Error(
+      "Stripe Pro price configuration is required for retention cleanup.",
+    );
+  }
   let deleted = 0;
   while (true) {
     const result = await environment.DB.prepare(
@@ -33,11 +39,7 @@ export async function purgeExpiredFreeAuditRuns(
        )
        RETURNING id`,
     )
-      .bind(
-        retainedAfter,
-        environment.STRIPE_PRO_PRICE_ID ?? "",
-        retentionBatchSize,
-      )
+      .bind(retainedAfter, proPriceId, retentionBatchSize)
       .all<{ id: string }>();
     deleted += result.results.length;
     if (result.results.length < retentionBatchSize) return deleted;

@@ -126,12 +126,7 @@ billing.post("/checkout", async (context) => {
   ]);
   if (billingRecord?.checkout_disabled_at)
     return checkoutDisabledResponse(context);
-  if (isPaidBilling(billingRecord, priceId)) {
-    return context.json(
-      { error: "This organization already has a Pro subscription." },
-      409,
-    );
-  }
+  if (isPaidBilling(billingRecord, priceId)) return alreadyProResponse(context);
   const nowSeconds = Math.floor(Date.now() / 1_000);
   const pendingCheckout = activePendingCheckout(billingRecord, nowSeconds);
   if (pendingCheckout) return context.json({ url: pendingCheckout.url });
@@ -142,12 +137,8 @@ billing.post("/checkout", async (context) => {
     Math.max(1, memberCount),
     nowSeconds,
   );
-  if (isPaidBilling(claimedBilling, priceId)) {
-    return context.json(
-      { error: "This organization already has a Pro subscription." },
-      409,
-    );
-  }
+  if (isPaidBilling(claimedBilling, priceId))
+    return alreadyProResponse(context);
   if (claimedBilling?.checkout_disabled_at)
     return checkoutDisabledResponse(context);
   const claimedPending = activePendingCheckout(claimedBilling, nowSeconds);
@@ -194,7 +185,12 @@ billing.post("/checkout", async (context) => {
     }
     return context.json({ url: checkout.url });
   } catch (cause) {
-    return billingError(context, cause);
+    return checkoutCreationError(
+      context,
+      cause,
+      organizationId,
+      claimedBilling,
+    );
   }
 });
 
@@ -863,7 +859,7 @@ async function disableCheckoutForDeletion(
     .prepare(
       `INSERT INTO organization_billing
        (organization_id, checkout_disabled_at, updated_at)
-       VALUES (?, ?, ?)
+       SELECT id, ?, ? FROM organization WHERE id = ?
        ON CONFLICT (organization_id) DO UPDATE SET
          checkout_disabled_at = excluded.checkout_disabled_at,
          checkout_claim_id = NULL,
@@ -871,7 +867,7 @@ async function disableCheckoutForDeletion(
          checkout_claim_expires_at = NULL,
          updated_at = excluded.updated_at`,
     )
-    .bind(organizationId, now, now)
+    .bind(now, now, organizationId)
     .run();
   return findBilling(database, organizationId);
 }
@@ -948,6 +944,24 @@ async function claimCheckout(
     )
     .run();
   return findBilling(database, organizationId);
+}
+
+async function releaseCheckoutClaim(
+  database: D1Database,
+  organizationId: string,
+  claimId: string,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET checkout_claim_id = NULL,
+           checkout_claim_quantity = NULL,
+           checkout_claim_expires_at = NULL,
+           updated_at = ?
+       WHERE organization_id = ? AND checkout_claim_id = ?`,
+    )
+    .bind(new Date().toISOString(), organizationId, claimId)
+    .run();
 }
 
 function activePendingCheckout(record: BillingRow | null, nowSeconds: number) {
@@ -1169,12 +1183,38 @@ function billingError(context: Context<BillingEnv>, cause: unknown) {
   throw cause;
 }
 
+async function checkoutCreationError(
+  context: Context<BillingEnv>,
+  cause: unknown,
+  organizationId: string,
+  claim: BillingRow,
+) {
+  if (
+    cause instanceof StripeConfigurationError ||
+    (cause instanceof StripeApiError && cause.status < 500)
+  ) {
+    await releaseCheckoutClaim(
+      context.env.DB,
+      organizationId,
+      claim.checkout_claim_id ?? "",
+    );
+  }
+  return billingError(context, cause);
+}
+
 function checkoutDisabledResponse(context: Context<BillingEnv>) {
   return context.json(
     {
       error:
         "Checkout is unavailable while this organization is being deleted.",
     },
+    409,
+  );
+}
+
+function alreadyProResponse(context: Context<BillingEnv>) {
+  return context.json(
+    { error: "This organization already has a Pro subscription." },
     409,
   );
 }
