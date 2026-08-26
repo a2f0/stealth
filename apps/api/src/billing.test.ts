@@ -91,6 +91,48 @@ describe("billing", () => {
     }
   });
 
+  it("reclaims a stale deletion lease before creating Checkout", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, checkout_disabled_at,
+          checkout_disabled_expires_at, updated_at)
+         VALUES (?, 'interrupted-worker', 1, ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json({
+        client_reference_id: organizationId,
+        expires_at: Math.floor(Date.now() / 1_000) + 1_800,
+        id: "cs_after_interrupted_deletion",
+        status: "open",
+        url: "https://checkout.stripe.test/recovered",
+      })) as typeof fetch;
+    try {
+      const response = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(response.status).toBe(200);
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_disabled_at, checkout_disabled_expires_at
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        checkout_disabled_at: null,
+        checkout_disabled_expires_at: null,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("deduplicates concurrent Checkout creation with one claim", async () => {
     const fixture = await createFixture();
     const originalFetch = globalThis.fetch;
@@ -312,6 +354,39 @@ describe("billing", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("reclaims a stale deletion lease after an interrupted worker", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, checkout_disabled_at,
+          checkout_disabled_expires_at, updated_at)
+         VALUES (?, 'interrupted-worker', 1, ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+
+    const result = await cancelOrganizationSubscription(
+      fixture.bindings,
+      organizationId,
+    );
+    expect(result).toMatchObject({
+      canceled: false,
+      checkoutGuard: expect.any(String),
+    });
+    expect(result.checkoutGuard).not.toBe("interrupted-worker");
+    expect(
+      fixture.database
+        .query(
+          `SELECT checkout_disabled_at, checkout_disabled_expires_at
+           FROM organization_billing WHERE organization_id = ?`,
+        )
+        .get(organizationId),
+    ).toEqual({
+      checkout_disabled_at: result.checkoutGuard,
+      checkout_disabled_expires_at: expect.any(Number),
+    });
   });
 
   it("keeps concurrent organization deletions request-owned", async () => {
@@ -1063,9 +1138,11 @@ describe("billing", () => {
     fixture.database
       .query(
         `INSERT INTO organization_billing
-         (organization_id, stripe_subscription_item_id, stripe_price_id,
-          stripe_status, seat_quantity, stripe_event_created, updated_at)
-         VALUES ('org_user-2', 'si_retention_pro', ?, 'active', 1, 1, ?)`,
+         (organization_id, stripe_subscription_id,
+          stripe_subscription_item_id, stripe_price_id, stripe_status,
+          seat_quantity, stripe_event_created, updated_at)
+         VALUES ('org_user-2', 'sub_retention_pro', 'si_retention_pro', ?,
+                 'active', 1, 1, ?)`,
       )
       .run(proPriceId, new Date().toISOString());
     fixture.database
@@ -1092,6 +1169,35 @@ describe("billing", () => {
     expect(
       fixture.database.query("SELECT id FROM audits ORDER BY id").all(),
     ).toEqual([{ id: "free-recent" }, { id: "pro-old" }]);
+  });
+
+  it("retains history for an unresolved active Stripe price", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_subscription_id,
+          stripe_subscription_item_id, stripe_price_id, stripe_status,
+          seat_quantity, stripe_event_created, updated_at)
+         VALUES (?, 'sub_unknown_price', 'si_unknown_price',
+                 'price_unknown', 'active', 1, 1, ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+    insertAudit(
+      fixture.database,
+      "unknown-price-old",
+      organizationId,
+      "2026-06-01",
+    );
+
+    const summary = await fixture.app.request("/", undefined, fixture.bindings);
+    expect(await summary.json()).toMatchObject({ plan: "free" });
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(0);
+    expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
+      { id: "unknown-price-old" },
+    ]);
   });
 
   it("keeps Pro history after the configured price rotates", async () => {

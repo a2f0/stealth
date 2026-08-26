@@ -10,10 +10,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/cloudflareEnv.sh"
 source_env_file "$REPO_ROOT/.secrets/root.env"
 validate_auth_env
-validate_stripe_env
-if [[ -z "${STRIPE_PRO_PRICE_ID:-}" ]]; then
-  echo "ERROR: Missing STRIPE_PRO_PRICE_ID for local billing." >&2
-  exit 1
+if [[ -n "${STRIPE_SECRET_KEY:-}" ||
+  -n "${STRIPE_WEBHOOK_SECRET:-}" ||
+  -n "${STRIPE_PRO_PRICE_ID:-}" ||
+  -n "${STRIPE_PORTAL_CONFIGURATION_ID:-}" ||
+  -n "${STRIPE_PRO_LEGACY_PRICE_IDS:-}" ]]; then
+  validate_stripe_env
+  if [[ -z "${STRIPE_PRO_PRICE_ID:-}" ]]; then
+    echo "ERROR: Missing STRIPE_PRO_PRICE_ID for local billing." >&2
+    exit 1
+  fi
 fi
 
 auth_env_file="$(mktemp)"
@@ -40,5 +46,5 @@ cd "$REPO_ROOT/apps/api"
 bunx wrangler dev \
   --env-file "$auth_env_file" \
   --var "STRIPE_PRO_LEGACY_PRICE_IDS:${STRIPE_PRO_LEGACY_PRICE_IDS:-}" \
-  --var "STRIPE_PRO_PRICE_ID:$STRIPE_PRO_PRICE_ID" \
+  --var "STRIPE_PRO_PRICE_ID:${STRIPE_PRO_PRICE_ID:-}" \
   --var "STRIPE_PORTAL_CONFIGURATION_ID:${STRIPE_PORTAL_CONFIGURATION_ID:-}"

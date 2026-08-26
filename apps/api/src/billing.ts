@@ -27,6 +27,7 @@ const subscriptionSeatReconciliationLimit = 25;
 const subscriptionSyncClaimSeconds = 2 * 60;
 const stripeWebhookReceiptCleanupLimit = 500;
 const stripeWebhookReceiptRetentionDays = 31;
+const checkoutDeletionLeaseSeconds = 5 * 60;
 
 type BillingEnv = {
   Bindings: Bindings;
@@ -39,6 +40,7 @@ interface BillingRow {
   checkout_claim_id: string | null;
   checkout_claim_quantity: number | null;
   checkout_disabled_at: string | null;
+  checkout_disabled_expires_at: number | null;
   current_period_end: string | null;
   last_reconciled_at: string | null;
   pending_checkout_expires_at: number | null;
@@ -159,15 +161,14 @@ billing.post("/checkout", async (context) => {
   const organizationId = context.get("organizationId");
   const priceId = context.env.STRIPE_PRO_PRICE_ID;
   if (!priceId) return billingUnavailableResponse(context);
-  const [billingRecord, memberCount] = await Promise.all([
-    findBilling(context.env.DB, organizationId),
-    countMembers(context.env.DB, organizationId),
-  ]);
-  if (billingRecord?.checkout_disabled_at)
+  const { billingRecord, memberCount, nowSeconds } = await checkoutState(
+    context.env.DB,
+    organizationId,
+  );
+  if (checkoutDeletionInProgress(billingRecord, nowSeconds))
     return checkoutDisabledResponse(context);
   if (isPaidBillingForEnvironment(billingRecord, context.env))
     return alreadyProResponse(context);
-  const nowSeconds = Math.floor(Date.now() / 1_000);
   const pendingCheckout = activePendingCheckout(billingRecord, nowSeconds);
   if (pendingCheckout) return context.json({ url: pendingCheckout.url });
   const checkoutClaim = await claimCheckout(
@@ -180,7 +181,8 @@ billing.post("/checkout", async (context) => {
   const record = checkoutClaim.record;
   if (isPaidBillingForEnvironment(record, context.env))
     return alreadyProResponse(context);
-  if (record?.checkout_disabled_at) return checkoutDisabledResponse(context);
+  if (checkoutDeletionInProgress(record, nowSeconds))
+    return checkoutDisabledResponse(context);
   const claimedPending = activePendingCheckout(record, nowSeconds);
   if (claimedPending) return context.json({ url: claimedPending.url });
   if (
@@ -808,7 +810,9 @@ export async function recoverCheckoutAfterFailedDeletion(
   const recovered = await database
     .prepare(
       `UPDATE organization_billing
-       SET checkout_disabled_at = NULL, updated_at = ?
+       SET checkout_disabled_at = NULL,
+           checkout_disabled_expires_at = NULL,
+           updated_at = ?
        WHERE organization_id = ? AND checkout_disabled_at = ?
          AND EXISTS (
            SELECT 1 FROM organization
@@ -1170,6 +1174,11 @@ async function prepareCheckoutSubscriptionReplacement(
   checkoutSessionId: string,
   subscription: StripeSubscription,
 ) {
+  await clearExpiredCheckoutDeletionLease(
+    environment.DB,
+    organizationId,
+    Math.floor(Date.now() / 1_000),
+  );
   const existing = await findBilling(environment.DB, organizationId);
   const matchesCurrent = existing?.stripe_subscription_id === subscription.id;
   const matchesPending =
@@ -1196,7 +1205,7 @@ async function prepareCheckoutSubscriptionReplacement(
     return false;
   }
   if (
-    existing?.checkout_disabled_at ||
+    checkoutDeletionInProgress(existing, Math.floor(Date.now() / 1_000)) ||
     (!matchesPending &&
       (!matchesCurrent || Boolean(existing?.pending_checkout_session_id)))
   ) {
@@ -1478,7 +1487,7 @@ function isPaidBillingForEnvironment(
   );
 }
 
-export function configuredProPriceIds(
+function configuredProPriceIds(
   currentPriceId: string | undefined,
   legacyPriceIds?: string,
 ) {
@@ -1511,7 +1520,7 @@ async function findBilling(database: D1Database, organizationId: string) {
             seat_quantity, cancel_at_period_end, current_period_end,
             stripe_event_created, checkout_claim_id,
             checkout_claim_quantity, checkout_claim_expires_at,
-            checkout_disabled_at,
+            checkout_disabled_at, checkout_disabled_expires_at,
             pending_checkout_session_id, pending_checkout_url,
             pending_checkout_expires_at, last_reconciled_at, updated_at
      FROM organization_billing WHERE organization_id = ?`,
@@ -1530,30 +1539,40 @@ async function disableCheckoutForDeletion(
   database: D1Database,
   organizationId: string,
 ) {
-  const now = new Date().toISOString();
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const now = new Date(nowSeconds * 1_000).toISOString();
+  const expiresAt = nowSeconds + checkoutDeletionLeaseSeconds;
   const checkoutGuard = crypto.randomUUID();
   const record = await database
     .prepare(
       `INSERT INTO organization_billing
-       (organization_id, checkout_disabled_at, updated_at)
-       SELECT id, ?, ? FROM organization WHERE id = ?
+       (organization_id, checkout_disabled_at,
+        checkout_disabled_expires_at, updated_at)
+       SELECT id, ?, ?, ? FROM organization WHERE id = ?
        ON CONFLICT (organization_id) DO UPDATE SET
          checkout_disabled_at = excluded.checkout_disabled_at,
+         checkout_disabled_expires_at =
+           excluded.checkout_disabled_expires_at,
          checkout_claim_id = NULL,
          checkout_claim_quantity = NULL,
          checkout_claim_expires_at = NULL,
          updated_at = excluded.updated_at
        WHERE organization_billing.checkout_disabled_at IS NULL
+          OR COALESCE(
+               organization_billing.checkout_disabled_expires_at,
+               0
+             ) <= ?
        RETURNING stripe_customer_id, stripe_subscription_id,
                  stripe_subscription_item_id, stripe_price_id, stripe_status,
                  seat_quantity, cancel_at_period_end, current_period_end,
                  stripe_event_created, checkout_claim_id,
                  checkout_claim_quantity, checkout_claim_expires_at,
-                 checkout_disabled_at, pending_checkout_session_id,
+                 checkout_disabled_at, checkout_disabled_expires_at,
+                 pending_checkout_session_id,
                  pending_checkout_url, pending_checkout_expires_at,
                  last_reconciled_at, updated_at`,
     )
-    .bind(checkoutGuard, now, organizationId)
+    .bind(checkoutGuard, expiresAt, now, organizationId, nowSeconds)
     .first<BillingRow>();
   return record?.checkout_disabled_at === checkoutGuard
     ? { checkoutGuard, record }
@@ -1568,7 +1587,9 @@ async function enableCheckoutAfterFailedDeletion(
   await database
     .prepare(
       `UPDATE organization_billing
-       SET checkout_disabled_at = NULL, updated_at = ?
+       SET checkout_disabled_at = NULL,
+           checkout_disabled_expires_at = NULL,
+           updated_at = ?
        WHERE organization_id = ? AND checkout_disabled_at IS ?`,
     )
     .bind(new Date().toISOString(), organizationId, checkoutGuard)
@@ -1629,6 +1650,8 @@ async function claimCheckout(
          checkout_claim_id = excluded.checkout_claim_id,
          checkout_claim_quantity = excluded.checkout_claim_quantity,
          checkout_claim_expires_at = excluded.checkout_claim_expires_at,
+         checkout_disabled_at = NULL,
+         checkout_disabled_expires_at = NULL,
          updated_at = excluded.updated_at
        WHERE NOT (
            COALESCE(organization_billing.stripe_price_id, '') = ?
@@ -1637,7 +1660,13 @@ async function claimCheckout(
          )
          AND COALESCE(organization_billing.pending_checkout_expires_at, 0) <= ?
          AND COALESCE(organization_billing.checkout_claim_expires_at, 0) <= ?
-         AND organization_billing.checkout_disabled_at IS NULL`,
+         AND (
+           organization_billing.checkout_disabled_at IS NULL
+           OR COALESCE(
+                organization_billing.checkout_disabled_expires_at,
+                0
+              ) <= ?
+         )`,
     )
     .bind(
       organizationId,
@@ -1646,6 +1675,7 @@ async function claimCheckout(
       expiresAt,
       new Date().toISOString(),
       priceId,
+      nowSeconds,
       nowSeconds,
       nowSeconds,
     )
@@ -1658,6 +1688,52 @@ async function claimCheckout(
       record?.checkout_claim_id === claimId,
     record,
   };
+}
+
+async function checkoutState(database: D1Database, organizationId: string) {
+  const [billingRecord, memberCount] = await Promise.all([
+    findBilling(database, organizationId),
+    countMembers(database, organizationId),
+  ]);
+  return {
+    billingRecord,
+    memberCount,
+    nowSeconds: Math.floor(Date.now() / 1_000),
+  };
+}
+
+async function clearExpiredCheckoutDeletionLease(
+  database: D1Database,
+  organizationId: string,
+  nowSeconds: number,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET checkout_disabled_at = NULL,
+           checkout_disabled_expires_at = NULL,
+           updated_at = ?
+       WHERE organization_id = ?
+         AND checkout_disabled_at IS NOT NULL
+         AND COALESCE(checkout_disabled_expires_at, 0) <= ?`,
+    )
+    .bind(
+      new Date(nowSeconds * 1_000).toISOString(),
+      organizationId,
+      nowSeconds,
+    )
+    .run();
+}
+
+function checkoutDeletionInProgress(
+  record: BillingRow | null,
+  nowSeconds: number,
+) {
+  return Boolean(
+    record?.checkout_disabled_at &&
+      record.checkout_disabled_expires_at &&
+      record.checkout_disabled_expires_at > nowSeconds,
+  );
 }
 
 async function releaseCheckoutClaim(

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type BillingStatus,
   createCheckoutSession,
@@ -15,7 +15,9 @@ export function OrganizationBilling({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const loadSequence = useRef(0);
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     setStatus(undefined);
     setError(undefined);
     setNotice(undefined);
@@ -24,20 +26,18 @@ export function OrganizationBilling({
     const query = new URLSearchParams(window.location.search);
     const sessionId = query.get("session_id") ?? undefined;
     try {
-      setStatus(await getBillingStatus(sessionId));
-      if (query.get("checkout") === "success") {
-        setNotice("Your Pro subscription is active.");
-      } else if (query.get("checkout") === "canceled") {
-        setNotice("Checkout was canceled. Your plan has not changed.");
-      }
-      if (query.has("checkout") || query.has("session_id")) {
-        window.history.replaceState({}, "", "/organization/billing");
-      }
+      const nextStatus = await getBillingStatus(sessionId);
+      if (sequence !== loadSequence.current) return;
+      setStatus(nextStatus);
+      setNotice(checkoutNotice(query));
+      clearCheckoutQuery(query);
     } catch (cause) {
-      setError(messageFrom(cause));
+      if (sequence === loadSequence.current) {
+        setError(messageFrom(cause));
+      }
     }
   }, [organizationId]);
-  useEffect(() => void load(), [load]);
+  useBillingReload(load, loadSequence);
 
   async function redirect(action: "checkout" | "portal") {
     setBusy(true);
@@ -126,6 +126,33 @@ export function OrganizationBilling({
       )}
     </div>
   );
+}
+
+function useBillingReload(
+  load: () => Promise<void>,
+  sequence: { current: number },
+) {
+  useEffect(() => {
+    void load();
+    return () => {
+      sequence.current += 1;
+    };
+  }, [load, sequence]);
+}
+
+function checkoutNotice(query: URLSearchParams) {
+  const checkout = query.get("checkout");
+  if (checkout === "success") return "Your Pro subscription is active.";
+  if (checkout === "canceled") {
+    return "Checkout was canceled. Your plan has not changed.";
+  }
+  return undefined;
+}
+
+function clearCheckoutQuery(query: URLSearchParams) {
+  if (query.has("checkout") || query.has("session_id")) {
+    window.history.replaceState({}, "", "/organization/billing");
+  }
 }
 
 function PlanCard({

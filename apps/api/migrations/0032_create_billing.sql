@@ -15,6 +15,7 @@ CREATE TABLE organization_billing (
   checkout_claim_quantity INTEGER CHECK (checkout_claim_quantity > 0),
   checkout_claim_expires_at INTEGER,
   checkout_disabled_at TEXT,
+  checkout_disabled_expires_at INTEGER,
   pending_checkout_session_id TEXT UNIQUE,
   pending_checkout_url TEXT,
   pending_checkout_expires_at INTEGER,
@@ -48,6 +49,7 @@ WHEN OLD.deletedAt IS NOT NULL AND NEW.deletedAt IS NULL
 BEGIN
   UPDATE organization_billing
   SET checkout_disabled_at = NULL,
+      checkout_disabled_expires_at = NULL,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
   WHERE organization_id = NEW.id;
 END;

@@ -131,6 +131,7 @@ organizationSettings.delete("/current", async (context) => {
       context.env.DB,
       organizationId,
       userId,
+      checkoutGuard,
     );
   } catch (cause) {
     console.error("Could not record organization deletion.", cause);

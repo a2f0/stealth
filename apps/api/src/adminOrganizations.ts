@@ -92,6 +92,7 @@ adminOrganizations.delete("/:organizationId", async (context) => {
       context.env.DB,
       organizationId,
       actor.id,
+      checkoutGuard,
     );
   } catch (cause) {
     console.error("Could not record organization deletion.", cause);

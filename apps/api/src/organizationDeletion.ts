@@ -11,6 +11,7 @@ export async function markOrganizationForDeletion(
   database: D1Database,
   organizationId: string,
   deletedByUserId: string,
+  checkoutGuard: string | null,
 ): Promise<OrganizationDeletion | undefined> {
   const deletedAt = new Date().toISOString();
   const results = await database.batch([
@@ -18,16 +19,26 @@ export async function markOrganizationForDeletion(
       .prepare(
         `UPDATE organization
          SET deletedAt = ?, deletedByUserId = ?
-         WHERE id = ? AND deletedAt IS NULL`,
+         WHERE id = ? AND deletedAt IS NULL
+           AND EXISTS (
+             SELECT 1 FROM organization_billing
+             WHERE organization_id = organization.id
+               AND checkout_disabled_at IS ?
+               AND COALESCE(checkout_disabled_expires_at, 0) > unixepoch()
+           )`,
       )
-      .bind(deletedAt, deletedByUserId, organizationId),
+      .bind(deletedAt, deletedByUserId, organizationId, checkoutGuard),
     database
       .prepare(
         `UPDATE invitation
          SET status = 'canceled'
-         WHERE organizationId = ? AND status = 'pending'`,
+         WHERE organizationId = ? AND status = 'pending'
+           AND EXISTS (
+             SELECT 1 FROM organization
+             WHERE id = ? AND deletedAt = ? AND deletedByUserId = ?
+           )`,
       )
-      .bind(organizationId),
+      .bind(organizationId, organizationId, deletedAt, deletedByUserId),
     database
       .prepare(
         `UPDATE user
@@ -42,9 +53,19 @@ export async function markOrganizationForDeletion(
            ORDER BY member.createdAt ASC, member.id ASC
            LIMIT 1
          )
-         WHERE defaultOrganizationId = ?`,
+         WHERE defaultOrganizationId = ?
+           AND EXISTS (
+             SELECT 1 FROM organization
+             WHERE id = ? AND deletedAt = ? AND deletedByUserId = ?
+           )`,
       )
-      .bind(organizationId, organizationId),
+      .bind(
+        organizationId,
+        organizationId,
+        organizationId,
+        deletedAt,
+        deletedByUserId,
+      ),
     database
       .prepare(
         `UPDATE session
@@ -57,12 +78,25 @@ export async function markOrganizationForDeletion(
                ELSE activeOrganizationId
              END,
              activeTeamId = NULL
-         WHERE activeOrganizationId = ?
-            OR activeTeamId IN (
+         WHERE (
+           activeOrganizationId = ?
+           OR activeTeamId IN (
               SELECT id FROM team WHERE organizationId = ?
-            )`,
+            )
+         )
+           AND EXISTS (
+             SELECT 1 FROM organization
+             WHERE id = ? AND deletedAt = ? AND deletedByUserId = ?
+           )`,
       )
-      .bind(organizationId, organizationId, organizationId),
+      .bind(
+        organizationId,
+        organizationId,
+        organizationId,
+        organizationId,
+        deletedAt,
+        deletedByUserId,
+      ),
   ]);
 
   if (results[0]?.meta.changes !== 1) return undefined;
