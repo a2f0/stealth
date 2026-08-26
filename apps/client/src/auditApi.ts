@@ -61,6 +61,11 @@ export interface AuditSummary {
   updatedAt: string;
 }
 
+interface AuditRunPage {
+  audits: AuditSummary[];
+  nextCursor: string | null;
+}
+
 export interface AuditRun {
   completedAt: string | null;
   createdAt: string;
@@ -187,9 +192,9 @@ export async function startAudit(templateId: string) {
   return body.auditId;
 }
 
-export async function listAuditRuns() {
-  const body = await request<{ audits: AuditSummary[] }>("/runs");
-  return body.audits;
+export function listAuditRuns(cursor?: string) {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  return request<AuditRunPage>(`/runs${query}`);
 }
 
 export function getAuditRun(id: string) {

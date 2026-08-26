@@ -72,6 +72,11 @@ interface AuditSummaryRow extends AuditRow {
   issue_count: number;
 }
 
+interface AuditCursor {
+  createdAt: string;
+  id: string;
+}
+
 interface IssueRow {
   assigned_to: string | null;
   assignee_email: string | null;
@@ -116,6 +121,8 @@ const templateSelect = `
     ON version.template_id = family.id
    AND version.version = family.current_version
   JOIN user AS creator ON creator.id = version.created_by`;
+
+const auditRunPageSize = 100;
 
 audits.get("/templates", async (context) => {
   const organizationId = context.get("organizationId");
@@ -399,6 +406,12 @@ audits.post("/templates/:id/runs", async (context) => {
 });
 
 audits.get("/runs", async (context) => {
+  const cursorValue = context.req.query("cursor");
+  const cursor =
+    cursorValue === undefined ? undefined : parseAuditCursor(cursorValue);
+  if (cursorValue !== undefined && !cursor) {
+    return context.json({ error: "Invalid audit cursor." }, 400);
+  }
   const result = await context.env.DB.prepare(
     `SELECT audit.id, audit.template_id, audit.template_family_id,
             audit.template_version, audit.template_name, audit.definition,
@@ -407,13 +420,31 @@ audits.get("/runs", async (context) => {
      FROM audits AS audit
      LEFT JOIN audit_issues AS issue ON issue.audit_id = audit.id
      WHERE audit.organization_id = ?
+       AND (? IS NULL OR audit.created_at < ? OR
+            (audit.created_at = ? AND audit.id < ?))
      GROUP BY audit.id
-     ORDER BY audit.created_at DESC
-     LIMIT 100`,
+     ORDER BY audit.created_at DESC, audit.id DESC
+     LIMIT ?`,
   )
-    .bind(context.get("organizationId"))
+    .bind(
+      context.get("organizationId"),
+      cursor?.createdAt ?? null,
+      cursor?.createdAt ?? null,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
+      auditRunPageSize + 1,
+    )
     .all<AuditSummaryRow>();
-  return context.json({ audits: result.results.map(toAuditSummary) });
+  const page = result.results.slice(0, auditRunPageSize);
+  const last = page.at(-1);
+  const nextCursor =
+    result.results.length > auditRunPageSize && last
+      ? encodeAuditCursor({ createdAt: last.created_at, id: last.id })
+      : null;
+  return context.json({
+    audits: page.map(toAuditSummary),
+    nextCursor,
+  });
 });
 
 audits.get("/runs/:id", async (context) => {
@@ -459,7 +490,7 @@ audits.patch("/runs/:id", async (context) => {
     return context.json({ error: "Complete every required item first." }, 400);
   }
   const now = new Date().toISOString();
-  await context.env.DB.prepare(
+  const updated = await context.env.DB.prepare(
     `UPDATE audits SET responses = ?, status = ?, completed_at = ?, updated_at = ?
      WHERE id = ? AND organization_id = ?`,
   )
@@ -472,6 +503,9 @@ audits.patch("/runs/:id", async (context) => {
       organizationId,
     )
     .run();
+  if (Number(updated.meta.changes) !== 1) {
+    return context.json({ error: "Audit not found." }, 404);
+  }
   return context.json({ status, updatedAt: now });
 });
 
@@ -979,6 +1013,52 @@ function groupImagesByIssue(images: AuditIssueImageRow[]) {
     grouped.set(image.issue_id, issueImages);
   }
   return grouped;
+}
+
+function encodeAuditCursor(cursor: AuditCursor) {
+  const bytes = new TextEncoder().encode(JSON.stringify(cursor));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+function parseAuditCursor(value: string): AuditCursor | undefined {
+  if (
+    value.length === 0 ||
+    value.length > 2_048 ||
+    value.length % 4 === 1 ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    return undefined;
+  }
+  try {
+    const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
+    const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="));
+    const bytes = Uint8Array.from(binary, (character) =>
+      character.charCodeAt(0),
+    );
+    const decoded: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes),
+    );
+    if (!isRecord(decoded)) return undefined;
+    const createdAt: unknown = Reflect.get(decoded, "createdAt");
+    if (
+      typeof createdAt !== "string" ||
+      createdAt.length === 0 ||
+      createdAt.length > 1_000 ||
+      typeof decoded.id !== "string" ||
+      decoded.id.length === 0 ||
+      decoded.id.length > 1_000
+    ) {
+      return undefined;
+    }
+    return { createdAt, id: decoded.id };
+  } catch {
+    return undefined;
+  }
 }
 
 function toTemplate(row: TemplateRow) {

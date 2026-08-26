@@ -2326,6 +2326,10 @@ button:disabled {
   background: #f0efe9;
 }
 
+.auditLoadMore {
+  margin-top: 16px;
+}
+
 .auditRunList strong,
 .auditRunList small {
   display: block;

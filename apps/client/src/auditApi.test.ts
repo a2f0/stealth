@@ -11,6 +11,7 @@ import {
   createAuditTemplate,
   deleteAuditIssueImage,
   getAuditTemplateVersion,
+  listAuditRuns,
   listAuditTemplateVersions,
   updateAuditIssue,
   updateAuditTemplate,
@@ -78,6 +79,29 @@ describe("audit template API", () => {
           url: `${apiUrl}/api/audits/templates/template%2Fid/copies`,
         },
       ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("requests subsequent audit history pages with an encoded cursor", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    globalThis.fetch = (async (input, init) => {
+      requestedUrl = input.toString();
+      expect(init?.credentials).toBe("include");
+      return Response.json({
+        audits: [],
+        nextCursor: null,
+      });
+    }) as typeof fetch;
+
+    try {
+      const page = await listAuditRuns("cursor/with+a space");
+      expect(requestedUrl).toBe(
+        `${apiUrl}/api/audits/runs?cursor=cursor%2Fwith%2Ba%20space`,
+      );
+      expect(page).toEqual({ audits: [], nextCursor: null });
     } finally {
       globalThis.fetch = originalFetch;
     }

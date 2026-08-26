@@ -18,7 +18,9 @@ export function AuditHome({
 }) {
   const [templates, setTemplates] = useState<AuditTemplate[]>();
   const [runs, setRuns] = useState<AuditSummary[]>();
+  const [nextRunCursor, setNextRunCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
   const [error, setError] = useState<string>();
 
   const load = useCallback(async () => {
@@ -29,7 +31,8 @@ export function AuditHome({
         listAuditRuns(),
       ]);
       setTemplates(nextTemplates);
-      setRuns(nextRuns);
+      setRuns(nextRuns.audits);
+      setNextRunCursor(nextRuns.nextCursor);
     } catch (cause) {
       setError(messageFrom(cause));
     }
@@ -59,6 +62,21 @@ export function AuditHome({
     } catch (cause) {
       setError(messageFrom(cause));
       setBusy(false);
+    }
+  }
+
+  async function loadMoreRuns() {
+    if (!nextRunCursor) return;
+    setLoadingMoreRuns(true);
+    setError(undefined);
+    try {
+      const page = await listAuditRuns(nextRunCursor);
+      setRuns((current) => [...(current ?? []), ...page.audits]);
+      setNextRunCursor(page.nextCursor);
+    } catch (cause) {
+      setError(messageFrom(cause));
+    } finally {
+      setLoadingMoreRuns(false);
     }
   }
 
@@ -100,6 +118,9 @@ export function AuditHome({
           templates={templates}
         />
         <AuditHistory
+          hasMore={Boolean(nextRunCursor)}
+          loadingMore={loadingMoreRuns}
+          onLoadMore={loadMoreRuns}
           onOpen={(id) => onNavigate(`/audits/runs/${id}`)}
           runs={runs}
         />
@@ -243,9 +264,15 @@ function TemplateCollection({
 }
 
 function AuditHistory({
+  hasMore,
+  loadingMore,
+  onLoadMore,
   onOpen,
   runs,
 }: {
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => Promise<void>;
   onOpen: (id: string) => void;
   runs: AuditSummary[] | undefined;
 }) {
@@ -253,7 +280,10 @@ function AuditHistory({
     <section className="auditHistory">
       <div className="sectionHeading">
         <h2>Recent audits</h2>
-        <span>{runs?.length ?? 0} audits</span>
+        <span>
+          {runs?.length ?? 0}
+          {hasMore ? "+" : ""} audits
+        </span>
       </div>
       {runs?.length ? (
         <div className="auditRunList">
@@ -281,6 +311,16 @@ function AuditHistory({
         </div>
       ) : (
         <p className="auditLoading">Loading audits…</p>
+      )}
+      {hasMore && (
+        <button
+          className="auditLoadMore"
+          disabled={loadingMore}
+          onClick={() => void onLoadMore()}
+          type="button"
+        >
+          {loadingMore ? "Loading…" : "Load more audits"}
+        </button>
       )}
     </section>
   );
