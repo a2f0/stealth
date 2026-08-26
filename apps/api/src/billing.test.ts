@@ -1277,10 +1277,41 @@ describe("billing", () => {
 
     expect(
       await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
-    ).toBe(2);
+    ).toBe(1);
     expect(
       fixture.database.query("SELECT id FROM audits ORDER BY id").all(),
-    ).toEqual([{ id: "free-recent" }, { id: "pro-old" }]);
+    ).toEqual([
+      { id: "free-recent" },
+      { id: "other-price-old" },
+      { id: "pro-old" },
+    ]);
+  });
+
+  it("retains Pro history when a paid row is missing its subscription id", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_price_id, stripe_status, seat_quantity,
+          stripe_event_created, updated_at)
+         VALUES (?, ?, 'active', 1, 1, ?)`,
+      )
+      .run(organizationId, proPriceId, new Date().toISOString());
+    insertAudit(
+      fixture.database,
+      "partial-pro-row-old",
+      organizationId,
+      "2026-06-01",
+    );
+
+    const summary = await fixture.app.request("/", undefined, fixture.bindings);
+    expect(await summary.json()).toMatchObject({ plan: "pro" });
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(0);
+    expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
+      { id: "partial-pro-row-old" },
+    ]);
   });
 
   it("retains history for an unresolved active Stripe price", async () => {

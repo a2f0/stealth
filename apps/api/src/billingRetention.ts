@@ -48,12 +48,8 @@ export async function purgeExpiredFreeAuditRuns(
            )
            AND datetime(COALESCE(audit.completed_at, audit.updated_at)) <
                datetime(?)
-           AND NOT (
-             billing.stripe_subscription_id IS NOT NULL
-             AND
-             COALESCE(billing.stripe_status, '') IN
-               ('active', 'past_due', 'trialing')
-           )
+           AND COALESCE(billing.stripe_status, '') NOT IN
+             ('active', 'past_due', 'trialing')
          ORDER BY COALESCE(audit.completed_at, audit.updated_at) ASC,
                   audit.id ASC
          LIMIT ?
