@@ -158,48 +158,50 @@ async function organizationIdsFromRequest(context: Context<AuthEnv>) {
       await organizationIdForSlug(context.env.DB, queryOrganizationSlug),
     );
   }
+  for (const [table, key] of organizationResourceSelectors) {
+    const resourceId = searchParams.get(key);
+    if (resourceId) {
+      addOrganizationId(
+        await organizationIdForRecord(context.env.DB, table, resourceId),
+      );
+    }
+  }
   const body = await context.req.raw
     .clone()
     .json()
     .catch(() => null);
   if (!isRecord(body)) return organizationIds;
-  addOrganizationId(stringProperty(body, "organizationId"));
-  const bodyOrganizationSlug = stringProperty(body, "organizationSlug");
-  if (bodyOrganizationSlug) {
-    addOrganizationId(
-      await organizationIdForSlug(context.env.DB, bodyOrganizationSlug),
-    );
-  }
+  await addBodyOrganizationIds(body);
   const data = Reflect.get(body, "data");
   if (isRecord(data)) {
-    addOrganizationId(stringProperty(data, "organizationId"));
-    const dataOrganizationSlug = stringProperty(data, "organizationSlug");
-    if (dataOrganizationSlug) {
-      addOrganizationId(
-        await organizationIdForSlug(context.env.DB, dataOrganizationSlug),
-      );
-    }
-  }
-  const invitationId = stringProperty(body, "invitationId");
-  if (invitationId) {
-    addOrganizationId(
-      await organizationIdForRecord(context.env.DB, "invitation", invitationId),
-    );
-  }
-  const memberId = stringProperty(body, "memberId");
-  if (memberId) {
-    addOrganizationId(
-      await organizationIdForRecord(context.env.DB, "member", memberId),
-    );
-  }
-  const teamId = stringProperty(body, "teamId");
-  if (teamId) {
-    addOrganizationId(
-      await organizationIdForRecord(context.env.DB, "team", teamId),
-    );
+    await addBodyOrganizationIds(data);
   }
   return organizationIds;
+
+  async function addBodyOrganizationIds(record: Record<string, unknown>) {
+    addOrganizationId(stringProperty(record, "organizationId"));
+    const organizationSlug = stringProperty(record, "organizationSlug");
+    if (organizationSlug) {
+      addOrganizationId(
+        await organizationIdForSlug(context.env.DB, organizationSlug),
+      );
+    }
+    for (const [table, key] of organizationResourceSelectors) {
+      const resourceId = stringProperty(record, key);
+      if (resourceId) {
+        addOrganizationId(
+          await organizationIdForRecord(context.env.DB, table, resourceId),
+        );
+      }
+    }
+  }
 }
+
+const organizationResourceSelectors = [
+  ["invitation", "invitationId"],
+  ["member", "memberId"],
+  ["team", "teamId"],
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

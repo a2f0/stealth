@@ -167,6 +167,24 @@ describe("organization plugin middleware", () => {
     });
   });
 
+  it("checks an organization selected by a query resource id", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/list-team-members?teamId=protected-team",
+      null,
+      "active-org",
+      ["active-org", "protected-org"],
+      ["protected-org"],
+      { team: { "protected-team": "protected-org" } },
+    );
+
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      code: "TWO_FACTOR_SETUP_REQUIRED",
+      error: "Set up two-factor authentication before using this organization.",
+    });
+  });
+
   it("allows organization creation without an existing organization", async () => {
     const response = await pluginRequest(
       "/api/auth/organization/create",
@@ -243,10 +261,11 @@ function requestOrganization(
 
 function pluginRequest(
   path: string,
-  body: Record<string, unknown>,
+  body: Record<string, unknown> | null,
   activeOrganizationId: string | null,
   memberships: string[],
   twoFactorRequiredOrganizations: string[],
+  resourceOrganizations: ResourceOrganizations = {},
 ) {
   const app = new Hono<{
     Bindings: Bindings;
@@ -264,33 +283,47 @@ function pluginRequest(
     await next();
   });
   app.use("/api/auth/organization/*", requireOrganizationPluginAccess);
-  app.post("/api/auth/organization/*", async (context) =>
-    context.json({ request: await context.req.json() }),
+  app.all("/api/auth/organization/*", async (context) =>
+    context.json({ request: body ? await context.req.json() : null }),
   );
   return app.request(
     path,
+    body
+      ? {
+          body: JSON.stringify(body),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        }
+      : undefined,
     {
-      body: JSON.stringify(body),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    },
-    {
-      DB: membershipDatabase(memberships, [], twoFactorRequiredOrganizations),
+      DB: membershipDatabase(
+        memberships,
+        [],
+        twoFactorRequiredOrganizations,
+        resourceOrganizations,
+      ),
     } as Bindings,
   );
+}
+
+interface ResourceOrganizations {
+  invitation?: Record<string, string>;
+  member?: Record<string, string>;
+  team?: Record<string, string>;
 }
 
 function membershipDatabase(
   memberships: string[],
   deletedMemberships: string[],
   twoFactorRequiredOrganizations: string[],
+  resourceOrganizations: ResourceOrganizations = {},
 ) {
   return {
     prepare: (query: string) => ({
-      bind: (userId: string, ...organizationIds: string[]) => ({
+      bind: (firstValue: string, ...organizationIds: string[]) => ({
         all: async () => ({
           results:
-            userId === "user-id"
+            firstValue === "user-id"
               ? [...memberships, ...deletedMemberships]
                   .filter(
                     (organizationId) =>
@@ -306,6 +339,15 @@ function membershipDatabase(
                   }))
               : [],
         }),
+        first: async () => {
+          for (const table of ["invitation", "member", "team"] as const) {
+            if (query.includes(`FROM "${table}"`)) {
+              const organizationId = resourceOrganizations[table]?.[firstValue];
+              return organizationId ? { organizationId } : null;
+            }
+          }
+          return null;
+        },
       }),
     }),
   } as unknown as D1Database;
