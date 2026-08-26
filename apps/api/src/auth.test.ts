@@ -576,6 +576,81 @@ describe("password authentication", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("rejects a pending Pro invitation after downgrade to Free", async () => {
+    const fixture = await createFixture();
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    const ownerSignIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const organization = fixture.database
+      .query(`SELECT defaultOrganizationId AS id FROM user WHERE email = ?`)
+      .get(email) as { id: string };
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_price_id, stripe_status, seat_quantity,
+          stripe_event_created, updated_at)
+         VALUES (?, 'price_pro_test', 'active', 1, 1, ?)`,
+      )
+      .run(organization.id, new Date().toISOString());
+    const invitedEmail = "downgraded-invitee@example.com";
+    const invite = await post(
+      fixture.auth,
+      "/organization/invite-member",
+      {
+        email: invitedEmail,
+        organizationId: organization.id,
+        role: "member",
+      },
+      ownerSignIn.headers.get("set-cookie"),
+    );
+    expect(invite.status).toBe(200);
+    const invitation = (await invite.json()) as { id: string };
+    fixture.database
+      .query(
+        `UPDATE organization_billing SET stripe_status = 'canceled',
+         updated_at = ? WHERE organization_id = ?`,
+      )
+      .run(new Date().toISOString(), organization.id);
+
+    await post(fixture.auth, "/sign-up/email", {
+      email: invitedEmail,
+      name: "Invited Person",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    const inviteeSignIn = await post(fixture.auth, "/sign-in/email", {
+      email: invitedEmail,
+      password: originalPassword,
+    });
+    const accepted = await post(
+      fixture.auth,
+      "/organization/accept-invitation",
+      { invitationId: invitation.id },
+      inviteeSignIn.headers.get("set-cookie"),
+    );
+
+    expect(accepted.status).toBe(403);
+    expect(
+      fixture.database
+        .query(
+          `SELECT invitation.status,
+                  (SELECT COUNT(*) FROM member
+                   JOIN user ON user.id = member.userId
+                   WHERE member.organizationId = invitation.organizationId
+                     AND user.email = invitation.email) AS memberCount
+           FROM invitation WHERE invitation.id = ?`,
+        )
+        .get(invitation.id),
+    ).toEqual({ memberCount: 0, status: "pending" });
+  });
+
   it("invites a user, accepts after sign-up, and safely leaves", async () => {
     const fixture = await createFixture();
     await post(fixture.auth, "/sign-up/email", {

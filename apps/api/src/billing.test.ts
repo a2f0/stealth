@@ -327,8 +327,11 @@ describe("billing", () => {
     const fixture = await createFixture();
     const originalFetch = globalThis.fetch;
     const originalConsoleError = console.error;
+    let responseBody: Record<string, unknown> = {
+      id: "not-a-checkout-session",
+    };
     globalThis.fetch = (async (_input, _init) =>
-      Response.json({ id: "not-a-checkout-session" })) as typeof fetch;
+      Response.json(responseBody)) as typeof fetch;
     console.error = () => {};
     try {
       const response = await fixture.app.request(
@@ -339,6 +342,21 @@ describe("billing", () => {
       expect(response.status).toBe(502);
       expect((await response.json()) as unknown).toEqual({
         error: "Stripe returned a malformed Checkout session ID.",
+      });
+
+      responseBody = {
+        expires_at: Math.floor(Date.now() / 1_000) + 1_800,
+        id: "cs_missing_url",
+        status: "open",
+      };
+      const missingUrl = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(missingUrl.status).toBe(502);
+      expect((await missingUrl.json()) as unknown).toEqual({
+        error: "Stripe did not return a checkout URL.",
       });
     } finally {
       console.error = originalConsoleError;

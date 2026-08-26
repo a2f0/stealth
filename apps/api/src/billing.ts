@@ -211,7 +211,7 @@ billing.post("/checkout", async (context) => {
       ),
     );
     if (!validCreatedCheckout(checkout)) {
-      throw new Error("Stripe did not return a checkout URL.");
+      throw new StripeApiError("Stripe did not return a checkout URL.", 502);
     }
     const stored = await storePendingCheckout(
       context.env.DB,
