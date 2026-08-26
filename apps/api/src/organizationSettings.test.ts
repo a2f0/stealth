@@ -152,6 +152,101 @@ describe("organization deletion", () => {
     }
   });
 
+  it("expires an open Checkout before an owner deletes the organization", async () => {
+    const fixture = await createFixture();
+    insertPendingCheckout(fixture.database, "cs_pending_open");
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; url: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = { method: init?.method ?? "GET", url: String(input) };
+      requests.push(request);
+      return Response.json({
+        id: "cs_pending_open",
+        status: request.method === "POST" ? "expired" : "open",
+        subscription: null,
+      });
+    }) as typeof fetch;
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(200);
+      expect(requests).toEqual([
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/checkout/sessions/cs_pending_open",
+        },
+        {
+          method: "POST",
+          url: "https://api.stripe.com/v1/checkout/sessions/cs_pending_open/expire",
+        },
+      ]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_disabled_at, pending_checkout_session_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toMatchObject({
+        checkout_disabled_at: expect.any(String),
+        pending_checkout_session_id: null,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("cancels a completed pending Checkout before owner deletion", async () => {
+    const fixture = await createFixture();
+    insertPendingCheckout(fixture.database, "cs_pending_complete");
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; url: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = { method: init?.method ?? "GET", url: String(input) };
+      requests.push(request);
+      if (request.method === "GET") {
+        return Response.json({
+          id: "cs_pending_complete",
+          status: "complete",
+          subscription: "sub_pending",
+        });
+      }
+      return Response.json(
+        canceledSubscription(targetOrganizationId, "sub_pending"),
+      );
+    }) as typeof fetch;
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(200);
+      expect(requests).toEqual([
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/checkout/sessions/cs_pending_complete",
+        },
+        {
+          method: "DELETE",
+          url: "https://api.stripe.com/v1/subscriptions/sub_pending",
+        },
+      ]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_status, stripe_subscription_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toEqual({
+        stripe_status: "canceled",
+        stripe_subscription_id: "sub_pending",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("keeps a paid organization when owner cancellation fails", async () => {
     const fixture = await createFixture();
     insertPaidBilling(fixture.database, targetOrganizationId);
@@ -170,9 +265,16 @@ describe("organization deletion", () => {
       expect(response.status).toBe(502);
       expect(
         fixture.database
-          .query("SELECT deletedAt FROM organization WHERE id = ?")
+          .query(
+            `SELECT organization.deletedAt,
+                    organization_billing.checkout_disabled_at
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
           .get(targetOrganizationId),
-      ).toEqual({ deletedAt: null });
+      ).toEqual({ checkout_disabled_at: null, deletedAt: null });
     } finally {
       console.error = originalConsoleError;
       globalThis.fetch = originalFetch;
@@ -251,11 +353,25 @@ function insertPaidBilling(database: Database, organizationId: string) {
     .run(organizationId, proPriceId, now());
 }
 
-function canceledSubscription(organizationId: string) {
+function insertPendingCheckout(database: Database, sessionId: string) {
+  database
+    .query(
+      `INSERT INTO organization_billing
+       (organization_id, pending_checkout_session_id, pending_checkout_url,
+        pending_checkout_expires_at, updated_at)
+       VALUES (?, ?, 'https://checkout.stripe.test/pending', 2000000000, ?)`,
+    )
+    .run(targetOrganizationId, sessionId, now());
+}
+
+function canceledSubscription(
+  organizationId: string,
+  subscriptionId = "sub_test",
+) {
   return {
     cancel_at_period_end: false,
     customer: "cus_test",
-    id: "sub_test",
+    id: subscriptionId,
     items: {
       data: [
         {

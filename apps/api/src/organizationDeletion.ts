@@ -81,6 +81,13 @@ export async function restoreOrganization(
          WHERE id = ? AND deletedAt IS NOT NULL`,
       )
       .bind(organizationId),
+    database
+      .prepare(
+        `UPDATE organization_billing
+         SET checkout_disabled_at = NULL, updated_at = ?
+         WHERE organization_id = ?`,
+      )
+      .bind(new Date().toISOString(), organizationId),
   ]);
   if (!result || result.meta.changes < 1) return undefined;
   return { organizationId };

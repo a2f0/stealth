@@ -29,6 +29,7 @@ interface BillingRow {
   checkout_claim_expires_at: number | null;
   checkout_claim_id: string | null;
   checkout_claim_quantity: number | null;
+  checkout_disabled_at: string | null;
   current_period_end: string | null;
   last_reconciled_at: string | null;
   pending_checkout_expires_at: number | null;
@@ -123,6 +124,8 @@ billing.post("/checkout", async (context) => {
     findBilling(context.env.DB, organizationId),
     countMembers(context.env.DB, organizationId),
   ]);
+  if (billingRecord?.checkout_disabled_at)
+    return checkoutDisabledResponse(context);
   if (isPaidBilling(billingRecord, priceId)) {
     return context.json(
       { error: "This organization already has a Pro subscription." },
@@ -145,6 +148,8 @@ billing.post("/checkout", async (context) => {
       409,
     );
   }
+  if (claimedBilling?.checkout_disabled_at)
+    return checkoutDisabledResponse(context);
   const claimedPending = activePendingCheckout(claimedBilling, nowSeconds);
   if (claimedPending) return context.json({ url: claimedPending.url });
   if (
@@ -157,21 +162,13 @@ billing.post("/checkout", async (context) => {
       409,
     );
   }
-  const parameters = new URLSearchParams({
-    "line_items[0][price]": priceId,
-    "line_items[0][quantity]": String(claimedBilling.checkout_claim_quantity),
-    "metadata[organization_id]": organizationId,
-    "subscription_data[metadata][organization_id]": organizationId,
-    cancel_url: `${context.env.CORS_ORIGIN}/organization/billing?checkout=canceled`,
-    client_reference_id: organizationId,
-    expires_at: String(claimedBilling.checkout_claim_expires_at),
-    mode: "subscription",
-    success_url: `${context.env.CORS_ORIGIN}/organization/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-  });
-  if (billingRecord?.stripe_customer_id) {
-    parameters.delete("customer_email");
-    parameters.set("customer", billingRecord.stripe_customer_id);
-  }
+  const parameters = checkoutParameters(
+    context.env.CORS_ORIGIN,
+    organizationId,
+    priceId,
+    claimedBilling,
+    billingRecord?.stripe_customer_id,
+  );
   try {
     const checkout = await stripePost<StripeCheckoutSession>(
       context.env,
@@ -268,7 +265,13 @@ export async function handleStripeWebhook(context: Context<BillingEnv>) {
     return context.json({ error: "Webhook event is invalid." }, 400);
   }
   const claimed = await claimWebhookEvent(context.env.DB, event);
-  if (!claimed) return context.json({ received: true });
+  if (claimed === "processed") return context.json({ received: true });
+  if (claimed === "processing") {
+    return context.json(
+      { error: "Webhook event is already being processed." },
+      503,
+    );
+  }
   try {
     await processStripeEvent(context.env, event);
     await context.env.DB.prepare(
@@ -449,11 +452,45 @@ export async function cancelOrganizationSubscription(
   >,
   organizationId: string,
 ) {
-  const record = await findBilling(environment.DB, organizationId);
-  if (!record?.stripe_subscription_id || record.stripe_status === "canceled") {
-    return false;
+  const record = await disableCheckoutForDeletion(
+    environment.DB,
+    organizationId,
+  );
+  try {
+    const pendingSubscriptionId = await resolvePendingCheckoutForDeletion(
+      environment,
+      record,
+    );
+    const subscriptionIds = new Set<string>();
+    if (record?.stripe_subscription_id && record.stripe_status !== "canceled") {
+      subscriptionIds.add(record.stripe_subscription_id);
+    }
+    if (pendingSubscriptionId) subscriptionIds.add(pendingSubscriptionId);
+    for (const subscriptionId of subscriptionIds) {
+      await cancelStripeSubscription(
+        environment,
+        organizationId,
+        subscriptionId,
+      );
+    }
+    await clearPendingCheckout(environment.DB, organizationId);
+    return (
+      subscriptionIds.size > 0 || Boolean(record?.pending_checkout_session_id)
+    );
+  } catch (cause) {
+    await enableCheckoutAfterFailedDeletion(environment.DB, organizationId);
+    throw cause;
   }
-  const subscriptionId = record.stripe_subscription_id;
+}
+
+async function cancelStripeSubscription(
+  environment: Pick<
+    Bindings,
+    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+  >,
+  organizationId: string,
+  subscriptionId: string,
+) {
   await withSubscriptionSyncLock(environment.DB, subscriptionId, async () => {
     const subscription = await stripeDelete<StripeSubscription>(
       environment,
@@ -466,7 +503,47 @@ export async function cancelOrganizationSubscription(
       organizationId,
     );
   });
-  return true;
+}
+
+async function resolvePendingCheckoutForDeletion(
+  environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
+  record: BillingRow | null,
+) {
+  if (!record?.pending_checkout_session_id) return null;
+  const sessionId = record.pending_checkout_session_id;
+  let session = await stripeGet<StripeCheckoutSession>(
+    environment,
+    `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+  );
+  if (session.status === "open") {
+    try {
+      session = await stripePost<StripeCheckoutSession>(
+        environment,
+        `/v1/checkout/sessions/${encodeURIComponent(sessionId)}/expire`,
+        new URLSearchParams(),
+      );
+    } catch (cause) {
+      if (
+        !(cause instanceof StripeApiError) ||
+        (cause.status !== 400 && cause.status !== 409)
+      ) {
+        throw cause;
+      }
+      session = await stripeGet<StripeCheckoutSession>(
+        environment,
+        `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+      );
+    }
+  }
+  if (session.status === "expired") return null;
+  if (session.status === "complete") {
+    const subscriptionId = optionalExpandableId(session.subscription);
+    if (subscriptionId) return subscriptionId;
+  }
+  throw new StripeApiError(
+    "Stripe Checkout could not be resolved before organization deletion.",
+    409,
+  );
 }
 
 async function billingSummary(
@@ -708,7 +785,12 @@ async function claimWebhookEvent(database: D1Database, event: StripeEvent) {
     )
     .bind(event.id, event.type, event.created, now)
     .run();
-  if (Number(inserted.meta.changes) === 1) return true;
+  if (Number(inserted.meta.changes) === 1) return "claimed" as const;
+  const existing = await database
+    .prepare(`SELECT processed_at FROM stripe_webhook_events WHERE id = ?`)
+    .bind(event.id)
+    .first<{ processed_at: string | null }>();
+  if (existing?.processed_at) return "processed" as const;
   const staleBefore = new Date(
     Date.now() - webhookClaimTimeoutMilliseconds,
   ).toISOString();
@@ -720,7 +802,14 @@ async function claimWebhookEvent(database: D1Database, event: StripeEvent) {
     )
     .bind(now, event.id, staleBefore)
     .run();
-  return Number(reclaimed.meta.changes) === 1;
+  if (Number(reclaimed.meta.changes) === 1) return "claimed" as const;
+  const completed = await database
+    .prepare(`SELECT processed_at FROM stripe_webhook_events WHERE id = ?`)
+    .bind(event.id)
+    .first<{ processed_at: string | null }>();
+  return completed?.processed_at
+    ? ("processed" as const)
+    : ("processing" as const);
 }
 
 async function organizationHasPro(
@@ -750,6 +839,7 @@ async function findBilling(database: D1Database, organizationId: string) {
             seat_quantity, cancel_at_period_end, current_period_end,
             stripe_event_created, checkout_claim_id,
             checkout_claim_quantity, checkout_claim_expires_at,
+            checkout_disabled_at,
             pending_checkout_session_id, pending_checkout_url,
             pending_checkout_expires_at, last_reconciled_at, updated_at
      FROM organization_billing WHERE organization_id = ?`,
@@ -762,6 +852,59 @@ async function findBilling(database: D1Database, organizationId: string) {
       get: (value: string) => BillingRow | null;
     }
   ).get(organizationId);
+}
+
+async function disableCheckoutForDeletion(
+  database: D1Database,
+  organizationId: string,
+) {
+  const now = new Date().toISOString();
+  await database
+    .prepare(
+      `INSERT INTO organization_billing
+       (organization_id, checkout_disabled_at, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (organization_id) DO UPDATE SET
+         checkout_disabled_at = excluded.checkout_disabled_at,
+         checkout_claim_id = NULL,
+         checkout_claim_quantity = NULL,
+         checkout_claim_expires_at = NULL,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(organizationId, now, now)
+    .run();
+  return findBilling(database, organizationId);
+}
+
+async function enableCheckoutAfterFailedDeletion(
+  database: D1Database,
+  organizationId: string,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET checkout_disabled_at = NULL, updated_at = ?
+       WHERE organization_id = ?`,
+    )
+    .bind(new Date().toISOString(), organizationId)
+    .run();
+}
+
+async function clearPendingCheckout(
+  database: D1Database,
+  organizationId: string,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET pending_checkout_session_id = NULL,
+           pending_checkout_url = NULL,
+           pending_checkout_expires_at = NULL,
+           updated_at = ?
+       WHERE organization_id = ?`,
+    )
+    .bind(new Date().toISOString(), organizationId)
+    .run();
 }
 
 async function claimCheckout(
@@ -790,7 +933,8 @@ async function claimCheckout(
              ('active', 'past_due', 'trialing')
          )
          AND COALESCE(organization_billing.pending_checkout_expires_at, 0) <= ?
-         AND COALESCE(organization_billing.checkout_claim_expires_at, 0) <= ?`,
+         AND COALESCE(organization_billing.checkout_claim_expires_at, 0) <= ?
+         AND organization_billing.checkout_disabled_at IS NULL`,
     )
     .bind(
       organizationId,
@@ -819,6 +963,28 @@ function activePendingCheckout(record: BillingRow | null, nowSeconds: number) {
     id: record.pending_checkout_session_id,
     url: record.pending_checkout_url,
   };
+}
+
+function checkoutParameters(
+  origin: string,
+  organizationId: string,
+  priceId: string,
+  claim: BillingRow,
+  customerId: string | null | undefined,
+) {
+  const parameters = new URLSearchParams({
+    "line_items[0][price]": priceId,
+    "line_items[0][quantity]": String(claim.checkout_claim_quantity),
+    "metadata[organization_id]": organizationId,
+    "subscription_data[metadata][organization_id]": organizationId,
+    cancel_url: `${origin}/organization/billing?checkout=canceled`,
+    client_reference_id: organizationId,
+    expires_at: String(claim.checkout_claim_expires_at),
+    mode: "subscription",
+    success_url: `${origin}/organization/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+  });
+  if (customerId) parameters.set("customer", customerId);
+  return parameters;
 }
 
 async function storePendingCheckout(
@@ -1001,6 +1167,16 @@ function billingError(context: Context<BillingEnv>, cause: unknown) {
     return context.json({ error: cause.message }, status);
   }
   throw cause;
+}
+
+function checkoutDisabledResponse(context: Context<BillingEnv>) {
+  return context.json(
+    {
+      error:
+        "Checkout is unavailable while this organization is being deleted.",
+    },
+    409,
+  );
 }
 
 export { billing };

@@ -271,6 +271,14 @@ describe("admin organizations", () => {
     expect(
       database
         .query(
+          `SELECT checkout_disabled_at FROM organization_billing
+           WHERE organization_id = 'org_member-user'`,
+        )
+        .get(),
+    ).toEqual({ checkout_disabled_at: null });
+    expect(
+      database
+        .query(
           `SELECT defaultOrganizationId
            FROM user WHERE id = 'user-1'`,
         )

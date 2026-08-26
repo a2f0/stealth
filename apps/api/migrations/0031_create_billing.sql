@@ -14,6 +14,7 @@ CREATE TABLE organization_billing (
   checkout_claim_id TEXT,
   checkout_claim_quantity INTEGER CHECK (checkout_claim_quantity > 0),
   checkout_claim_expires_at INTEGER,
+  checkout_disabled_at TEXT,
   pending_checkout_session_id TEXT UNIQUE,
   pending_checkout_url TEXT,
   pending_checkout_expires_at INTEGER,

@@ -5,6 +5,7 @@ import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import {
   billing,
+  cancelOrganizationSubscription,
   handleStripeWebhook,
   reconcileSubscriptionSeats,
   syncOrganizationSeats,
@@ -119,6 +120,69 @@ describe("billing", () => {
     }
   });
 
+  it("invalidates an in-flight Checkout before organization deletion", async () => {
+    const fixture = await createFixture();
+    const originalFetch = globalThis.fetch;
+    let markCheckoutStarted = () => {};
+    let releaseCheckout = () => {};
+    const checkoutStarted = new Promise<void>((resolve) => {
+      markCheckoutStarted = resolve;
+    });
+    const checkoutReleased = new Promise<void>((resolve) => {
+      releaseCheckout = resolve;
+    });
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/v1/checkout/sessions")) {
+        markCheckoutStarted();
+        await checkoutReleased;
+        return Response.json({
+          expires_at: Math.floor(Date.now() / 1_000) + 1_800,
+          id: "cs_in_flight",
+          status: "open",
+          url: "https://checkout.stripe.test/in-flight",
+        });
+      }
+      if (url.endsWith("/v1/checkout/sessions/cs_in_flight/expire")) {
+        return Response.json({ id: "cs_in_flight", status: "expired" });
+      }
+      throw new Error(`Unexpected Stripe request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const checkoutResponse = fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      await checkoutStarted;
+      expect(
+        await cancelOrganizationSubscription(fixture.bindings, organizationId),
+      ).toBe(false);
+      releaseCheckout();
+      expect((await checkoutResponse).status).toBe(409);
+      expect(requests).toEqual([
+        "https://api.stripe.com/v1/checkout/sessions",
+        "https://api.stripe.com/v1/checkout/sessions/cs_in_flight/expire",
+      ]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_disabled_at, pending_checkout_session_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toMatchObject({
+        checkout_disabled_at: expect.any(String),
+        pending_checkout_session_id: null,
+      });
+    } finally {
+      releaseCheckout();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("uses signed, idempotent, ordered webhooks as the entitlement source", async () => {
     const fixture = await createFixture();
     const active = subscriptionEvent("evt_active", 100, "active", 3);
@@ -185,6 +249,48 @@ describe("billing", () => {
       );
       expect(await summary.json()).toMatchObject({ plan: "free" });
     } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("asks Stripe to retry a duplicate webhook still in progress", async () => {
+    const fixture = await createFixture();
+    const event = subscriptionEvent(
+      "evt_duplicate_processing",
+      100,
+      "active",
+      1,
+    );
+    let markFetchStarted = () => {};
+    let releaseFetch = () => {};
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+    const fetchReleased = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    let fetchCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, _init) => {
+      fetchCount += 1;
+      markFetchStarted();
+      await fetchReleased;
+      return Response.json(event.data.object);
+    }) as typeof fetch;
+    try {
+      const firstResponse = sendWebhook(fixture, event);
+      await fetchStarted;
+      const duplicateResponse = await sendWebhook(fixture, event);
+      expect(duplicateResponse.status).toBe(503);
+      expect((await duplicateResponse.json()) as unknown).toEqual({
+        error: "Webhook event is already being processed.",
+      });
+      releaseFetch();
+      expect((await firstResponse).status).toBe(200);
+      expect((await sendWebhook(fixture, event)).status).toBe(200);
+      expect(fetchCount).toBe(1);
+    } finally {
+      releaseFetch();
       globalThis.fetch = originalFetch;
     }
   });
@@ -393,6 +499,24 @@ describe("billing", () => {
     expect(
       fixture.database.query("SELECT id FROM audits ORDER BY id").all(),
     ).toEqual([{ id: "free-recent" }, { id: "pro-old" }]);
+  });
+
+  it("drains expired Free audit history across multiple batches", async () => {
+    const fixture = await createFixture();
+    for (let index = 0; index < 205; index += 1) {
+      insertAudit(
+        fixture.database,
+        `expired-${String(index).padStart(3, "0")}`,
+        organizationId,
+        "2026-06-01",
+      );
+    }
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(205);
+    expect(
+      fixture.database.query("SELECT COUNT(*) AS count FROM audits").get(),
+    ).toEqual({ count: 0 });
   });
 });
 
