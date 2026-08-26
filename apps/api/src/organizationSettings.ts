@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
-import { cancelOrganizationSubscription } from "./billing";
+import {
+  cancelOrganizationSubscription,
+  recoverCheckoutAfterFailedDeletion,
+} from "./billing";
 import { markOrganizationForDeletion } from "./organizationDeletion";
 import {
   canManageOrganization,
@@ -105,8 +108,12 @@ organizationSettings.delete("/current", async (context) => {
     );
   }
 
+  let checkoutGuard: string | null;
   try {
-    await cancelOrganizationSubscription(context.env, organizationId);
+    ({ checkoutGuard } = await cancelOrganizationSubscription(
+      context.env,
+      organizationId,
+    ));
   } catch (cause) {
     console.error("Could not cancel organization billing.", cause);
     return context.json(
@@ -118,12 +125,34 @@ organizationSettings.delete("/current", async (context) => {
     );
   }
 
-  const deletion = await markOrganizationForDeletion(
-    context.env.DB,
-    organizationId,
-    userId,
-  );
+  let deletion: Awaited<ReturnType<typeof markOrganizationForDeletion>>;
+  try {
+    deletion = await markOrganizationForDeletion(
+      context.env.DB,
+      organizationId,
+      userId,
+    );
+  } catch (cause) {
+    console.error("Could not record organization deletion.", cause);
+    await recoverCheckoutAfterFailedDeletion(
+      context.env.DB,
+      organizationId,
+      checkoutGuard,
+    );
+    return context.json(
+      {
+        error:
+          "Billing was canceled, but the organization could not be deleted. Checkout was re-enabled so billing can be restarted.",
+      },
+      500,
+    );
+  }
   if (!deletion) {
+    await recoverCheckoutAfterFailedDeletion(
+      context.env.DB,
+      organizationId,
+      checkoutGuard,
+    );
     return context.json({ error: "Organization was already deleted." }, 409);
   }
   return context.json(deletion);

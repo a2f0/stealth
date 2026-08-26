@@ -30,3 +30,25 @@ it("tombstones expired audit images before scheduled cleanup", async () => {
     "seats",
   ]);
 });
+
+it("runs independent maintenance after retention fails", async () => {
+  const events: string[] = [];
+  const retentionFailure = new Error("retention failed");
+  const maintenance = runScheduledMaintenance({
+    purgeDeletedObjects: async () => events.push("deleted objects"),
+    purgeExpiredFreeAuditRuns: async () => {
+      events.push("retention");
+      throw retentionFailure;
+    },
+    purgePendingAuditIssueImages: async () => events.push("issue images"),
+    reconcileSubscriptionSeats: async () => events.push("seats"),
+  });
+
+  await expect(maintenance).rejects.toThrow("Scheduled maintenance failed.");
+  expect(events).toEqual([
+    "retention",
+    "deleted objects",
+    "issue images",
+    "seats",
+  ]);
+});

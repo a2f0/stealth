@@ -226,6 +226,51 @@ describe("admin organizations", () => {
     }
   });
 
+  it("re-enables checkout when deletion storage fails after cancellation", async () => {
+    const database = await createDeletionFixture();
+    insertPaidBilling(database);
+    database.exec(
+      `CREATE TRIGGER fail_admin_organization_deletion
+       BEFORE UPDATE OF deletedAt ON organization
+       WHEN NEW.deletedAt IS NOT NULL
+       BEGIN
+         SELECT RAISE(ABORT, 'forced organization deletion failure');
+       END`,
+    );
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(canceledSubscription())) as typeof fetch;
+    console.error = () => {};
+    try {
+      const response = await testApp(database).request(
+        `/${targetOrganizationId}`,
+        { method: "DELETE" },
+      );
+      expect(response.status).toBe(500);
+      expect(
+        database
+          .query(
+            `SELECT organization.deletedAt,
+                    organization_billing.checkout_disabled_at,
+                    organization_billing.stripe_status
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toEqual({
+        checkout_disabled_at: null,
+        deletedAt: null,
+        stripe_status: "canceled",
+      });
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("restores a deleted organization without overriding other defaults", async () => {
     const database = await createDeletionFixture();
     const deletion = await testApp(database).request("/org_member-user", {

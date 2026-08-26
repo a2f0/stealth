@@ -73,7 +73,7 @@ export const requireOrganizationPluginAccess = createMiddleware<AuthEnv>(
     }
     const session = context.get("authSession");
     if (listsCurrentUsersTeamsAcrossOrganizations(context, session.user.id)) {
-      return filterTeamsRequiringTwoFactor(context, next);
+      return filterTeamsRequiringAccess(context, next);
     }
     const requestedOrganizationIds = await organizationIdsFromRequest(
       context,
@@ -114,14 +114,11 @@ function listsCurrentUsersTeamsAcrossOrganizations(
   );
 }
 
-async function filterTeamsRequiringTwoFactor(
+async function filterTeamsRequiringAccess(
   context: Context<AuthEnv>,
   next: Next,
 ) {
   const session = context.get("authSession");
-  if (session.user.twoFactorEnabled && session.session.twoFactorVerified) {
-    return next();
-  }
   const memberships = await context.env.DB.prepare(
     `SELECT member."organizationId", member."twoFactorRequired"
        FROM "member"
@@ -132,11 +129,25 @@ async function filterTeamsRequiringTwoFactor(
   )
     .bind(session.user.id)
     .all<{ organizationId: string; twoFactorRequired: boolean | number }>();
-  const allowedOrganizationIds = new Set(
-    memberships.results
-      .filter((membership) => !membership.twoFactorRequired)
-      .map((membership) => membership.organizationId),
-  );
+  const allowedOrganizationIds = new Set<string>();
+  for (const membership of memberships.results) {
+    if (
+      membership.twoFactorRequired &&
+      (!session.user.twoFactorEnabled || !session.session.twoFactorVerified)
+    ) {
+      continue;
+    }
+    if (
+      await organizationUserHasSeat(
+        context.env.DB,
+        membership.organizationId,
+        session.user.id,
+        context.env.STRIPE_PRO_PRICE_ID,
+      )
+    ) {
+      allowedOrganizationIds.add(membership.organizationId);
+    }
+  }
   await next();
   const response = context.res;
   if (!response.ok) return;
@@ -352,6 +363,9 @@ export const requireAuthOrganizationSeat = createMiddleware<AuthEnv>(
   async (context, next) => {
     if (organizationSeatRouteExemptions.has(context.req.path)) return next();
     const session = context.get("authSession");
+    if (listsCurrentUsersTeamsAcrossOrganizations(context, session.user.id)) {
+      return next();
+    }
     const target = await authOrganizationTarget(context, session);
     if (target.conflict) {
       return context.json(

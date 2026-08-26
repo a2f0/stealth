@@ -248,7 +248,7 @@ describe("billing", () => {
       await checkoutStarted;
       expect(
         await cancelOrganizationSubscription(fixture.bindings, organizationId),
-      ).toBe(false);
+      ).toMatchObject({ canceled: false, checkoutGuard: expect.any(String) });
       releaseCheckout();
       expect((await checkoutResponse).status).toBe(409);
       expect(requests).toEqual([

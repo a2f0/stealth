@@ -312,18 +312,25 @@ describe("organization plugin middleware", () => {
     });
   });
 
-  it("filters protected teams from an unverified cross-organization list", async () => {
+  it("filters teams without two-factor access or a seat", async () => {
     const response = await pluginRequest(
       "/api/auth/organization/list-user-teams",
       null,
       "active-org",
-      ["active-org", "protected-org"],
+      ["active-org", "protected-org", "unseated-org"],
       ["protected-org"],
       {},
       [
         { id: "active-team", organizationId: "active-org" },
         { id: "protected-team", organizationId: "protected-org" },
+        { id: "unseated-team", organizationId: "unseated-org" },
       ],
+      null,
+      {
+        "active-org": "user-id",
+        "protected-org": "user-id",
+        "unseated-org": "owner-id",
+      },
     );
 
     expect(response.status).toBe(200);
@@ -436,6 +443,7 @@ function pluginRequest(
   resourceOrganizations: ResourceOrganizations = {},
   responseBody?: unknown,
   activeTeamId: string | null = null,
+  freeSeatUserIds: string | Record<string, string> = "user-id",
 ) {
   const app = new Hono<{
     Bindings: Bindings;
@@ -456,7 +464,11 @@ function pluginRequest(
     } as unknown as AuthSession);
     await next();
   });
-  app.use("/api/auth/organization/*", requireOrganizationPluginAccess);
+  app.use(
+    "/api/auth/organization/*",
+    requireOrganizationPluginAccess,
+    requireAuthOrganizationSeat,
+  );
   app.all("/api/auth/organization/*", async (context) =>
     context.json(
       responseBody ?? { request: body ? await context.req.json() : null },
@@ -476,7 +488,7 @@ function pluginRequest(
         memberships,
         [],
         twoFactorRequiredOrganizations,
-        "user-id",
+        freeSeatUserIds,
         resourceOrganizations,
       ),
     } as Bindings,
@@ -493,7 +505,7 @@ function membershipDatabase(
   memberships: string[],
   deletedMemberships: string[],
   twoFactorRequiredOrganizations: string[],
-  freeSeatUserId = "user-id",
+  freeSeatUserIds: string | Record<string, string> = "user-id",
   resourceOrganizations: ResourceOrganizations = {},
 ) {
   return {
@@ -521,7 +533,12 @@ function membershipDatabase(
         first: async () => {
           if (query.includes("FROM organization_billing")) return null;
           if (query.includes("SELECT userId")) {
-            return { userId: freeSeatUserId };
+            return {
+              userId:
+                typeof freeSeatUserIds === "string"
+                  ? freeSeatUserIds
+                  : freeSeatUserIds[firstValue],
+            };
           }
           for (const table of ["invitation", "member", "team"] as const) {
             if (

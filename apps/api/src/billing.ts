@@ -565,9 +565,12 @@ export async function cancelOrganizationSubscription(
       );
     }
     await clearPendingCheckout(environment.DB, organizationId);
-    return (
-      subscriptionIds.size > 0 || Boolean(record?.pending_checkout_session_id)
-    );
+    return {
+      canceled:
+        subscriptionIds.size > 0 ||
+        Boolean(record?.pending_checkout_session_id),
+      checkoutGuard: record?.checkout_disabled_at ?? null,
+    };
   } catch (cause) {
     await enableCheckoutAfterFailedDeletion(
       environment.DB,
@@ -576,6 +579,32 @@ export async function cancelOrganizationSubscription(
     );
     throw cause;
   }
+}
+
+export async function recoverCheckoutAfterFailedDeletion(
+  database: D1Database,
+  organizationId: string,
+  checkoutGuard: string | null,
+) {
+  if (!checkoutGuard) return false;
+  const recovered = await database
+    .prepare(
+      `UPDATE organization_billing
+       SET checkout_disabled_at = NULL, updated_at = ?
+       WHERE organization_id = ? AND checkout_disabled_at = ?
+         AND EXISTS (
+           SELECT 1 FROM organization
+           WHERE id = ? AND deletedAt IS NULL
+         )`,
+    )
+    .bind(
+      new Date().toISOString(),
+      organizationId,
+      checkoutGuard,
+      organizationId,
+    )
+    .run();
+  return Number(recovered.meta.changes) === 1;
 }
 
 async function cancelStripeSubscription(

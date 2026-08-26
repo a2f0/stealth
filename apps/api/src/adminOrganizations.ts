@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
-import { cancelOrganizationSubscription } from "./billing";
+import {
+  cancelOrganizationSubscription,
+  recoverCheckoutAfterFailedDeletion,
+} from "./billing";
 import {
   markOrganizationForDeletion,
   restoreOrganization,
@@ -67,8 +70,12 @@ adminOrganizations.get("/", async (context) => {
 adminOrganizations.delete("/:organizationId", async (context) => {
   const organizationId = context.req.param("organizationId");
   const actor = context.get("authSession").user;
+  let checkoutGuard: string | null;
   try {
-    await cancelOrganizationSubscription(context.env, organizationId);
+    ({ checkoutGuard } = await cancelOrganizationSubscription(
+      context.env,
+      organizationId,
+    ));
   } catch (cause) {
     console.error("Could not cancel organization billing.", cause);
     return context.json(
@@ -79,12 +86,34 @@ adminOrganizations.delete("/:organizationId", async (context) => {
       502,
     );
   }
-  const deletion = await markOrganizationForDeletion(
-    context.env.DB,
-    organizationId,
-    actor.id,
-  );
+  let deletion: Awaited<ReturnType<typeof markOrganizationForDeletion>>;
+  try {
+    deletion = await markOrganizationForDeletion(
+      context.env.DB,
+      organizationId,
+      actor.id,
+    );
+  } catch (cause) {
+    console.error("Could not record organization deletion.", cause);
+    await recoverCheckoutAfterFailedDeletion(
+      context.env.DB,
+      organizationId,
+      checkoutGuard,
+    );
+    return context.json(
+      {
+        error:
+          "Billing was canceled, but the organization could not be deleted. Checkout was re-enabled so billing can be restarted.",
+      },
+      500,
+    );
+  }
   if (!deletion) {
+    await recoverCheckoutAfterFailedDeletion(
+      context.env.DB,
+      organizationId,
+      checkoutGuard,
+    );
     const organization = await context.env.DB.prepare(
       "SELECT deletedAt FROM organization WHERE id = ?",
     )

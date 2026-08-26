@@ -33,10 +33,21 @@ interface ScheduledMaintenanceTasks {
 export async function runScheduledMaintenance(
   tasks: ScheduledMaintenanceTasks,
 ) {
-  await tasks.purgeExpiredFreeAuditRuns();
-  await Promise.all([
+  const failures: unknown[] = [];
+  try {
+    await tasks.purgeExpiredFreeAuditRuns();
+  } catch (cause) {
+    failures.push(cause);
+  }
+  const results = await Promise.allSettled([
     tasks.purgeDeletedObjects(),
     tasks.purgePendingAuditIssueImages(),
     tasks.reconcileSubscriptionSeats(),
   ]);
+  for (const result of results) {
+    if (result.status === "rejected") failures.push(result.reason);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Scheduled maintenance failed.");
+  }
 }

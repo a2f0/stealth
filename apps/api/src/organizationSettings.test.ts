@@ -280,6 +280,52 @@ describe("organization deletion", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("re-enables checkout when deletion storage fails after cancellation", async () => {
+    const fixture = await createFixture();
+    insertPaidBilling(fixture.database, targetOrganizationId);
+    fixture.database.exec(
+      `CREATE TRIGGER fail_owner_organization_deletion
+       BEFORE UPDATE OF deletedAt ON organization
+       WHEN NEW.deletedAt IS NOT NULL
+       BEGIN
+         SELECT RAISE(ABORT, 'forced organization deletion failure');
+       END`,
+    );
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(
+        canceledSubscription(targetOrganizationId),
+      )) as typeof fetch;
+    console.error = () => {};
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(500);
+      expect(
+        fixture.database
+          .query(
+            `SELECT organization.deletedAt,
+                    organization_billing.checkout_disabled_at,
+                    organization_billing.stripe_status
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toEqual({
+        checkout_disabled_at: null,
+        deletedAt: null,
+        stripe_status: "canceled",
+      });
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("organization member security", () => {
