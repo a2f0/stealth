@@ -267,7 +267,8 @@ as-is.
    [ -n "$MERGE_COMMIT" ] || { echo "Error: could not resolve merge commit; skipping delete" >&2; exit 1; }
    git merge-base --is-ancestor "$MERGE_COMMIT" HEAD || { echo "Error: $BASE_BRANCH does not contain merge commit $MERGE_COMMIT; skipping delete" >&2; exit 1; }
 
-   REMOTE_BRANCH_SHA=$(git ls-remote --heads "$FEATURE_REPO_URL" "$MERGED_BRANCH" | awk 'NR == 1 { print $1 }')
+   REMOTE_BRANCH_LINES=$(git -c credential.helper= -c 'credential.helper=!gh auth git-credential' ls-remote --heads "$FEATURE_REPO_URL" "$MERGED_BRANCH") || { echo "Error: could not inspect $FEATURE_REMOTE/$MERGED_BRANCH; refusing branch deletion" >&2; exit 1; }
+   REMOTE_BRANCH_SHA=$(printf '%s\n' "$REMOTE_BRANCH_LINES" | awk 'NR == 1 { print $1 }')
    if [ -n "$REMOTE_BRANCH_SHA" ]; then
      [ "$REMOTE_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$REMOTE_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH moved to $REMOTE_BRANCH_SHA after merge; refusing remote delete" >&2; exit 1; }
      git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --force-with-lease="refs/heads/$MERGED_BRANCH:$REMOTE_BRANCH_SHA" "$FEATURE_REPO_URL" ":refs/heads/$MERGED_BRANCH" || { echo "Error: could not lease-delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }

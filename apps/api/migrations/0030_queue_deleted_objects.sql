@@ -8,7 +8,7 @@ CREATE TABLE deleted_object_cleanup (
 );
 
 CREATE INDEX deleted_object_cleanup_claim_idx
-ON deleted_object_cleanup (cleanup_claimed_at, deleted_at);
+ON deleted_object_cleanup (deleted_at, cleanup_claimed_at);
 
 CREATE TRIGGER queue_organization_object_cleanup
 BEFORE DELETE ON organization

@@ -1181,9 +1181,13 @@ describe("audits", () => {
     expect(fixture.stored.has("purged/image")).toBe(true);
 
     fixture.storageControl.failNextDelete = true;
-    await expect(purgeDeletedObjects(fixture.bindings, now)).rejects.toThrow(
-      "Transient R2 delete failure",
-    );
+    const eligibleCutoffs = {
+      abandonedClaimedBefore: "9999-12-31T23:59:59.999Z",
+      deletedBefore: "9999-12-31T23:59:59.999Z",
+    };
+    await expect(
+      purgeDeletedObjects(fixture.bindings, eligibleCutoffs),
+    ).rejects.toThrow("Transient R2 delete failure");
     expect(
       fixture.database
         .query(
@@ -1194,14 +1198,61 @@ describe("audits", () => {
     ).toEqual({ cleanup_token: expect.any(String) });
     expect(fixture.stored.has("purged/image")).toBe(true);
 
-    expect(
-      await purgeDeletedObjects(fixture.bindings, "9999-12-31T23:59:59.999Z"),
-    ).toBe(1);
+    expect(await purgeDeletedObjects(fixture.bindings, eligibleCutoffs)).toBe(
+      1,
+    );
     expect(fixture.stored.has("purged/image")).toBe(false);
     expect(
       fixture.database
         .query(
           `SELECT id FROM deleted_object_cleanup WHERE id = 'purged-object'`,
+        )
+        .get(),
+    ).toBeNull();
+  });
+
+  it("waits out in-flight uploads before purging deleted organizations", async () => {
+    const fixture = await createFixture();
+    const now = "2026-08-25T12:00:00.000Z";
+    fixture.database
+      .query(
+        `INSERT INTO objects
+         (id, organization_id, object_key, filename, content_type, size,
+          created_at, kind, deletion_pending, upload_token,
+          upload_lease_expires_at)
+         VALUES ('raced-object', 'org_user-1', 'raced/image', 'image.png',
+                 'image/png', 0, ?, 'audit_issue_image', 1, 'upload-token',
+                 '9999-12-31T23:59:59.999Z')`,
+      )
+      .run(now);
+    fixture.database.exec("PRAGMA foreign_keys = ON");
+
+    fixture.database
+      .query(`DELETE FROM organization WHERE id = 'org_user-1'`)
+      .run();
+
+    expect(await purgeDeletedObjects(fixture.bindings)).toBe(0);
+    expect(
+      fixture.database
+        .query(
+          `SELECT id FROM deleted_object_cleanup WHERE id = 'raced-object'`,
+        )
+        .get(),
+    ).toEqual({ id: "raced-object" });
+
+    // Model the request finishing its R2 write and crashing before activation.
+    fixture.stored.set("raced/image", Uint8Array.from([1, 2, 3]));
+    expect(
+      await purgeDeletedObjects(fixture.bindings, {
+        abandonedClaimedBefore: "9999-12-31T23:59:59.999Z",
+        deletedBefore: "9999-12-31T23:59:59.999Z",
+      }),
+    ).toBe(1);
+    expect(fixture.stored.has("raced/image")).toBe(false);
+    expect(
+      fixture.database
+        .query(
+          `SELECT id FROM deleted_object_cleanup WHERE id = 'raced-object'`,
         )
         .get(),
     ).toBeNull();

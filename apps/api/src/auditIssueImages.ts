@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import { normalizeFilename } from "./filenames";
+import { auditIssueImageUploadGraceMilliseconds } from "./objectLifecycle";
 import type { Bindings } from "./types";
 
 const auditIssueImages = new Hono<{
@@ -22,7 +23,6 @@ const maxImagesPerIssue = 10;
 const maxConcurrentImageUploads = 2;
 const maxConcurrentImageUploadsPerOrganization = 1;
 const maxImageReadMilliseconds = 60_000;
-const pendingUploadGraceMilliseconds = 15 * 60 * 1000;
 const pendingCleanupBatchSize = 100;
 let activeImageUploads = 0;
 const activeOrganizationImageUploads = new Map<string, number>();
@@ -209,7 +209,7 @@ async function reserveAuditIssueImage(
   const objectId = crypto.randomUUID();
   const uploadToken = crypto.randomUUID();
   const uploadLeaseExpiresAt = new Date(
-    Date.now() + pendingUploadGraceMilliseconds,
+    Date.now() + auditIssueImageUploadGraceMilliseconds,
   ).toISOString();
   const objectKey = `organizations/${organizationId}/audit-issues/${issueId}/${objectId}/image`;
   const filename = normalizeFilename(requestedFilename ?? "", "issue-image");
@@ -527,7 +527,9 @@ async function refreshAuditIssueImageUploadLease(
       .bind(
         image.filename,
         image.contentType,
-        new Date(Date.now() + pendingUploadGraceMilliseconds).toISOString(),
+        new Date(
+          Date.now() + auditIssueImageUploadGraceMilliseconds,
+        ).toISOString(),
         image.objectId,
         image.organizationId,
         image.uploadToken,
@@ -764,7 +766,7 @@ async function deletePendingAuditIssueObject(
   environment: Pick<Bindings, "DB" | "STORAGE">,
   object: PendingAuditIssueObject,
   abandonedClaimCutoff = new Date(
-    Date.now() - pendingUploadGraceMilliseconds,
+    Date.now() - auditIssueImageUploadGraceMilliseconds,
   ).toISOString(),
   uploadLeaseCutoff = new Date().toISOString(),
 ) {
@@ -827,7 +829,9 @@ async function attemptPendingObjectCleanup(
 /** Retry durable R2 cleanup tombstones without racing an in-flight upload. */
 export async function purgePendingAuditIssueImages(
   environment: Pick<Bindings, "DB" | "STORAGE">,
-  cutoff = new Date(Date.now() - pendingUploadGraceMilliseconds).toISOString(),
+  cutoff = new Date(
+    Date.now() - auditIssueImageUploadGraceMilliseconds,
+  ).toISOString(),
   uploadLeaseCutoff = new Date().toISOString(),
 ) {
   const result = await environment.DB.prepare(

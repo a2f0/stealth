@@ -1,3 +1,4 @@
+import { auditIssueImageUploadGraceMilliseconds } from "./objectLifecycle";
 import type { Bindings } from "./types";
 
 const cleanupBatchSize = 25;
@@ -5,6 +6,26 @@ const abandonedClaimMilliseconds = 5 * 60 * 1000;
 
 interface DeletedObjectCleanup {
   id: string;
+}
+
+interface DeletedObjectCleanupCutoffs {
+  abandonedClaimedBefore: string;
+  deletedBefore: string;
+}
+
+function defaultCleanupCutoffs(): DeletedObjectCleanupCutoffs {
+  const now = Date.now();
+  return {
+    abandonedClaimedBefore: new Date(
+      now - abandonedClaimMilliseconds,
+    ).toISOString(),
+    // An organization can disappear while an already-authorized upload is
+    // writing R2. Keep its durable tombstone until every upload lease that was
+    // live at deletion time has expired.
+    deletedBefore: new Date(
+      now - auditIssueImageUploadGraceMilliseconds,
+    ).toISOString(),
+  };
 }
 
 async function purgeDeletedObject(
@@ -44,24 +65,35 @@ async function purgeDeletedObject(
 /** Delete R2 bytes whose D1 object rows were removed by a cascade. */
 export async function purgeDeletedObjects(
   environment: Pick<Bindings, "DB" | "STORAGE">,
-  abandonedClaimCutoff = new Date(
-    Date.now() - abandonedClaimMilliseconds,
-  ).toISOString(),
+  cutoffs = defaultCleanupCutoffs(),
 ) {
   const result = await environment.DB.prepare(
     `SELECT id FROM deleted_object_cleanup
-     WHERE cleanup_token IS NULL
-       OR datetime(cleanup_claimed_at) <= datetime(?)
+     WHERE datetime(deleted_at) <= datetime(?)
+       AND (
+         cleanup_token IS NULL
+         OR datetime(cleanup_claimed_at) <= datetime(?)
+       )
      ORDER BY deleted_at ASC, id ASC
      LIMIT ?`,
   )
-    .bind(abandonedClaimCutoff, cleanupBatchSize)
+    .bind(
+      cutoffs.deletedBefore,
+      cutoffs.abandonedClaimedBefore,
+      cleanupBatchSize,
+    )
     .all<DeletedObjectCleanup>();
   let firstFailure: unknown;
   let purged = 0;
   for (const object of result.results) {
     try {
-      if (await purgeDeletedObject(environment, object, abandonedClaimCutoff)) {
+      if (
+        await purgeDeletedObject(
+          environment,
+          object,
+          cutoffs.abandonedClaimedBefore,
+        )
+      ) {
         purged += 1;
       }
     } catch (cause) {
