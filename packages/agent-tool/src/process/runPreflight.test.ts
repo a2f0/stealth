@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createConnection } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -98,20 +98,21 @@ test("preflight denies external network, Git writes, and dependency poisoning", 
     ["/Users/example/repo"],
   );
 
-  // The default deny blocks sockets outside the local allowlists. A blanket
-  // explicit deny would override the local socket allowances.
+  // The default deny blocks every TCP peer, including host loopback. A blanket
+  // explicit deny would also override the isolated Unix socket allowance.
   expect(profile).not.toContain("(deny network*)");
   expect(profile).toContain('(import "system.sb")');
   expect(profile).toContain("(allow signal (target children))");
   expect(profile).toContain(
     '(allow network-bind network-outbound (subpath "/private/tmp/preflight-home"))',
   );
-  expect(profile).toContain('(allow network-bind (local ip "*:*"))');
-  expect(profile).toContain("(allow network-inbound (local ip))");
-  expect(profile).toContain('(allow network-bind (local ip "localhost:*"))');
-  expect(profile).toContain(
-    '(allow network-outbound (remote ip "localhost:*"))',
-  );
+  expect(profile).not.toContain('(local ip "*:*")');
+  expect(profile).not.toContain("network-inbound (local ip)");
+  expect(profile).not.toContain('(local ip "localhost:*")');
+  expect(profile).not.toContain('(remote ip "localhost:*")');
+  expect(profile).not.toContain("network-inbound");
+  expect(profile).not.toContain("(local ip");
+  expect(profile).not.toContain("(remote ip");
   expect(profile).toContain("(allow file-read-metadata)");
   expect(profile).toContain(
     '(deny file-write* (subpath "/private/tmp/preflight-home/checkout/.git") (subpath "/Users/example/repo/apps/api/node_modules") (subpath "/Users/example/repo"))',
@@ -127,7 +128,7 @@ test.skipIf(
   process.platform !== "darwin" ||
     Reflect.get(process.env, "TEARLEADS_PREFLIGHT_OFFLINE") === "1",
 )(
-  "preflight isolates files and networking while permitting local sockets",
+  "preflight isolates files and networking while permitting isolated Unix sockets",
   async () => {
     const repositoryRoot = mkdtempSync(
       path.join(tmpdir(), "agent-tool-preflight-source-"),
@@ -143,9 +144,21 @@ test.skipIf(
     const ignoredFile = path.join(repositoryRoot, ".env");
     const rootSentinel = path.join(rootDependencies, "sentinel.txt");
     const nestedSentinel = path.join(nestedDependencies, "sentinel.txt");
+    const hostLoopbackServer = createServer();
 
     try {
       await assertExternalServerReachable("1.1.1.1", 80);
+      await new Promise<void>((resolve, reject) => {
+        hostLoopbackServer.once("error", reject);
+        hostLoopbackServer.listen(0, "127.0.0.1", resolve);
+      });
+      const hostLoopbackAddress = hostLoopbackServer.address();
+      if (
+        hostLoopbackAddress === null ||
+        typeof hostLoopbackAddress === "string"
+      ) {
+        throw new Error("Host loopback test server has no TCP address.");
+      }
       mkdirSync(rootDependencies, { recursive: true });
       mkdirSync(nestedDependencies, { recursive: true });
       writeFileSync(
@@ -176,22 +189,20 @@ test.skipIf(
           ])}) {\n` +
           `  try { writeFileSync(target, "poisoned\\n"); } catch {}\n` +
           `}\n` +
-          `const tcpServer = createServer((socket) => socket.end("loopback"));\n` +
-          `await new Promise<void>((resolve, reject) => {\n` +
-          `  tcpServer.once("error", reject);\n` +
-          `  tcpServer.listen(0, "127.0.0.1", resolve);\n` +
+          `const hostLoopbackConnected = await new Promise<boolean>((resolve) => {\n` +
+          `  let settled = false;\n` +
+          `  const socket = createConnection({ host: "127.0.0.1", port: ${hostLoopbackAddress.port} });\n` +
+          `  const finish = (connected: boolean) => {\n` +
+          `    if (settled) return;\n` +
+          `    settled = true;\n` +
+          `    socket.destroy();\n` +
+          `    resolve(connected);\n` +
+          `  };\n` +
+          `  socket.once("connect", () => finish(true));\n` +
+          `  socket.once("error", () => finish(false));\n` +
+          `  socket.setTimeout(1_000, () => finish(false));\n` +
           `});\n` +
-          `const tcpAddress = tcpServer.address();\n` +
-          `if (tcpAddress === null || typeof tcpAddress === "string") throw new Error("No TCP address");\n` +
-          `const tcpReply = await new Promise<string>((resolve, reject) => {\n` +
-          `  let reply = "";\n` +
-          `  const socket = createConnection({ host: "127.0.0.1", port: tcpAddress.port });\n` +
-          `  socket.on("data", (chunk) => { reply += chunk; });\n` +
-          `  socket.once("end", () => resolve(reply));\n` +
-          `  socket.once("error", reject);\n` +
-          `});\n` +
-          `tcpServer.close();\n` +
-          `if (tcpReply !== "loopback") throw new Error("TCP loopback failed");\n` +
+          `if (hostLoopbackConnected) throw new Error("Host loopback was not denied");\n` +
           `const socketPath = path.join(process.env.TMPDIR ?? ".", "provider.sock");\n` +
           `const unixServer = createServer((socket) => socket.end("unix"));\n` +
           `await new Promise<void>((resolve, reject) => {\n` +
@@ -259,6 +270,7 @@ test.skipIf(
       expect(readFileSync(rootSentinel, "utf8")).toBe("root dependency\n");
       expect(readFileSync(nestedSentinel, "utf8")).toBe("nested dependency\n");
     } finally {
+      if (hostLoopbackServer.listening) hostLoopbackServer.close();
       rmSync(repositoryRoot, { force: true, recursive: true });
     }
   },

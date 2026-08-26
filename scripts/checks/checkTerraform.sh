@@ -7,26 +7,26 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TERRAFORM_ROOT="$REPO_ROOT/terraform"
 STACK_DIR="$TERRAFORM_ROOT/stacks/prod"
 
-for command in terraform tflint; do
-  if ! command -v "$command" >/dev/null 2>&1; then
-    echo "ERROR: $command is required for Terraform linting." >&2
-    exit 1
-  fi
-done
+if ! command -v terraform >/dev/null 2>&1; then
+  echo "ERROR: terraform is required for Terraform linting." >&2
+  exit 1
+fi
 
 echo "Checking Terraform formatting..."
 terraform -chdir="$TERRAFORM_ROOT" fmt -check -recursive -diff
 
-echo "Initializing Terraform providers..."
 if [[ "${TEARLEADS_PREFLIGHT_OFFLINE:-0}" == "1" ]]; then
-  if [[ ! -d "$STACK_DIR/.terraform/providers" ]]; then
-    echo "ERROR: Terraform providers must be installed before an offline preflight." >&2
-    exit 1
-  fi
-  echo "Using the installed provider cache for the offline preflight."
-else
-  terraform -chdir="$STACK_DIR" init -backend=false -input=false >/dev/null
+  echo "Skipping provider-backed validation and TFLint in the network-isolated preflight."
+  exit 0
 fi
+
+if ! command -v tflint >/dev/null 2>&1; then
+  echo "ERROR: tflint is required for Terraform linting." >&2
+  exit 1
+fi
+
+echo "Initializing Terraform providers..."
+terraform -chdir="$STACK_DIR" init -backend=false -input=false >/dev/null
 
 echo "Validating Terraform configuration..."
 terraform -chdir="$STACK_DIR" validate

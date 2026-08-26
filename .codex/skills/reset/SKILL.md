@@ -29,9 +29,9 @@ did not happen and leaves `.git/hooks` holding an arbitrary revision.
 **That gate is not the same as being atomic, and this skill does not pretend to
 be.** The preconditions in step 1 run before anything is mutated, so a run
 rejected there changes nothing. Once step 2 begins, an abort can leave real
-intermediate state: the switch may have succeeded while the upstream fetch or
-fast-forward failed (you are on the target branch, not current), or the
-fast-forward may have succeeded while the install failed. Git offers no
+intermediate state: the upstream fetch may update remote-tracking refs while the
+checkout stays put, the switch or fast-forward may succeed while a later step
+fails, or the hook install may fail after the branch is current. Git offers no
 transaction across these, so the obligation is to **report the state reached**,
 precisely, rather than to claim none was. Step 5 says which stages completed.
 
@@ -137,20 +137,12 @@ TARGET_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name) 
    reset install arbitrary local content while reporting that it installed the
    target revision's hooks.
 
-2. **Switch to the target branch**, if not already on it:
+2. **Fetch and validate the exact target upstream before switching.** On a fork,
+   `origin` is the fork and a hardcoded remote can resolve a stale branch. Fetch
+   first so a target that exists only on the remote can be created safely:
 
    ```bash
-   [ "$BRANCH" = "$TARGET_BRANCH" ] || git -c core.hooksPath=/dev/null switch "$TARGET_BRANCH" || { echo "Error: could not switch to $TARGET_BRANCH" >&2; exit 1; }
-   ```
-
-   Already being on it is the common case after `ship-pr` — `squash-merge`
-   returns to the PR's base branch as part of its own gated cleanup. Treat that
-   as success, not a no-op to report as a problem.
-
-3. **Fast-forward it** from the remote the branch actually tracks — on a fork,
-   `origin` is the fork and a hardcoded remote fetches a stale branch:
-
-   ```bash
+   git check-ref-format "refs/heads/$TARGET_BRANCH" >/dev/null || { echo "Error: invalid target branch $TARGET_BRANCH; hooks not installed" >&2; exit 1; }
    REMOTE=$(git config "branch.$TARGET_BRANCH.remote" 2>/dev/null || echo origin)
    # Honor the *complete* upstream: the remote AND the branch name it maps to.
    UPSTREAM_REF=$(git config "branch.$TARGET_BRANCH.merge" 2>/dev/null || echo "refs/heads/$TARGET_BRANCH")
@@ -158,10 +150,11 @@ TARGET_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name) 
    git -c core.hooksPath=/dev/null fetch "$REMOTE" --prune || { echo "Error: prune failed; hooks not installed" >&2; exit 1; }
    git -c core.hooksPath=/dev/null fetch "$REMOTE" "$UPSTREAM_REF" || { echo "Error: upstream fetch failed; hooks not installed" >&2; exit 1; }
    FETCHED_UPSTREAM=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || { echo "Error: fetched upstream is not a commit; hooks not installed" >&2; exit 1; }
-   LOCAL_TARGET=$(git rev-parse --verify 'HEAD^{commit}') || { echo "Error: local target is not a commit; hooks not installed" >&2; exit 1; }
-   git merge-base --is-ancestor "$LOCAL_TARGET" "$FETCHED_UPSTREAM" || { echo "Error: $TARGET_BRANCH is ahead of or diverged from its upstream; hooks not installed" >&2; exit 1; }
-   git -c core.hooksPath=/dev/null merge --ff-only "$FETCHED_UPSTREAM" || { echo "Error: $TARGET_BRANCH could not fast-forward; hooks not installed" >&2; exit 1; }
-   [ "$(git rev-parse --verify 'HEAD^{commit}')" = "$FETCHED_UPSTREAM" ] || { echo "Error: $TARGET_BRANCH did not reach the fetched upstream; hooks not installed" >&2; exit 1; }
+   LOCAL_TARGET=""
+   if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
+     LOCAL_TARGET=$(git rev-parse --verify "refs/heads/$TARGET_BRANCH^{commit}") || { echo "Error: local target is not a commit; hooks not installed" >&2; exit 1; }
+     git merge-base --is-ancestor "$LOCAL_TARGET" "$FETCHED_UPSTREAM" || { echo "Error: $TARGET_BRANCH is ahead of or diverged from its upstream; hooks not installed" >&2; exit 1; }
+   fi
    ```
 
    **Resolve the upstream branch name, not just the remote.** A tracking branch
@@ -170,7 +163,29 @@ TARGET_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name) 
    fetching `$TARGET_BRANCH` assumes they do: a local `stable` that tracks
    `origin/main` would fetch the nonexistent `origin/stable` and fail, or worse,
    fast-forward to the wrong branch where one happens to exist. Falling back to
-   `refs/heads/$TARGET_BRANCH` keeps the untracked case working.
+   `refs/heads/$TARGET_BRANCH` keeps the untracked and remote-only cases
+   working.
+
+3. **Switch to the local target, or create it at the fetched commit, then reach
+   exact equality:**
+
+   ```bash
+   if [ -z "$LOCAL_TARGET" ]; then
+     git -c core.hooksPath=/dev/null switch -c "$TARGET_BRANCH" "$FETCHED_UPSTREAM" || { echo "Error: could not create $TARGET_BRANCH at its fetched upstream; hooks not installed" >&2; exit 1; }
+     git config --local "branch.$TARGET_BRANCH.remote" "$REMOTE" || { echo "Error: could not configure $TARGET_BRANCH remote; hooks not installed" >&2; exit 1; }
+     git config --local "branch.$TARGET_BRANCH.merge" "$UPSTREAM_REF" || { echo "Error: could not configure $TARGET_BRANCH upstream; hooks not installed" >&2; exit 1; }
+   else
+     [ "$BRANCH" = "$TARGET_BRANCH" ] || git -c core.hooksPath=/dev/null switch "$TARGET_BRANCH" || { echo "Error: could not switch to $TARGET_BRANCH" >&2; exit 1; }
+     git -c core.hooksPath=/dev/null merge --ff-only "$FETCHED_UPSTREAM" || { echo "Error: $TARGET_BRANCH could not fast-forward; hooks not installed" >&2; exit 1; }
+   fi
+   [ "$(git rev-parse --verify 'HEAD^{commit}')" = "$FETCHED_UPSTREAM" ] || { echo "Error: $TARGET_BRANCH did not reach the fetched upstream; hooks not installed" >&2; exit 1; }
+   ```
+
+   Already being on the target is the common case after `ship-pr` —
+   `squash-merge` returns to the PR's base branch as part of its gated cleanup.
+   Treat that as success. When the local branch does not exist, the fetched SHA
+   is used directly and the new branch receives the remote/upstream configuration
+   that future resets will honor.
 
    **Fetch, prove ancestry, then fast-forward to exact equality.** A plain
    `git pull --ff-only` is insufficient: when the local branch is ahead of
@@ -217,11 +232,11 @@ TARGET_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name) 
    - **Rejected in step 1** (dirty worktree, or untracked/ignored files under
      `scripts/git/hooks`) — nothing was touched; the checkout is exactly as it
      was.
-   - **Failed in step 2** — still on the original branch, nothing fast-forwarded,
-     no hooks installed.
-   - **Failed in step 3** — **already switched to the target branch**, but the
-     upstream was not fetched, the local branch was ahead/diverged, or exact
-     fast-forward equality was not reached; no hooks were installed.
+   - **Failed in step 2** — still on the original branch and no hooks installed;
+     a successful prune or fetch may have updated remote-tracking refs.
+   - **Failed in step 3** — the target may have been switched to or created, but
+     exact fast-forward equality or its tracking configuration was not reached;
+     no hooks were installed.
      This is the case most easily misreported as "nothing happened"; the checkout
      has in fact moved.
    - **Failed in step 4** — branch is current, but `.git/hooks` may hold a

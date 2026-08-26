@@ -203,6 +203,10 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    blocks writes to `.git` and `node_modules`; the commit disables all
    contributor-controlled hooks and signing. Never run a branch-controlled
    package script or commit hook in this credential-bearing orchestration shell.
+   Checks that inherently require local TCP (currently the Workerd upload
+   integration and provider-backed Terraform validation/TFLint) explicitly skip
+   only in this offline preflight. The required GitHub CI runs the complete
+   versions before merge.
 
    If no title argument was supplied, capture the intended PR title now — the work
    commit's subject (`git log -1 --format=%s`) — and reuse it when opening the PR

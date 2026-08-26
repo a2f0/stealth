@@ -134,13 +134,10 @@ export function buildPreflightSandboxProfile(
     `(allow file-read* ${pathRules("literal", traversalDirectories)} ${pathRules("subpath", readableTrees)})`,
     `(allow file-write* (subpath ${seatbeltString(root)}) (subpath ${seatbeltString(isolatedHome)}))`,
     `(deny file-write* ${pathRules("subpath", deniedWrites)})`,
-    // Terraform and Miniflare use local plugin/test sockets. Only loopback and
-    // Unix sockets under the isolated home escape the external-network deny.
+    // Test tooling may use Unix sockets, but access stays inside the disposable
+    // home. Host TCP services, including loopback, remain under the default
+    // deny.
     `(allow network-bind network-outbound (subpath ${seatbeltString(isolatedHome)}))`,
-    '(allow network-bind (local ip "*:*"))',
-    "(allow network-inbound (local ip))",
-    '(allow network-bind (local ip "localhost:*"))',
-    '(allow network-outbound (remote ip "localhost:*"))',
   ].join("\n");
 }
 

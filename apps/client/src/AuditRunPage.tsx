@@ -831,7 +831,7 @@ function SelectedIssueImages({
   return (
     <div className="auditSelectedImages">
       {files.map((file) => (
-        <div key={`${file.name}-${file.size}-${file.lastModified}`}>
+        <div key={issueImageSelectionKey(file)}>
           <span title={file.name}>{file.name}</span>
           <button onClick={() => onRemove(file)} type="button">
             Remove
@@ -889,13 +889,30 @@ export function appendIssueImageSelection(
   existingFiles: File[],
   selectedFiles: File[],
 ) {
+  const identities = new Set(existingFiles.map(issueImageSelectionKey));
+  const additions = selectedFiles.filter((file) => {
+    const identity = issueImageSelectionKey(file);
+    if (identities.has(identity)) return false;
+    identities.add(identity);
+    return true;
+  });
   const validated = validateImageFiles(
-    selectedFiles,
+    additions,
     maxIssueImages - existingFiles.length,
   );
   return typeof validated === "string"
     ? validated
     : [...existingFiles, ...validated];
+}
+
+function issueImageSelectionKey(file: File) {
+  return JSON.stringify([
+    file.name,
+    file.size,
+    file.lastModified,
+    file.type,
+    file.webkitRelativePath,
+  ]);
 }
 
 function titleCase(value: string) {

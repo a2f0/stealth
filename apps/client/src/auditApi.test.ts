@@ -100,6 +100,13 @@ describe("audit issue API", () => {
       first,
       second,
     ]);
+    const sameFirstFile = new File([new Uint8Array([1])], "first.png", {
+      lastModified: first.lastModified,
+      type: "image/png",
+    });
+    expect(
+      appendIssueImageSelection(firstSelection, [sameFirstFile, second]),
+    ).toEqual([first, second]);
 
     const nineExisting = Array.from(
       { length: 9 },

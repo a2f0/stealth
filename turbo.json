@@ -1,5 +1,6 @@
 {
   "$schema": "https://turborepo.com/schema.json",
+  "globalPassThroughEnv": ["TEARLEADS_PREFLIGHT_OFFLINE"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

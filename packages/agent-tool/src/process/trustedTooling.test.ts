@@ -205,6 +205,15 @@ test("reset reaches the exact fetched upstream before installing hooks", () => {
     const ancestry = content.indexOf(
       'git merge-base --is-ancestor "$LOCAL_TARGET" "$FETCHED_UPSTREAM"',
     );
+    const resolveLocalTarget = content.indexOf(
+      'git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"',
+    );
+    const createRemoteOnlyTarget = content.indexOf(
+      'git -c core.hooksPath=/dev/null switch -c "$TARGET_BRANCH" "$FETCHED_UPSTREAM"',
+    );
+    const switchExistingTarget = content.indexOf(
+      'git -c core.hooksPath=/dev/null switch "$TARGET_BRANCH"',
+    );
     const fastForward = content.indexOf(
       'git -c core.hooksPath=/dev/null merge --ff-only "$FETCHED_UPSTREAM"',
     );
@@ -214,7 +223,10 @@ test("reset reaches the exact fetched upstream before installing hooks", () => {
     const install = content.indexOf('sh "$HOOKS_SCRIPT"');
 
     expect(fetch).toBeGreaterThan(-1);
+    expect(resolveLocalTarget).toBeGreaterThan(fetch);
     expect(ancestry).toBeGreaterThan(fetch);
+    expect(createRemoteOnlyTarget).toBeGreaterThan(ancestry);
+    expect(switchExistingTarget).toBeGreaterThan(ancestry);
     expect(fastForward).toBeGreaterThan(ancestry);
     expect(equality).toBeGreaterThan(fastForward);
     expect(install).toBeGreaterThan(equality);
