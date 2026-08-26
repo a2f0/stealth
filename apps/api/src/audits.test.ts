@@ -1703,6 +1703,40 @@ describe("audits", () => {
     ).toEqual({ count: 2 });
   });
 
+  it("seeds the audit actor despite a public email collision", async () => {
+    const database = await createLegacyDatabase();
+    await applyMigration(database, "0022_version_audit_templates.sql");
+    database
+      .query(
+        `INSERT INTO user
+         (id, name, email, emailVerified, createdAt, updatedAt, role, banned)
+         VALUES ('collision-user', 'Collision User', ?, 1, ?, ?, 'user', 0)`,
+      )
+      .run(
+        "audit-library@system.invalid",
+        "2026-08-25T12:00:00.000Z",
+        "2026-08-25T12:00:00.000Z",
+      );
+
+    await applyMigration(database, "0033_create_audit_library_actor.sql");
+
+    expect(
+      database
+        .query("SELECT id, email FROM user WHERE id = 'collision-user'")
+        .get(),
+    ).toEqual({
+      email: "audit-library@system.invalid",
+      id: "collision-user",
+    });
+    const actor = database
+      .query("SELECT email, name FROM user WHERE id = 'system:audit-library'")
+      .get() as { email: string; name: string };
+    expect(actor.name).toBe("Stealth audit library");
+    expect(actor.email).toStartWith("audit-library+");
+    expect(actor.email).toEndWith("@system.invalid");
+    expect(actor.email).not.toBe("audit-library@system.invalid");
+  });
+
   it("consolidates organization starters into one global template", async () => {
     const database = await createLegacyDatabase();
     database.exec("PRAGMA foreign_keys = ON");
@@ -1795,6 +1829,7 @@ async function createFixture() {
   await applyMigration(database, "0029_tombstone_cascaded_audit_images.sql");
   await applyMigration(database, "0030_queue_deleted_objects.sql");
   await applyMigration(database, "0032_create_billing.sql");
+  await applyMigration(database, "0033_create_audit_library_actor.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,

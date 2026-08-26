@@ -126,7 +126,6 @@ const templateSelect = `
 const auditRunPageSize = 100;
 
 const auditLibraryActor = {
-  createdAt: "2026-01-01T00:00:00.000Z",
   email: "audit-library@system.invalid",
   id: "system:audit-library",
   name: "Stealth audit library",
@@ -763,23 +762,8 @@ async function ensureStarterTemplates(database: D1Database) {
     { id: "nfpa70e_global", ...nfpa70eStarter },
     residentialCoreStarter,
   ];
-  await database.batch([
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO user
-         (id, name, email, emailVerified, createdAt, updatedAt, role, banned,
-          banReason)
-         VALUES (?, ?, ?, 1, ?, ?, 'system', 1, ?)`,
-      )
-      .bind(
-        auditLibraryActor.id,
-        auditLibraryActor.name,
-        auditLibraryActor.email,
-        auditLibraryActor.createdAt,
-        auditLibraryActor.createdAt,
-        "Reserved application actor for built-in audit templates.",
-      ),
-    ...starters.flatMap((starter) => [
+  await database.batch(
+    starters.flatMap((starter) => [
       database
         .prepare(
           `INSERT OR IGNORE INTO audit_template_families
@@ -819,7 +803,7 @@ async function ensureStarterTemplates(database: D1Database) {
         )
         .bind(auditLibraryActor.id, starter.id),
     ]),
-  ]);
+  );
 }
 
 async function findTemplate(
@@ -1111,11 +1095,11 @@ function toTemplate(row: TemplateRow) {
     id: row.id,
     name: row.name,
     savedAt: row.version_created_at,
-    savedBy: {
-      email: row.version_created_by_email,
-      id: row.version_created_by_id,
-      name: row.version_created_by_name,
-    },
+    savedBy: templateActor(
+      row.version_created_by_id,
+      row.version_created_by_name,
+      row.version_created_by_email,
+    ),
     scope: row.scope,
     status: row.status,
     updatedAt: row.updated_at,
@@ -1126,13 +1110,17 @@ function toTemplate(row: TemplateRow) {
 function toTemplateVersion(row: TemplateVersionRow) {
   return {
     createdAt: row.created_at,
-    createdBy: {
-      email: row.created_by_email,
-      id: row.created_by_id,
-      name: row.created_by_name,
-    },
+    createdBy: templateActor(
+      row.created_by_id,
+      row.created_by_name,
+      row.created_by_email,
+    ),
     version: row.version,
   };
+}
+
+function templateActor(id: string, name: string, email: string) {
+  return id === auditLibraryActor.id ? auditLibraryActor : { email, id, name };
 }
 
 function toAudit(row: AuditRow) {
