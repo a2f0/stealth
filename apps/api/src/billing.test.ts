@@ -306,6 +306,66 @@ describe("billing", () => {
     }
   });
 
+  it("only lets verified Checkout replace the current subscription", async () => {
+    const fixture = await createFixture();
+    const current = subscriptionEvent(
+      "evt_current_subscription",
+      100,
+      "active",
+      2,
+      "sub_current",
+    );
+    const checkoutSubscription = subscriptionEvent(
+      "unused_checkout_subscription_event",
+      101,
+      "active",
+      3,
+      "sub_checkout",
+    );
+    const checkout = {
+      created: 101,
+      data: {
+        object: {
+          client_reference_id: organizationId,
+          subscription: "sub_checkout",
+        },
+      },
+      id: "evt_checkout_completed",
+      type: "checkout.session.completed",
+    };
+    const old = subscriptionEvent(
+      "evt_old_subscription",
+      102,
+      "canceled",
+      1,
+      "sub_old",
+    );
+    let stripeSubscription = current.data.object;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(stripeSubscription)) as typeof fetch;
+    try {
+      expect((await sendWebhook(fixture, current)).status).toBe(200);
+      stripeSubscription = checkoutSubscription.data.object;
+      expect((await sendWebhook(fixture, checkout)).status).toBe(200);
+      stripeSubscription = old.data.object;
+      expect((await sendWebhook(fixture, old)).status).toBe(200);
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_status, stripe_subscription_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        stripe_status: "active",
+        stripe_subscription_id: "sub_checkout",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("asks Stripe to retry a duplicate webhook still in progress", async () => {
     const fixture = await createFixture();
     const event = subscriptionEvent(
@@ -586,6 +646,23 @@ describe("billing", () => {
       { id: "must-retain" },
     ]);
   });
+
+  it("keeps old audit runs that are still in progress", async () => {
+    const fixture = await createFixture();
+    insertAudit(fixture.database, "active-old", organizationId, "2026-06-01");
+    fixture.database
+      .query(
+        `UPDATE audits SET status = 'in_progress', completed_at = NULL
+         WHERE id = 'active-old'`,
+      )
+      .run();
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(0);
+    expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
+      { id: "active-old" },
+    ]);
+  });
 });
 
 async function createFixture() {
@@ -632,6 +709,7 @@ function subscriptionEvent(
   created: number,
   status: string,
   quantity: number,
+  subscriptionId = "sub_test",
 ) {
   return {
     created,
@@ -639,12 +717,15 @@ function subscriptionEvent(
       object: {
         cancel_at_period_end: false,
         customer: "cus_test",
-        id: "sub_test",
+        id: subscriptionId,
         items: {
           data: [
             {
               current_period_end: 1_800_000_000,
-              id: "si_test",
+              id:
+                subscriptionId === "sub_test"
+                  ? "si_test"
+                  : `si_${subscriptionId}`,
               price: { id: proPriceId },
               quantity,
             },
@@ -661,7 +742,12 @@ function subscriptionEvent(
 
 async function sendWebhook(
   fixture: Awaited<ReturnType<typeof createFixture>>,
-  event: ReturnType<typeof subscriptionEvent>,
+  event: {
+    created: number;
+    data: { object: unknown };
+    id: string;
+    type: string;
+  },
 ) {
   const payload = JSON.stringify(event);
   const timestamp = Math.floor(Date.now() / 1_000);

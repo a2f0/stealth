@@ -28,13 +28,16 @@ export async function purgeExpiredFreeAuditRuns(
          LEFT JOIN organization_billing AS billing
            ON billing.organization_id = audit.organization_id
          WHERE organization.deletedAt IS NULL
-           AND datetime(audit.created_at) < datetime(?)
+           AND audit.status = 'completed'
+           AND datetime(COALESCE(audit.completed_at, audit.updated_at)) <
+               datetime(?)
            AND NOT (
              COALESCE(billing.stripe_price_id, '') = ?
              AND COALESCE(billing.stripe_status, '') IN
                ('active', 'past_due', 'trialing')
            )
-         ORDER BY audit.created_at ASC, audit.id ASC
+         ORDER BY COALESCE(audit.completed_at, audit.updated_at) ASC,
+                  audit.id ASC
          LIMIT ?
        )
        RETURNING id`,

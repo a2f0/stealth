@@ -611,6 +611,7 @@ async function confirmCheckoutSession(
     subscriptionId,
     Math.floor(Date.now() / 1000),
     organizationId,
+    true,
   );
   if (!persisted) {
     throw new StripeApiError("Checkout did not create a subscription.", 409);
@@ -636,6 +637,7 @@ async function processStripeEvent(
         subscriptionId,
         event.created,
         organizationId,
+        true,
       );
     }
     return;
@@ -669,6 +671,7 @@ async function refreshSubscription(
   subscriptionId: string,
   eventCreated: number,
   knownOrganizationId?: string,
+  allowSubscriptionReplacement = false,
 ) {
   return withSubscriptionSyncLock(environment.DB, subscriptionId, async () => {
     const subscription = await expandedSubscription(
@@ -681,6 +684,7 @@ async function refreshSubscription(
       subscription,
       eventCreated,
       knownOrganizationId,
+      allowSubscriptionReplacement,
     );
   });
 }
@@ -703,6 +707,7 @@ async function persistSubscription(
   subscription: StripeSubscription,
   eventCreated: number,
   knownOrganizationId?: string,
+  allowSubscriptionReplacement = false,
 ) {
   const customerId = expandableId(subscription.customer);
   const organizationId =
@@ -726,7 +731,7 @@ async function persistSubscription(
   const cancelAtPeriodEnd =
     subscription.cancel_at_period_end === true ||
     subscription.cancel_at != null;
-  await environment.DB.prepare(
+  const persisted = await environment.DB.prepare(
     `INSERT INTO organization_billing
      (organization_id, stripe_customer_id, stripe_subscription_id,
       stripe_subscription_item_id, stripe_price_id, stripe_status,
@@ -752,7 +757,11 @@ async function persistSubscription(
        pending_checkout_session_id = NULL,
        pending_checkout_url = NULL,
        pending_checkout_expires_at = NULL,
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at
+     WHERE organization_billing.stripe_subscription_id IS NULL
+        OR organization_billing.stripe_subscription_id =
+           excluded.stripe_subscription_id
+        OR ? = 1`,
   )
     .bind(
       organizationId,
@@ -766,9 +775,10 @@ async function persistSubscription(
       periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
       eventCreated,
       new Date().toISOString(),
+      allowSubscriptionReplacement ? 1 : 0,
     )
     .run();
-  return true;
+  return Number(persisted.meta.changes) === 1;
 }
 
 async function claimWebhookEvent(database: D1Database, event: StripeEvent) {
