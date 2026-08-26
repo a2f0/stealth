@@ -60,6 +60,9 @@ export const requireOrganizationPluginAccess = createMiddleware<AuthEnv>(
       return next();
     }
     const session = context.get("authSession");
+    if (listsCurrentUsersTeamsAcrossOrganizations(context, session.user.id)) {
+      return filterTeamsRequiringTwoFactor(context, next);
+    }
     const requestedOrganizationIds = await organizationIdsFromRequest(context);
     if (requestedOrganizationIds.length > 1) {
       return context.json(
@@ -77,6 +80,69 @@ export const requireOrganizationPluginAccess = createMiddleware<AuthEnv>(
     return authorizeOrganization(context, next, candidates);
   },
 );
+
+function listsCurrentUsersTeamsAcrossOrganizations(
+  context: Context<AuthEnv>,
+  currentUserId: string,
+) {
+  if (
+    context.req.path !== "/api/auth/organization/list-user-teams" ||
+    context.req.method !== "GET"
+  ) {
+    return false;
+  }
+  const searchParams = new URL(context.req.url).searchParams;
+  return (
+    !searchParams.has("organizationId") &&
+    (!searchParams.has("userId") ||
+      searchParams.get("userId") === currentUserId)
+  );
+}
+
+async function filterTeamsRequiringTwoFactor(
+  context: Context<AuthEnv>,
+  next: Next,
+) {
+  const session = context.get("authSession");
+  if (session.user.twoFactorEnabled && session.session.twoFactorVerified) {
+    return next();
+  }
+  const memberships = await context.env.DB.prepare(
+    `SELECT member."organizationId", member."twoFactorRequired"
+       FROM "member"
+       JOIN "organization"
+         ON organization.id = member."organizationId"
+       WHERE member."userId" = ?
+         AND organization."deletedAt" IS NULL`,
+  )
+    .bind(session.user.id)
+    .all<{ organizationId: string; twoFactorRequired: boolean | number }>();
+  const allowedOrganizationIds = new Set(
+    memberships.results
+      .filter((membership) => !membership.twoFactorRequired)
+      .map((membership) => membership.organizationId),
+  );
+  await next();
+  const response = context.res;
+  if (!response.ok) return;
+  const teams: unknown = await response
+    .clone()
+    .json()
+    .catch(() => null);
+  if (!Array.isArray(teams)) return;
+  const filteredTeams = teams.filter(
+    (team) =>
+      isRecord(team) &&
+      allowedOrganizationIds.has(stringProperty(team, "organizationId") ?? ""),
+  );
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  context.res = new Response(JSON.stringify(filteredTeams), {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
 
 async function authorizeOrganization(
   context: Context<AuthEnv>,

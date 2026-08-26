@@ -185,6 +185,25 @@ describe("organization plugin middleware", () => {
     });
   });
 
+  it("filters protected teams from an unverified cross-organization list", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/list-user-teams",
+      null,
+      "active-org",
+      ["active-org", "protected-org"],
+      ["protected-org"],
+      {},
+      [
+        { id: "active-team", organizationId: "active-org" },
+        { id: "protected-team", organizationId: "protected-org" },
+      ],
+    );
+
+    expect(response.status).toBe(200);
+    const body: unknown = await response.json();
+    expect(body).toEqual([{ id: "active-team", organizationId: "active-org" }]);
+  });
+
   it("allows organization creation without an existing organization", async () => {
     const response = await pluginRequest(
       "/api/auth/organization/create",
@@ -266,6 +285,7 @@ function pluginRequest(
   memberships: string[],
   twoFactorRequiredOrganizations: string[],
   resourceOrganizations: ResourceOrganizations = {},
+  responseBody?: unknown,
 ) {
   const app = new Hono<{
     Bindings: Bindings;
@@ -284,7 +304,9 @@ function pluginRequest(
   });
   app.use("/api/auth/organization/*", requireOrganizationPluginAccess);
   app.all("/api/auth/organization/*", async (context) =>
-    context.json({ request: body ? await context.req.json() : null }),
+    context.json(
+      responseBody ?? { request: body ? await context.req.json() : null },
+    ),
   );
   return app.request(
     path,
@@ -327,7 +349,8 @@ function membershipDatabase(
               ? [...memberships, ...deletedMemberships]
                   .filter(
                     (organizationId) =>
-                      organizationIds.includes(organizationId) &&
+                      (organizationIds.length === 0 ||
+                        organizationIds.includes(organizationId)) &&
                       (!deletedMemberships.includes(organizationId) ||
                         !query.includes('organization."deletedAt" IS NULL')),
                   )
