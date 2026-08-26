@@ -94,16 +94,20 @@ describe("billing", () => {
     const fixture = await createFixture();
     const originalFetch = globalThis.fetch;
     const idempotencyKeys: string[] = [];
-    let releaseRequests = () => {};
-    const requestsStarted = new Promise<void>((resolve) => {
-      releaseRequests = resolve;
+    let markRequestStarted = () => {};
+    let releaseRequest = () => {};
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    const requestReleased = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
     });
     globalThis.fetch = (async (_input, init) => {
       idempotencyKeys.push(
         new Headers(init?.headers).get("Idempotency-Key") ?? "",
       );
-      if (idempotencyKeys.length === 2) releaseRequests();
-      await requestsStarted;
+      markRequestStarted();
+      await requestReleased;
       const parameters = new URLSearchParams(String(init?.body));
       return Response.json({
         expires_at: Number(parameters.get("expires_at")),
@@ -113,13 +117,24 @@ describe("billing", () => {
       });
     }) as typeof fetch;
     try {
-      const responses = await Promise.all([
-        fixture.app.request("/checkout", { method: "POST" }, fixture.bindings),
-        fixture.app.request("/checkout", { method: "POST" }, fixture.bindings),
-      ]);
-      expect(responses.map(({ status }) => status)).toEqual([200, 200]);
-      expect(new Set(idempotencyKeys).size).toBe(1);
-      expect(idempotencyKeys).toHaveLength(2);
+      const winner = fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      await requestStarted;
+      const conflict = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(conflict.status).toBe(409);
+      expect((await conflict.json()) as unknown).toEqual({
+        error: "Checkout is already being prepared. Try again shortly.",
+      });
+      releaseRequest();
+      expect((await winner).status).toBe(200);
+      expect(idempotencyKeys).toHaveLength(1);
       expect(
         fixture.database
           .query(
@@ -129,6 +144,7 @@ describe("billing", () => {
           .get(organizationId),
       ).toEqual({ pending_checkout_session_id: "cs_concurrent_test" });
     } finally {
+      releaseRequest();
       globalThis.fetch = originalFetch;
     }
   });
@@ -510,6 +526,81 @@ describe("billing", () => {
     }
   });
 
+  it("keeps the current subscription for an invalid Checkout price", async () => {
+    const fixture = await createFixture();
+    const current = subscriptionEvent(
+      "evt_price_current",
+      100,
+      "active",
+      2,
+      "sub_price_current",
+    );
+    const invalid = subscriptionEvent(
+      "unused_price_invalid",
+      101,
+      "active",
+      2,
+      "sub_price_invalid",
+      "price_other",
+    );
+    const checkout = {
+      created: 101,
+      data: {
+        object: {
+          client_reference_id: organizationId,
+          id: "cs_price_invalid",
+          subscription: "sub_price_invalid",
+        },
+      },
+      id: "evt_price_checkout",
+      type: "checkout.session.completed",
+    };
+    let stripeSubscription = current.data.object;
+    const requests: Array<{ method: string; url: string }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const request = { method: init?.method ?? "GET", url: String(input) };
+      requests.push(request);
+      if (request.method === "DELETE") {
+        return Response.json({ ...invalid.data.object, status: "canceled" });
+      }
+      return Response.json(stripeSubscription);
+    }) as typeof fetch;
+    try {
+      expect((await sendWebhook(fixture, current)).status).toBe(200);
+      reserveCheckout(fixture.database, "cs_price_invalid");
+      stripeSubscription = invalid.data.object;
+      expect((await sendWebhook(fixture, checkout)).status).toBe(200);
+      expect(
+        fixture.database
+          .query(
+            `SELECT pending_checkout_session_id, stripe_subscription_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        pending_checkout_session_id: null,
+        stripe_subscription_id: "sub_price_current",
+      });
+      expect(requests).toEqual([
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/subscriptions/sub_price_current",
+        },
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/subscriptions/sub_price_invalid",
+        },
+        {
+          method: "DELETE",
+          url: "https://api.stripe.com/v1/subscriptions/sub_price_invalid",
+        },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("asks Stripe to retry a duplicate webhook still in progress", async () => {
     const fixture = await createFixture();
     const event = subscriptionEvent(
@@ -709,7 +800,7 @@ describe("billing", () => {
     }
   });
 
-  it("reconciles every subscription when more than one batch is active", async () => {
+  it("rotates a bounded batch of subscription reconciliations", async () => {
     const fixture = await createFixture();
     const now = new Date().toISOString();
     for (let index = 0; index < 30; index += 1) {
@@ -742,6 +833,8 @@ describe("billing", () => {
       return Response.json({ id, quantity: 1 });
     }) as typeof fetch;
     try {
+      await reconcileSubscriptionSeats(fixture.bindings);
+      expect(reconciledCount(fixture.database)).toEqual({ count: 25 });
       await reconcileSubscriptionSeats(fixture.bindings);
       expect(reconciledCount(fixture.database)).toEqual({ count: 30 });
     } finally {
@@ -1101,6 +1194,7 @@ function subscriptionEvent(
   status: string,
   quantity: number,
   subscriptionId = "sub_test",
+  priceId = proPriceId,
 ) {
   return {
     created,
@@ -1117,7 +1211,7 @@ function subscriptionEvent(
                 subscriptionId === "sub_test"
                   ? "si_test"
                   : `si_${subscriptionId}`,
-              price: { id: proPriceId },
+              price: { id: priceId },
               quantity,
             },
           ],

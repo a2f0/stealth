@@ -23,6 +23,7 @@ const terminalSubscriptionStatuses = new Set([
 const webhookClaimTimeoutMilliseconds = 5 * 60 * 1000;
 const checkoutDurationSeconds = 35 * 60;
 const pendingCheckoutReconciliationLimit = 25;
+const subscriptionSeatReconciliationLimit = 25;
 const subscriptionSyncClaimSeconds = 2 * 60;
 
 type BillingEnv = {
@@ -167,34 +168,31 @@ billing.post("/checkout", async (context) => {
   const nowSeconds = Math.floor(Date.now() / 1_000);
   const pendingCheckout = activePendingCheckout(billingRecord, nowSeconds);
   if (pendingCheckout) return context.json({ url: pendingCheckout.url });
-  const claimedBilling = await claimCheckout(
+  const checkoutClaim = await claimCheckout(
     context.env.DB,
     organizationId,
     priceId,
     Math.max(1, memberCount),
     nowSeconds,
   );
-  if (isPaidBilling(claimedBilling, priceId))
-    return alreadyProResponse(context);
-  if (claimedBilling?.checkout_disabled_at)
-    return checkoutDisabledResponse(context);
-  const claimedPending = activePendingCheckout(claimedBilling, nowSeconds);
+  const record = checkoutClaim.record;
+  if (isPaidBilling(record, priceId)) return alreadyProResponse(context);
+  if (record?.checkout_disabled_at) return checkoutDisabledResponse(context);
+  const claimedPending = activePendingCheckout(record, nowSeconds);
   if (claimedPending) return context.json({ url: claimedPending.url });
   if (
-    !claimedBilling?.checkout_claim_id ||
-    !claimedBilling.checkout_claim_quantity ||
-    !claimedBilling.checkout_claim_expires_at
-  ) {
-    return context.json(
-      { error: "Checkout is already being prepared. Try again shortly." },
-      409,
-    );
-  }
+    !checkoutClaim.owned ||
+    !record?.checkout_claim_id ||
+    record.checkout_claim_id !== checkoutClaim.id ||
+    !record.checkout_claim_quantity ||
+    !record.checkout_claim_expires_at
+  )
+    return checkoutInProgressResponse(context);
   const parameters = checkoutParameters(
     context.env.CORS_ORIGIN,
     organizationId,
     priceId,
-    claimedBilling,
+    record,
     billingRecord?.stripe_customer_id,
   );
   try {
@@ -203,7 +201,7 @@ billing.post("/checkout", async (context) => {
         context.env,
         "/v1/checkout/sessions",
         parameters,
-        `checkout:${organizationId}:${claimedBilling.checkout_claim_id}`,
+        `checkout:${organizationId}:${checkoutClaim.id}`,
       ),
     );
     if (!validCreatedCheckout(checkout)) {
@@ -212,7 +210,7 @@ billing.post("/checkout", async (context) => {
     const stored = await storePendingCheckout(
       context.env.DB,
       organizationId,
-      claimedBilling.checkout_claim_id,
+      checkoutClaim.id,
       checkout,
     );
     if (!stored) {
@@ -228,7 +226,7 @@ billing.post("/checkout", async (context) => {
       context,
       cause,
       organizationId,
-      claimedBilling,
+      checkoutClaim.id,
     );
   }
 });
@@ -530,40 +528,36 @@ export async function reconcileSubscriptionSeats(
     "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
   >,
 ) {
+  const rows = await environment.DB.prepare(
+    `SELECT organization_id
+     FROM organization_billing
+     WHERE stripe_subscription_item_id IS NOT NULL
+       AND stripe_status IN ('active', 'past_due', 'trialing')
+     ORDER BY last_reconciled_at IS NOT NULL ASC,
+              last_reconciled_at ASC,
+              organization_id ASC
+     LIMIT ?`,
+  )
+    .bind(subscriptionSeatReconciliationLimit)
+    .all<{ organization_id: string }>();
   let firstFailure: unknown;
-  let afterOrganizationId = "";
-  while (true) {
-    const rows = await environment.DB.prepare(
-      `SELECT organization_id
-       FROM organization_billing
-       WHERE stripe_subscription_item_id IS NOT NULL
-         AND stripe_status IN ('active', 'past_due', 'trialing')
-         AND organization_id > ?
-       ORDER BY organization_id ASC
-       LIMIT 25`,
-    )
-      .bind(afterOrganizationId)
-      .all<{ organization_id: string }>();
-    if (rows.results.length === 0) break;
-    for (const row of rows.results) {
+  for (const row of rows.results) {
+    try {
+      await syncOrganizationSeats(environment, row.organization_id, true);
+    } catch (cause) {
+      firstFailure ??= cause;
+    } finally {
       try {
-        await syncOrganizationSeats(environment, row.organization_id, true);
+        await environment.DB.prepare(
+          `UPDATE organization_billing SET last_reconciled_at = ?
+           WHERE organization_id = ?`,
+        )
+          .bind(new Date().toISOString(), row.organization_id)
+          .run();
       } catch (cause) {
         firstFailure ??= cause;
-      } finally {
-        try {
-          await environment.DB.prepare(
-            `UPDATE organization_billing SET last_reconciled_at = ?
-             WHERE organization_id = ?`,
-          )
-            .bind(new Date().toISOString(), row.organization_id)
-            .run();
-        } catch (cause) {
-          firstFailure ??= cause;
-        }
       }
     }
-    afterOrganizationId = rows.results.at(-1)?.organization_id ?? "";
   }
   if (firstFailure !== undefined) throw firstFailure;
 }
@@ -1072,6 +1066,26 @@ async function prepareCheckoutSubscriptionReplacement(
   const matchesCurrent = existing?.stripe_subscription_id === subscription.id;
   const matchesPending =
     existing?.pending_checkout_session_id === checkoutSessionId;
+  const hasExpectedProEntitlement = Boolean(
+    environment.STRIPE_PRO_PRICE_ID &&
+      paidStatuses.has(subscription.status) &&
+      subscription.items.data.some(
+        (item) => item.price.id === environment.STRIPE_PRO_PRICE_ID,
+      ),
+  );
+  if (!hasExpectedProEntitlement) {
+    if (!matchesCurrent) {
+      await cancelUntrackedSubscription(environment, subscription);
+    }
+    if (matchesPending) {
+      await clearPendingCheckoutIfCurrent(
+        environment.DB,
+        organizationId,
+        checkoutSessionId,
+      );
+    }
+    return false;
+  }
   if (
     existing?.checkout_disabled_at ||
     (!matchesPending &&
@@ -1432,7 +1446,7 @@ async function claimCheckout(
 ) {
   const claimId = crypto.randomUUID();
   const expiresAt = nowSeconds + checkoutDurationSeconds;
-  await database
+  const claimed = await database
     .prepare(
       `INSERT INTO organization_billing
        (organization_id, checkout_claim_id, checkout_claim_quantity,
@@ -1463,7 +1477,14 @@ async function claimCheckout(
       nowSeconds,
     )
     .run();
-  return findBilling(database, organizationId);
+  const record = await findBilling(database, organizationId);
+  return {
+    id: claimId,
+    owned:
+      Number(claimed.meta.changes) === 1 &&
+      record?.checkout_claim_id === claimId,
+    record,
+  };
 }
 
 async function releaseCheckoutClaim(
@@ -1933,17 +1954,13 @@ async function checkoutCreationError(
   context: Context<BillingEnv>,
   cause: unknown,
   organizationId: string,
-  claim: BillingRow,
+  claimId: string,
 ) {
   if (
     cause instanceof StripeConfigurationError ||
     (cause instanceof StripeApiError && cause.status < 500)
   ) {
-    await releaseCheckoutClaim(
-      context.env.DB,
-      organizationId,
-      claim.checkout_claim_id ?? "",
-    );
+    await releaseCheckoutClaim(context.env.DB, organizationId, claimId);
   }
   return billingError(context, cause);
 }
@@ -1954,6 +1971,13 @@ function checkoutDisabledResponse(context: Context<BillingEnv>) {
       error:
         "Checkout is unavailable while this organization is being deleted.",
     },
+    409,
+  );
+}
+
+function checkoutInProgressResponse(context: Context<BillingEnv>) {
+  return context.json(
+    { error: "Checkout is already being prepared. Try again shortly." },
     409,
   );
 }
