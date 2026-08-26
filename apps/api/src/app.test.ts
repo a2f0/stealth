@@ -1,6 +1,7 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { app } from "./app";
+import { createAuth } from "./auth";
 import type { Bindings } from "./types";
 
 describe("api", () => {
@@ -152,18 +153,180 @@ describe("api", () => {
     const body: unknown = await response.json();
     expect(body).toEqual({ error: "Authentication required." });
   });
+
+  it("blocks protected mutations from an unverified authenticated session", async () => {
+    const fixture = await protectedOrganizationFixture();
+    const headers = {
+      "content-type": "application/json",
+      cookie: fixture.cookie,
+      origin: "https://app.test",
+    };
+
+    const customMutation = await app.request(
+      `/api/organization-settings/people/${fixture.memberId}/two-factor-required`,
+      {
+        body: JSON.stringify({ required: false }),
+        headers,
+        method: "PATCH",
+      },
+      fixture.bindings,
+    );
+    expect(customMutation.status).toBe(403);
+    expect(await customMutation.json()).toMatchObject({
+      code: "TWO_FACTOR_SETUP_REQUIRED",
+    });
+    expect(
+      fixture.database
+        .query("SELECT twoFactorRequired FROM member WHERE id = ?")
+        .get(fixture.memberId),
+    ).toEqual({ twoFactorRequired: 1 });
+
+    const pluginMutation = await app.request(
+      "/api/auth/organization/leave",
+      {
+        body: JSON.stringify({ organizationId: fixture.organizationId }),
+        headers,
+        method: "POST",
+      },
+      fixture.bindings,
+    );
+    expect(pluginMutation.status).toBe(403);
+    expect(await pluginMutation.json()).toMatchObject({
+      code: "TWO_FACTOR_SETUP_REQUIRED",
+    });
+    expect(
+      fixture.database
+        .query(
+          "SELECT COUNT(*) AS count FROM member WHERE id = ? AND organizationId = ?",
+        )
+        .get(fixture.memberId, fixture.organizationId),
+    ).toEqual({ count: 1 });
+  });
 });
 
-function authBindings(): Bindings {
+function authBindings(
+  database: Database = new Database(":memory:"),
+  useD1 = false,
+): Bindings {
   return {
     AUTH_EMAIL_FROM: "security@auth.tearleads.com",
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: new Database(":memory:") as unknown as D1Database,
-    EMAIL: {} as SendEmail,
+    DB: useD1 ? toD1(database) : (database as unknown as D1Database),
+    EMAIL: {
+      send: async () => ({ messageId: "test-message" }),
+    } as unknown as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: {} as R2Bucket,
+  };
+}
+
+interface TestStatement {
+  execute: () => unknown;
+}
+
+function toD1(database: Database) {
+  return {
+    batch: async (statements: TestStatement[]) =>
+      statements.map((statement) => statement.execute()),
+    exec: async (query: string) => database.exec(query),
+    prepare: (query: string) => {
+      let values: SQLQueryBindings[] = [];
+      const statement = {
+        all: async () => {
+          const results = database.query(query).all(...values);
+          const meta = database
+            .query(
+              `SELECT changes() AS changes,
+                      last_insert_rowid() AS last_row_id`,
+            )
+            .get() as { changes: number; last_row_id: number };
+          return { meta, results, success: true };
+        },
+        bind: (...nextValues: SQLQueryBindings[]) => {
+          values = nextValues;
+          return statement;
+        },
+        execute: () => run(),
+        first: async () => database.query(query).get(...values),
+        raw: async () => database.query(query).values(...values),
+        run: async () => run(),
+      };
+      const run = () => {
+        const result = database.query(query).run(...values);
+        return {
+          meta: { changes: result.changes },
+          results: [],
+          success: true,
+        };
+      };
+      return statement;
+    },
+  } as unknown as D1Database;
+}
+
+async function protectedOrganizationFixture() {
+  const database = new Database(":memory:");
+  for (const filename of [
+    "0003_create_auth.sql",
+    "0004_create_organizations.sql",
+    "0008_keep_organization_defaults_valid.sql",
+    "0010_create_organization_groups.sql",
+    "0011_soft_delete_organizations.sql",
+    "0020_add_two_factor_authentication.sql",
+    "0021_track_terms_acceptance.sql",
+    "0031_require_member_two_factor.sql",
+  ]) {
+    database.exec(
+      await Bun.file(
+        new URL(`../migrations/${filename}`, import.meta.url),
+      ).text(),
+    );
+  }
+  const bindings = authBindings(database, true);
+  const pending: Promise<unknown>[] = [];
+  const auth = createAuth(bindings, (promise) => pending.push(promise));
+  const authRequest = (path: string, body: Record<string, unknown>) =>
+    auth.handler(
+      new Request(`https://api.test/api/auth${path}`, {
+        body: JSON.stringify(body),
+        headers: {
+          "content-type": "application/json",
+          origin: "https://app.test",
+        },
+        method: "POST",
+      }),
+    );
+  const email = "protected@example.com";
+  const password = "correct horse battery staple";
+  const signUp = await authRequest("/sign-up/email", {
+    email,
+    name: "Protected Person",
+    password,
+    termsAccepted: true,
+  });
+  expect(signUp.status).toBe(200);
+  await Promise.all(pending);
+  const signIn = await authRequest("/sign-in/email", { email, password });
+  expect(signIn.status).toBe(200);
+  const cookie = signIn.headers.get("set-cookie");
+  expect(cookie).toBeTruthy();
+  const membership = database
+    .query(
+      `SELECT member.id AS memberId, member.organizationId
+       FROM member JOIN user ON user.id = member.userId
+       WHERE user.email = ?`,
+    )
+    .get(email) as { memberId: string; organizationId: string };
+  database
+    .query("UPDATE member SET twoFactorRequired = 1 WHERE id = ?")
+    .run(membership.memberId);
+  return {
+    bindings,
+    cookie: cookie ?? "",
+    database,
+    ...membership,
   };
 }

@@ -47,7 +47,6 @@ const organizationPluginAccessExemptPaths = new Set([
   "/api/auth/organization/check-slug",
   "/api/auth/organization/create",
   "/api/auth/organization/get-invitation",
-  "/api/auth/organization/leave",
   "/api/auth/organization/list",
   "/api/auth/organization/list-user-invitations",
   "/api/auth/organization/reject-invitation",
