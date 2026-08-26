@@ -29,6 +29,7 @@ interface TemplateListResponse {
     definition: AuditDefinition;
     id: string;
     name: string;
+    savedBy: { email: string; id: string; name: string };
     scope: "global" | "organization";
     version: number;
   }>;
@@ -500,13 +501,30 @@ describe("audits", () => {
     );
     expect(starterResponse.status).toBe(200);
     const starterBody = (await starterResponse.json()) as TemplateListResponse;
-    expect(starterBody.templates).toHaveLength(1);
-    expect(starterBody.templates[0]).toMatchObject({
+    expect(starterBody.templates).toHaveLength(2);
+    const nfpaStarter = starterBody.templates.find(
+      ({ id }) => id === "nfpa70e_global",
+    );
+    expect(nfpaStarter).toMatchObject({
       id: "nfpa70e_global",
       name: "NFPA 70E readiness checklist",
       scope: "global",
     });
-    expect(starterBody.templates[0]?.definition.sections).toHaveLength(6);
+    expect(nfpaStarter?.definition.sections).toHaveLength(6);
+    const residentialStarter = starterBody.templates.find(
+      ({ id }) => id === "us_residential_core_global",
+    );
+    expect(residentialStarter).toMatchObject({
+      name: "U.S. residential construction — comprehensive baseline",
+      scope: "global",
+    });
+    expect(residentialStarter?.definition.sections.length).toBeGreaterThan(15);
+    expect(
+      residentialStarter?.definition.sections.reduce(
+        (count, section) => count + section.items.length,
+        0,
+      ),
+    ).toBeGreaterThanOrEqual(225);
 
     const created = await jsonRequest<TemplateResponse>(
       fixture,
@@ -1639,6 +1657,96 @@ describe("audits", () => {
     });
   });
 
+  it("attributes built-in templates to a durable system actor", async () => {
+    const fixture = await createFixture();
+    const bookmarked = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/templates/us_residential_core_global",
+      "GET",
+    );
+    expect(bookmarked.response.status).toBe(200);
+    expect(bookmarked.body.template.name).toBe(
+      "U.S. residential construction — comprehensive baseline",
+    );
+
+    const firstOrganization = await jsonRequest<TemplateListResponse>(
+      fixture,
+      "/templates",
+      "GET",
+    );
+    expect(firstOrganization.response.status).toBe(200);
+
+    const otherOrganization = await jsonRequest<TemplateListResponse>(
+      fixture,
+      "/templates",
+      "GET",
+      undefined,
+      { organizationId: "org_user-2", userId: "user-2" },
+    );
+    const builtIns = otherOrganization.body.templates.filter(({ id }) =>
+      ["nfpa70e_global", "us_residential_core_global"].includes(id),
+    );
+    expect(builtIns).toHaveLength(2);
+    for (const template of builtIns) {
+      expect(template.savedBy).toEqual({
+        email: "audit-library@system.invalid",
+        id: "system:audit-library",
+        name: "Stealth audit library",
+      });
+    }
+    expect(JSON.stringify(otherOrganization.body)).not.toContain(
+      "person@example.com",
+    );
+
+    expect(
+      fixture.database.query("DELETE FROM user WHERE id = 'user-1'").run()
+        .changes,
+    ).toBe(1);
+    expect(
+      fixture.database
+        .query(
+          `SELECT COUNT(*) AS count
+           FROM audit_template_families
+           WHERE id IN ('nfpa70e_global', 'us_residential_core_global')`,
+        )
+        .get(),
+    ).toEqual({ count: 2 });
+  });
+
+  it("seeds the audit actor despite a public email collision", async () => {
+    const database = await createLegacyDatabase();
+    await applyMigration(database, "0022_version_audit_templates.sql");
+    database
+      .query(
+        `INSERT INTO user
+         (id, name, email, emailVerified, createdAt, updatedAt, role, banned)
+         VALUES ('collision-user', 'Collision User', ?, 1, ?, ?, 'user', 0)`,
+      )
+      .run(
+        "audit-library@system.invalid",
+        "2026-08-25T12:00:00.000Z",
+        "2026-08-25T12:00:00.000Z",
+      );
+
+    await applyMigration(database, "0033_create_audit_library_actor.sql");
+
+    expect(
+      database
+        .query("SELECT id, email FROM user WHERE id = 'collision-user'")
+        .get(),
+    ).toEqual({
+      email: "audit-library@system.invalid",
+      id: "collision-user",
+    });
+    const actor = database
+      .query("SELECT email, name FROM user WHERE id = 'system:audit-library'")
+      .get() as { email: string; name: string };
+    expect(actor.name).toBe("Stealth audit library");
+    expect(actor.email).toStartWith("audit-library+");
+    expect(actor.email).toEndWith("@system.invalid");
+    expect(actor.email).not.toBe("audit-library@system.invalid");
+  });
+
   it("consolidates organization starters into one global template", async () => {
     const database = await createLegacyDatabase();
     database.exec("PRAGMA foreign_keys = ON");
@@ -1689,22 +1797,33 @@ describe("audits", () => {
       .run(definition, "2026-08-21T12:00:00.000Z", "2026-08-21T12:00:00.000Z");
 
     await applyMigration(database, "0023_make_nfpa70e_template_global.sql");
+    await applyMigration(database, "0033_create_audit_library_actor.sql");
 
     expect(
       database
         .query(
-          `SELECT id, scope, organization_id
+          `SELECT id, scope, organization_id, created_by
            FROM audit_template_families
            WHERE id GLOB 'nfpa70e_*'`,
         )
         .all(),
     ).toEqual([
       {
+        created_by: "system:audit-library",
         id: "nfpa70e_global",
         organization_id: null,
         scope: "global",
       },
     ]);
+    expect(
+      database
+        .query(
+          `SELECT created_by
+           FROM audit_template_versions
+           WHERE id = 'nfpa70e_global:v1'`,
+        )
+        .get(),
+    ).toEqual({ created_by: "system:audit-library" });
     expect(
       database
         .query(
@@ -1731,6 +1850,7 @@ async function createFixture() {
   await applyMigration(database, "0029_tombstone_cascaded_audit_images.sql");
   await applyMigration(database, "0030_queue_deleted_objects.sql");
   await applyMigration(database, "0032_create_billing.sql");
+  await applyMigration(database, "0033_create_audit_library_actor.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,

@@ -14,6 +14,7 @@ import {
 import type { AuthVariables } from "./authMiddleware";
 import { freeFormTemplateLimit, organizationTemplateLimit } from "./billing";
 import { nfpa70eStarter } from "./nfpa70eStarter";
+import { residentialCoreStarter } from "./residentialAuditLibrary";
 import type { Bindings } from "./types";
 
 const audits = new Hono<{
@@ -124,10 +125,15 @@ const templateSelect = `
 
 const auditRunPageSize = 100;
 
+const auditLibraryActor = {
+  email: "audit-library@system.invalid",
+  id: "system:audit-library",
+  name: "Stealth audit library",
+} as const;
+
 audits.get("/templates", async (context) => {
   const organizationId = context.get("organizationId");
-  const userId = context.get("authSession").user.id;
-  await ensureStarterTemplate(context.env.DB, userId);
+  await ensureStarterTemplates(context.env.DB);
   const result = await context.env.DB.prepare(
     `${templateSelect}
      WHERE family.scope = 'global' OR family.organization_id = ?
@@ -750,35 +756,52 @@ async function addTemplateVersion(
   ]);
 }
 
-async function ensureStarterTemplate(database: D1Database, userId: string) {
-  const id = "nfpa70e_global";
+async function ensureStarterTemplates(database: D1Database) {
+  const starters = [
+    { id: "nfpa70e_global", ...nfpa70eStarter },
+    residentialCoreStarter,
+  ];
+  const seeded = await database
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM audit_template_families AS family
+       JOIN audit_template_versions AS version
+         ON version.template_id = family.id AND version.version = 1
+       WHERE family.id IN (?, ?)`,
+    )
+    .bind(...starters.map(({ id }) => id))
+    .first<{ count: number }>();
+  if (Number(seeded?.count) === starters.length) return;
+
   const now = new Date().toISOString();
-  await database.batch([
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO audit_template_families
-         (id, scope, organization_id, current_version, created_by, created_at,
-          updated_at)
-         VALUES (?, 'global', NULL, 1, ?, ?, ?)`,
-      )
-      .bind(id, userId, now, now),
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO audit_template_versions
-         (id, template_id, version, name, description, definition, status,
-          created_by, created_at)
-         VALUES (?, ?, 1, ?, ?, ?, 'published', ?, ?)`,
-      )
-      .bind(
-        `${id}:v1`,
-        id,
-        nfpa70eStarter.name,
-        nfpa70eStarter.description,
-        JSON.stringify(nfpa70eStarter.definition),
-        userId,
-        now,
-      ),
-  ]);
+  await database.batch(
+    starters.flatMap((starter) => [
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO audit_template_families
+           (id, scope, organization_id, current_version, created_by,
+            created_at, updated_at)
+           VALUES (?, 'global', NULL, 1, ?, ?, ?)`,
+        )
+        .bind(starter.id, auditLibraryActor.id, now, now),
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO audit_template_versions
+           (id, template_id, version, name, description, definition, status,
+            created_by, created_at)
+           VALUES (?, ?, 1, ?, ?, ?, 'published', ?, ?)`,
+        )
+        .bind(
+          `${starter.id}:v1`,
+          starter.id,
+          starter.name,
+          starter.description,
+          JSON.stringify(starter.definition),
+          auditLibraryActor.id,
+          now,
+        ),
+    ]),
+  );
 }
 
 async function findTemplate(
@@ -787,6 +810,7 @@ async function findTemplate(
   id: string,
   version?: number,
 ) {
+  await ensureStarterTemplates(database);
   const versionJoin = version
     ? "version.version = ?"
     : "version.version = family.current_version";
@@ -1070,11 +1094,11 @@ function toTemplate(row: TemplateRow) {
     id: row.id,
     name: row.name,
     savedAt: row.version_created_at,
-    savedBy: {
-      email: row.version_created_by_email,
-      id: row.version_created_by_id,
-      name: row.version_created_by_name,
-    },
+    savedBy: templateActor(
+      row.version_created_by_id,
+      row.version_created_by_name,
+      row.version_created_by_email,
+    ),
     scope: row.scope,
     status: row.status,
     updatedAt: row.updated_at,
@@ -1085,13 +1109,17 @@ function toTemplate(row: TemplateRow) {
 function toTemplateVersion(row: TemplateVersionRow) {
   return {
     createdAt: row.created_at,
-    createdBy: {
-      email: row.created_by_email,
-      id: row.created_by_id,
-      name: row.created_by_name,
-    },
+    createdBy: templateActor(
+      row.created_by_id,
+      row.created_by_name,
+      row.created_by_email,
+    ),
     version: row.version,
   };
+}
+
+function templateActor(id: string, name: string, email: string) {
+  return id === auditLibraryActor.id ? auditLibraryActor : { email, id, name };
 }
 
 function toAudit(row: AuditRow) {
