@@ -12,6 +12,8 @@ CREATE TABLE organization_billing (
   current_period_end TEXT,
   stripe_event_created INTEGER NOT NULL DEFAULT 0,
   checkout_claim_id TEXT,
+  checkout_claim_customer_id TEXT,
+  checkout_claim_price_id TEXT,
   checkout_claim_quantity INTEGER CHECK (checkout_claim_quantity > 0),
   checkout_claim_expires_at INTEGER,
   checkout_disabled_at TEXT,

@@ -36,8 +36,10 @@ type BillingEnv = {
 
 interface BillingRow {
   cancel_at_period_end: number;
+  checkout_claim_customer_id: string | null;
   checkout_claim_expires_at: number | null;
   checkout_claim_id: string | null;
+  checkout_claim_price_id: string | null;
   checkout_claim_quantity: number | null;
   checkout_disabled_at: string | null;
   checkout_disabled_expires_at: number | null;
@@ -187,8 +189,8 @@ billing.post("/checkout", async (context) => {
   if (claimedPending) return context.json({ url: claimedPending.url });
   if (
     !checkoutClaim.owned ||
-    !record?.checkout_claim_id ||
-    record.checkout_claim_id !== checkoutClaim.id ||
+    record?.checkout_claim_id !== checkoutClaim.id ||
+    !record.checkout_claim_price_id ||
     !record.checkout_claim_quantity ||
     !record.checkout_claim_expires_at
   )
@@ -196,9 +198,8 @@ billing.post("/checkout", async (context) => {
   const parameters = checkoutParameters(
     context.env.CORS_ORIGIN,
     organizationId,
-    priceId,
+    record.checkout_claim_price_id,
     record,
-    billingRecord?.stripe_customer_id,
   );
   try {
     const checkout = parseStripeCheckoutSession(
@@ -1289,6 +1290,14 @@ async function persistSubscription(
              WHEN pending_checkout_session_id = ? THEN NULL
              ELSE checkout_claim_id
            END,
+           checkout_claim_customer_id = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE checkout_claim_customer_id
+           END,
+           checkout_claim_price_id = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE checkout_claim_price_id
+           END,
            checkout_claim_quantity = CASE
              WHEN pending_checkout_session_id = ? THEN NULL
              ELSE checkout_claim_quantity
@@ -1325,6 +1334,8 @@ async function persistSubscription(
         cancelAtPeriodEnd ? 1 : 0,
         periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
         eventCreated,
+        checkoutSessionId,
+        checkoutSessionId,
         checkoutSessionId,
         checkoutSessionId,
         checkoutSessionId,
@@ -1492,7 +1503,9 @@ async function findBilling(database: D1Database, organizationId: string) {
             stripe_subscription_item_id, stripe_price_id, stripe_status,
             seat_quantity, cancel_at_period_end, current_period_end,
             stripe_event_created, checkout_claim_id,
-            checkout_claim_quantity, checkout_claim_expires_at,
+            checkout_claim_customer_id, checkout_claim_price_id,
+            checkout_claim_quantity,
+            checkout_claim_expires_at,
             checkout_disabled_at, checkout_disabled_expires_at,
             pending_checkout_session_id, pending_checkout_url,
             pending_checkout_expires_at, last_reconciled_at, updated_at
@@ -1527,6 +1540,8 @@ async function disableCheckoutForDeletion(
          checkout_disabled_expires_at =
            excluded.checkout_disabled_expires_at,
          checkout_claim_id = NULL,
+         checkout_claim_customer_id = NULL,
+         checkout_claim_price_id = NULL,
          checkout_claim_quantity = NULL,
          checkout_claim_expires_at = NULL,
          updated_at = excluded.updated_at
@@ -1539,7 +1554,9 @@ async function disableCheckoutForDeletion(
                  stripe_subscription_item_id, stripe_price_id, stripe_status,
                  seat_quantity, cancel_at_period_end, current_period_end,
                  stripe_event_created, checkout_claim_id,
-                 checkout_claim_quantity, checkout_claim_expires_at,
+                 checkout_claim_customer_id, checkout_claim_price_id,
+                 checkout_claim_quantity,
+                 checkout_claim_expires_at,
                  checkout_disabled_at, checkout_disabled_expires_at,
                  pending_checkout_session_id,
                  pending_checkout_url, pending_checkout_expires_at,
@@ -1616,11 +1633,15 @@ async function claimCheckout(
   const claimed = await database
     .prepare(
       `INSERT INTO organization_billing
-       (organization_id, checkout_claim_id, checkout_claim_quantity,
+       (organization_id, checkout_claim_id, checkout_claim_customer_id,
+        checkout_claim_price_id, checkout_claim_quantity,
         checkout_claim_expires_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)
+       VALUES (?, ?, NULL, ?, ?, ?, ?)
        ON CONFLICT (organization_id) DO UPDATE SET
          checkout_claim_id = excluded.checkout_claim_id,
+         checkout_claim_customer_id =
+           organization_billing.stripe_customer_id,
+         checkout_claim_price_id = excluded.checkout_claim_price_id,
          checkout_claim_quantity = excluded.checkout_claim_quantity,
          checkout_claim_expires_at = excluded.checkout_claim_expires_at,
          checkout_disabled_at = NULL,
@@ -1644,6 +1665,7 @@ async function claimCheckout(
     .bind(
       organizationId,
       claimId,
+      priceId,
       quantity,
       expiresAt,
       new Date().toISOString(),
@@ -1654,13 +1676,25 @@ async function claimCheckout(
     )
     .run();
   const record = await findBilling(database, organizationId);
+  const reusableClaimId = activeCheckoutClaimId(record, nowSeconds);
   return {
-    id: claimId,
+    id: reusableClaimId ?? claimId,
     owned:
-      Number(claimed.meta.changes) === 1 &&
-      record?.checkout_claim_id === claimId,
+      (Number(claimed.meta.changes) === 1 &&
+        record?.checkout_claim_id === claimId) ||
+      reusableClaimId !== null,
     record,
   };
+}
+
+function activeCheckoutClaimId(record: BillingRow | null, nowSeconds: number) {
+  return record?.checkout_claim_id &&
+    record.checkout_claim_price_id &&
+    record.checkout_claim_quantity &&
+    record.checkout_claim_expires_at &&
+    record.checkout_claim_expires_at > nowSeconds
+    ? record.checkout_claim_id
+    : null;
 }
 
 async function checkoutState(database: D1Database, organizationId: string) {
@@ -1718,6 +1752,8 @@ async function releaseCheckoutClaim(
     .prepare(
       `UPDATE organization_billing
        SET checkout_claim_id = NULL,
+           checkout_claim_customer_id = NULL,
+           checkout_claim_price_id = NULL,
            checkout_claim_quantity = NULL,
            checkout_claim_expires_at = NULL,
            updated_at = ?
@@ -1756,7 +1792,6 @@ function checkoutParameters(
   organizationId: string,
   priceId: string,
   claim: BillingRow,
-  customerId: string | null | undefined,
 ) {
   const parameters = new URLSearchParams({
     "line_items[0][price]": priceId,
@@ -1769,7 +1804,9 @@ function checkoutParameters(
     mode: "subscription",
     success_url: `${origin}/organization/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
   });
-  if (customerId) parameters.set("customer", customerId);
+  if (claim.checkout_claim_customer_id) {
+    parameters.set("customer", claim.checkout_claim_customer_id);
+  }
   return parameters;
 }
 
@@ -1784,7 +1821,9 @@ async function storePendingCheckout(
       `UPDATE organization_billing
        SET pending_checkout_session_id = ?, pending_checkout_url = ?,
            pending_checkout_expires_at = ?, checkout_claim_id = NULL,
-           checkout_claim_quantity = NULL, checkout_claim_expires_at = NULL,
+           checkout_claim_customer_id = NULL,
+           checkout_claim_price_id = NULL, checkout_claim_quantity = NULL,
+           checkout_claim_expires_at = NULL,
            updated_at = ?
        WHERE organization_id = ?
          AND (checkout_claim_id = ? OR pending_checkout_session_id = ?)`,

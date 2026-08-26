@@ -133,11 +133,12 @@ describe("billing", () => {
     }
   });
 
-  it("deduplicates concurrent Checkout creation with one claim", async () => {
+  it("reuses one idempotency key for concurrent Checkout creation", async () => {
     const fixture = await createFixture();
     const originalFetch = globalThis.fetch;
     const idempotencyKeys: string[] = [];
     let markRequestStarted = () => {};
+    let markBothRequestsStarted = () => {};
     let releaseRequest = () => {};
     const requestStarted = new Promise<void>((resolve) => {
       markRequestStarted = resolve;
@@ -145,11 +146,15 @@ describe("billing", () => {
     const requestReleased = new Promise<void>((resolve) => {
       releaseRequest = resolve;
     });
+    const bothRequestsStarted = new Promise<void>((resolve) => {
+      markBothRequestsStarted = resolve;
+    });
     globalThis.fetch = (async (_input, init) => {
       idempotencyKeys.push(
         new Headers(init?.headers).get("Idempotency-Key") ?? "",
       );
       markRequestStarted();
+      if (idempotencyKeys.length === 2) markBothRequestsStarted();
       await requestReleased;
       const parameters = new URLSearchParams(String(init?.body));
       return Response.json({
@@ -166,18 +171,17 @@ describe("billing", () => {
         fixture.bindings,
       );
       await requestStarted;
-      const conflict = await fixture.app.request(
+      const repeated = fixture.app.request(
         "/checkout",
         { method: "POST" },
         fixture.bindings,
       );
-      expect(conflict.status).toBe(409);
-      expect((await conflict.json()) as unknown).toEqual({
-        error: "Checkout is already being prepared. Try again shortly.",
-      });
+      await bothRequestsStarted;
       releaseRequest();
       expect((await winner).status).toBe(200);
-      expect(idempotencyKeys).toHaveLength(1);
+      expect((await repeated).status).toBe(200);
+      expect(idempotencyKeys).toHaveLength(2);
+      expect(new Set(idempotencyKeys).size).toBe(1);
       expect(
         fixture.database
           .query(
@@ -188,6 +192,80 @@ describe("billing", () => {
       ).toEqual({ pending_checkout_session_id: "cs_concurrent_test" });
     } finally {
       releaseRequest();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("retries an ambiguous Checkout failure with the same claim", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_customer_id, updated_at)
+         VALUES (?, 'cus_original', ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    const customers: Array<string | null> = [];
+    const idempotencyKeys: string[] = [];
+    let requestCount = 0;
+    globalThis.fetch = (async (_input, init) => {
+      requestCount += 1;
+      idempotencyKeys.push(
+        new Headers(init?.headers).get("Idempotency-Key") ?? "",
+      );
+      customers.push(new URLSearchParams(String(init?.body)).get("customer"));
+      if (requestCount === 1) {
+        return Response.json(
+          { error: { message: "Stripe temporarily unavailable" } },
+          { status: 500 },
+        );
+      }
+      return Response.json({
+        expires_at: Math.floor(Date.now() / 1_000) + 1_800,
+        id: "cs_ambiguous_retry",
+        status: "open",
+        url: "https://checkout.stripe.test/ambiguous-retry",
+      });
+    }) as typeof fetch;
+    console.error = () => {};
+    try {
+      const failed = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(failed.status).toBe(502);
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_claim_id, checkout_claim_price_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toMatchObject({
+        checkout_claim_id: expect.any(String),
+        checkout_claim_price_id: proPriceId,
+      });
+      fixture.database
+        .query(
+          `UPDATE organization_billing SET stripe_customer_id = 'cus_new'
+           WHERE organization_id = ?`,
+        )
+        .run(organizationId);
+
+      const retried = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(retried.status).toBe(200);
+      expect(idempotencyKeys).toHaveLength(2);
+      expect(new Set(idempotencyKeys).size).toBe(1);
+      expect(customers).toEqual(["cus_original", "cus_original"]);
+    } finally {
+      console.error = originalConsoleError;
       globalThis.fetch = originalFetch;
     }
   });
