@@ -460,7 +460,7 @@ const sources: SourceEntry[] = [
       "Use the edition adopted by the authority having jurisdiction. NFPA content is copyrighted and is referenced rather than reproduced.",
     reviewedAt,
     title: "NFPA 70 — National Electrical Code",
-    url: "https://link.nfpa.org/all-publications/655/",
+    url: "https://link.nfpa.org/all-publications/70/2026",
     version: "Edition adopted by the authority having jurisdiction",
   },
   {
@@ -1642,7 +1642,7 @@ const sections: ResidentialSection[] = [
         hazards: ["electrical", "fall"],
         id: "res-fall-015",
         prompt:
-          "Ladders, scaffolds, lifts, and workers maintain required clearance from energized overhead conductors.",
+          "Ladders use nonconductive side rails where contact with exposed energized equipment is possible, and scaffolds maintain required clearance from energized power lines.",
         sourceRefs: [
           ref("osha-1926-ladders", "1926.1053(b)(12)"),
           ref("osha-1926-scaffolds", "1926.451(f)(6)"),
