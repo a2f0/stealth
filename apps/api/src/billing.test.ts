@@ -356,6 +356,40 @@ describe("billing", () => {
     }
   });
 
+  it("fails closed when Stripe cannot find a subscription to cancel", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_subscription_id,
+          stripe_subscription_item_id, stripe_price_id, stripe_status,
+          updated_at)
+         VALUES (?, 'sub_wrong_account', 'si_wrong_account', ?, 'active', ?)`,
+      )
+      .run(organizationId, proPriceId, new Date().toISOString());
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(
+        { error: { message: "No such subscription" } },
+        { status: 404 },
+      )) as typeof fetch;
+    try {
+      await expect(
+        cancelOrganizationSubscription(fixture.bindings, organizationId),
+      ).rejects.toThrow("No such subscription");
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_disabled_at, stripe_status
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ checkout_disabled_at: null, stripe_status: "active" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reclaims a stale deletion lease after an interrupted worker", async () => {
     const fixture = await createFixture();
     fixture.database
@@ -1612,6 +1646,7 @@ function subscriptionEvent(
     created,
     data: {
       object: {
+        cancel_at: null,
         cancel_at_period_end: false,
         customer: "cus_test",
         id: subscriptionId,

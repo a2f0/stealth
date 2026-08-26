@@ -838,22 +838,10 @@ async function cancelStripeSubscription(
   subscriptionId: string,
 ) {
   await withSubscriptionSyncLock(environment.DB, subscriptionId, async () => {
-    let subscription: StripeSubscription;
-    try {
-      subscription = await deleteStripeSubscription(
-        environment,
-        subscriptionId,
-      );
-    } catch (cause) {
-      if (!(cause instanceof StripeApiError) || cause.status !== 404)
-        throw cause;
-      await markStoredSubscriptionCanceled(
-        environment.DB,
-        organizationId,
-        subscriptionId,
-      );
-      return;
-    }
+    const subscription = await deleteStripeSubscription(
+      environment,
+      subscriptionId,
+    );
     await persistSubscription(
       environment,
       subscription,
@@ -877,21 +865,6 @@ async function deleteStripeSubscription(
     throw new StripeApiError("Stripe did not cancel the subscription.", 502);
   }
   return subscription;
-}
-
-async function markStoredSubscriptionCanceled(
-  database: D1Database,
-  organizationId: string,
-  subscriptionId: string,
-) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET stripe_status = 'canceled', updated_at = ?
-       WHERE organization_id = ? AND stripe_subscription_id = ?`,
-    )
-    .bind(new Date().toISOString(), organizationId, subscriptionId)
-    .run();
 }
 
 async function resolvePendingCheckoutForDeletion(
@@ -2019,12 +1992,15 @@ function parseStripeSubscription(value: unknown): StripeSubscription {
     items: { data: items.map((item) => parseStripeSubscriptionItem(item)) },
     status: stripeString(record.status, "Subscription status"),
   };
-  const cancelAt = stripeOptionalInteger(
-    record.cancel_at,
-    "Subscription cancel",
-  );
-  if (cancelAt !== undefined) subscription.cancel_at = cancelAt;
-  if (record.cancel_at === null) subscription.cancel_at = null;
+  if (record.cancel_at === null) {
+    subscription.cancel_at = null;
+  } else {
+    const cancelAt = stripeOptionalInteger(
+      record.cancel_at,
+      "Subscription cancel",
+    );
+    if (cancelAt !== undefined) subscription.cancel_at = cancelAt;
+  }
   const cancelAtPeriodEnd = stripeOptionalBoolean(
     record.cancel_at_period_end,
     "Subscription cancellation",
