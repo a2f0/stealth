@@ -144,8 +144,10 @@ describe("reviewed merge guards", () => {
     expect(() => assertReviewedAncestry(128)).toThrow("Could not verify");
   });
 
-  test("uses GitHub's API without policy and with strict policy", () => {
-    expect(selectGuardedMergeStrategy(null, [])).toBe("github_api");
+  test("requires strict policy before using GitHub's API", () => {
+    expect(() => selectGuardedMergeStrategy(null, [])).toThrow(
+      "base branch is unprotected",
+    );
     expect(
       selectGuardedMergeStrategy(
         { required_status_checks: { strict: true } },

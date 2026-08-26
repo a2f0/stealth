@@ -22,12 +22,12 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
   `"feat(app): add widget"`.
 - Second argument (optional): the expected PR head SHA.
 - Third argument (optional): the expected PR base SHA. The two SHAs must be
-  supplied together. The guarded path uses exact leases on both refs when the
-  base has no policy, or GitHub's policy-enforcing API when strict up-to-date
-  checks guard the base and all requirements are already clean. The guarded
-  path never enables delayed auto-merge. An active merge queue is rejected
-  because it generates a different, unreviewed merge-group commit and may
-  override the squash method. A moved pair is rejected.
+  supplied together. The guarded path requires strict up-to-date policy on the
+  base, then uses GitHub's policy-enforcing API when all requirements are already
+  clean. Strict policy guards the reviewed base while `--match-head-commit`
+  guards the reviewed head. The guarded path never enables delayed auto-merge.
+  An unprotected base, non-strict policy, or active merge queue is rejected. A
+  moved pair is rejected.
 - `--keep-branch` (optional flag, position-independent): skip the post-merge
   cleanup (step 4) and stay on the feature branch. Use when the branch is still
   needed locally (e.g. to build a follow-up PR on top of it).
@@ -206,12 +206,13 @@ as-is.
      re-runs), and asserts the suffix is present before merging.
    - With both reviewed SHAs, fetches and ancestry-checks the reviewed base and
      requires a fresh GitHub snapshot to report the same pair. It then inspects
-     effective branch policy, then always uses GitHub's merge API with
+     effective branch policy and requires strict up-to-date checks to guard base
+     movement. It then uses GitHub's merge API with
      `--match-head-commit` so the server atomically rechecks current PR state,
-     reviews, mergeability, policy, and the reviewed head with the merge. With
-     branch policy, strict up-to-date checks must guard base movement. It never
-     enables delayed auto-merge. Pending requirements, an active merge queue,
-     and policy without strict checks all stop with setup guidance.
+     reviews, mergeability, policy, and the reviewed head with the merge. It
+     never enables delayed auto-merge. Pending requirements, an unprotected
+     base, an active merge queue, and policy without strict checks all stop with
+     setup guidance.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
    - On the unguarded compatibility path, waits up to ten minutes through an

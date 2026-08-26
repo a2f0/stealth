@@ -308,9 +308,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    uses GitHub's merge API with `--match-head-commit`, after inspecting the
    effective branch policy and freshly confirming the reviewed base. GitHub's
    transaction rechecks the PR state, reviews, mergeability, policy, and exact
-   head while merging; protected branches must also enforce strict up-to-date
-   checks so their policy guards base movement. The guarded path never arms
-   delayed auto-merge. Pending requirements, active merge queues, and weaker
+   head while merging. The base must enforce strict up-to-date checks so its
+   policy guards base movement. The guarded path never arms delayed auto-merge.
+   Pending requirements, unprotected bases, active merge queues, and weaker
    protected configurations stop safely.
 
    That skill also owns the post-merge cleanup: once GitHub confirms `MERGED`, it
@@ -393,9 +393,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
 - **The merged head and base are the reviewed pair** — `cross-agent-review`
   reports the exact head and base it reviewed. This skill re-verifies both once
   the PR is open and immediately before merge; `squash-merge` then binds GitHub's
-  merge transaction to the exact reviewed head, while strict protected-branch
-  policy guards the freshly checked base. A detected head or base change
-  therefore sends the flow back through sync and review.
+  merge transaction to the exact reviewed head, while required strict
+  protected-branch policy guards the freshly checked base. A detected head or
+  base change therefore sends the flow back through sync and review.
   (A message-only
   co-author strip keeps it: step 3 checks tree and merge-base identity, then
   re-pins `REVIEWED_SHA`.) The lone exception

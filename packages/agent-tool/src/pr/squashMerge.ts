@@ -175,9 +175,9 @@ export function selectGuardedMergeStrategy(
     );
   }
   if (classicProtection === null && ruleList.length === 0) {
-    // GitHub's merge transaction still atomically enforces the current PR
-    // state, review decision, mergeability, and expected head.
-    return "github_api";
+    throw new Error(
+      "The base branch is unprotected. Enable strict status checks (require branches to be up to date) before guarded merging so GitHub atomically guards the reviewed base.",
+    );
   }
 
   const requiredChecks = recordOf(
@@ -194,7 +194,7 @@ export function selectGuardedMergeStrategy(
   });
   if (classicStrict || rulesetStrict) return "github_api";
   throw new Error(
-    "The base branch has merge policy but does not require branches to be up to date. Enable strict status checks before guarded merging; merge queues require review of the actual merge group and are not supported.",
+    "The base branch does not require branches to be up to date. Enable strict status checks before guarded merging; merge queues require review of the actual merge group and are not supported.",
   );
 }
 
