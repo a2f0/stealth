@@ -282,6 +282,80 @@ describe("organization deletion", () => {
   });
 });
 
+describe("organization member security", () => {
+  it("lets a manager require two-factor authentication per member", async () => {
+    const fixture = await createFixture();
+    const response = await fixture
+      .app("owner-user", "owner")
+      .request("/people/target-member/two-factor-required", {
+        body: JSON.stringify({ required: true }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+
+    expect(response.status).toBe(200);
+    const responseBody: unknown = await response.json();
+    expect(responseBody).toEqual({
+      memberId: "target-member",
+      required: true,
+    });
+    expect(
+      fixture.database
+        .query("SELECT twoFactorRequired FROM member WHERE id = ?")
+        .get("target-member"),
+    ).toEqual({ twoFactorRequired: 1 });
+
+    const listing = await fixture.app("owner-user", "owner").request("/people");
+    const body = (await listing.json()) as {
+      members: Array<{
+        id: string;
+        twoFactorEnabled: boolean;
+        twoFactorRequired: boolean;
+      }>;
+    };
+    expect(body.members.find(({ id }) => id === "target-member")).toMatchObject(
+      {
+        twoFactorEnabled: false,
+        twoFactorRequired: true,
+      },
+    );
+  });
+
+  it("rejects member changes from non-managers", async () => {
+    const fixture = await createFixture();
+    const response = await fixture
+      .app("member-user", "member")
+      .request("/people/target-member/two-factor-required", {
+        body: JSON.stringify({ required: true }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      error: "Organization manager access required.",
+    });
+  });
+
+  it("does not update a member from another organization", async () => {
+    const fixture = await createFixture();
+    const response = await fixture
+      .app("owner-user", "owner")
+      .request("/people/fallback-member/two-factor-required", {
+        body: JSON.stringify({ required: true }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+
+    expect(response.status).toBe(404);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      error: "Organization member not found.",
+    });
+  });
+});
+
 async function createFixture() {
   const database = new Database(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
@@ -326,6 +400,8 @@ async function createFixture() {
   await applyMigration(database, "0010_create_organization_groups.sql");
   await applyMigration(database, "0011_soft_delete_organizations.sql");
   await applyMigration(database, "0013_track_organization_deletion_actor.sql");
+  await applyMigration(database, "0020_add_two_factor_authentication.sql");
+  await applyMigration(database, "0031_require_member_two_factor.sql");
   await applyMigration(database, "0031_create_billing.sql");
   insertSession(database, "owner-user", targetOrganizationId);
   insertSession(database, "member-user", targetOrganizationId);

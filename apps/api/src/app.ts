@@ -8,6 +8,7 @@ import {
   requireAuth,
   requireAuthOrganizationSeat,
   requireOrganization,
+  requireOrganizationPluginAccess,
   requireRole,
 } from "./authMiddleware";
 import { billing, handleStripeWebhook, syncOrganizationSeats } from "./billing";
@@ -55,7 +56,12 @@ app.post("/api/auth/organization/leave", async (context) => {
   return response;
 });
 
-app.use("/api/auth/organization/*", requireAuth, requireAuthOrganizationSeat);
+app.use(
+  "/api/auth/organization/*",
+  requireAuth,
+  requireOrganizationPluginAccess,
+  requireAuthOrganizationSeat,
+);
 app.all("/api/auth/*", (context) =>
   createAuth(context.env, (promise) =>
     context.executionCtx.waitUntil(promise),
@@ -138,6 +144,7 @@ app.route("/api/organization-groups", organizationGroups);
 app.use("/api/organization-settings", requireAuth);
 app.use("/api/organization-settings/*", requireAuth);
 app.use("/api/organization-settings/people", requireOrganization);
+app.use("/api/organization-settings/people/*", requireOrganization);
 app.use("/api/organization-settings/current", requireOrganization);
 app.route("/api/organization-settings", organizationSettings);
 
