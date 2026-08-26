@@ -383,6 +383,27 @@ describe("billing", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("stops reading oversized webhook payloads", async () => {
+    const fixture = await createFixture();
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel: () => {
+        canceled = true;
+      },
+      start(controller) {
+        controller.enqueue(new Uint8Array(256 * 1024 + 1));
+      },
+    });
+    const response = await fixture.webhook.request(
+      new Request("https://api.test/", { body, method: "POST" }),
+      undefined,
+      fixture.bindings,
+    );
+
+    expect(response.status).toBe(413);
+    expect(canceled).toBe(true);
+  });
+
   it("only lets verified Checkout replace the current subscription", async () => {
     const fixture = await createFixture();
     const current = subscriptionEvent(
@@ -797,9 +818,9 @@ describe("billing", () => {
     ).toEqual([{ id: "free-recent" }, { id: "pro-old" }]);
   });
 
-  it("drains expired Free audit history across multiple batches", async () => {
+  it("caps expired Free audit cleanup per invocation", async () => {
     const fixture = await createFixture();
-    for (let index = 0; index < 205; index += 1) {
+    for (let index = 0; index < 605; index += 1) {
       insertAudit(
         fixture.database,
         `expired-${String(index).padStart(3, "0")}`,
@@ -809,10 +830,49 @@ describe("billing", () => {
     }
     expect(
       await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
-    ).toBe(205);
+    ).toBe(500);
     expect(
       fixture.database.query("SELECT COUNT(*) AS count FROM audits").get(),
-    ).toEqual({ count: 0 });
+    ).toEqual({ count: 105 });
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(105);
+  });
+
+  it("keeps history while Checkout entitlement is unresolved", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, pending_checkout_session_id,
+          pending_checkout_url, pending_checkout_expires_at, updated_at)
+         VALUES (?, 'cs_retention_race',
+                 'https://checkout.stripe.test/retention-race', 2000000000, ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+    insertAudit(
+      fixture.database,
+      "pending-checkout-old",
+      organizationId,
+      "2026-06-01",
+    );
+
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(0);
+    fixture.database
+      .query(
+        `UPDATE organization_billing
+         SET stripe_price_id = ?, stripe_status = 'active',
+             pending_checkout_session_id = NULL,
+             pending_checkout_url = NULL,
+             pending_checkout_expires_at = NULL
+         WHERE organization_id = ?`,
+      )
+      .run(proPriceId, organizationId);
+    expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
+      { id: "pending-checkout-old" },
+    ]);
   });
 
   it("fails closed when retention billing configuration is missing", async () => {

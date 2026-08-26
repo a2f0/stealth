@@ -358,6 +358,46 @@ describe("organization plugin middleware", () => {
     });
   });
 
+  it("checks seats against the canonically authorized active team", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/list-team-members",
+      null,
+      "active-org",
+      ["active-org", "unseated-org"],
+      [],
+      { team: { "unseated-team": "unseated-org" } },
+      undefined,
+      "unseated-team",
+      { "active-org": "user-id", "unseated-org": "owner-id" },
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()) as unknown).toEqual({
+      error:
+        "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+    });
+  });
+
+  it("checks seats against a nested canonical resource", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/update",
+      { data: { teamId: "unseated-team" } },
+      "active-org",
+      ["active-org", "unseated-org"],
+      [],
+      { team: { "unseated-team": "unseated-org" } },
+      undefined,
+      null,
+      { "active-org": "user-id", "unseated-org": "owner-id" },
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()) as unknown).toEqual({
+      error:
+        "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+    });
+  });
+
   it("allows organization creation without an existing organization", async () => {
     const response = await pluginRequest(
       "/api/auth/organization/create",

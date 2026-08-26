@@ -2,6 +2,7 @@ import { freeRetentionDays } from "./billing";
 import type { Bindings } from "./types";
 
 const retentionBatchSize = 100;
+const retentionBatchesPerInvocation = 5;
 
 /** Permanently remove audit history outside a free organization's window. */
 export async function purgeExpiredFreeAuditRuns(
@@ -17,7 +18,7 @@ export async function purgeExpiredFreeAuditRuns(
     );
   }
   let deleted = 0;
-  while (true) {
+  for (let batch = 0; batch < retentionBatchesPerInvocation; batch += 1) {
     const result = await environment.DB.prepare(
       `DELETE FROM audits
        WHERE id IN (
@@ -29,6 +30,7 @@ export async function purgeExpiredFreeAuditRuns(
            ON billing.organization_id = audit.organization_id
          WHERE organization.deletedAt IS NULL
            AND audit.status = 'completed'
+           AND billing.pending_checkout_session_id IS NULL
            AND datetime(COALESCE(audit.completed_at, audit.updated_at)) <
                datetime(?)
            AND NOT (
@@ -47,4 +49,5 @@ export async function purgeExpiredFreeAuditRuns(
     deleted += result.results.length;
     if (result.results.length < retentionBatchSize) return deleted;
   }
+  return deleted;
 }

@@ -366,7 +366,10 @@ export const requireAuthOrganizationSeat = createMiddleware<AuthEnv>(
     if (listsCurrentUsersTeamsAcrossOrganizations(context, session.user.id)) {
       return next();
     }
-    const target = await authOrganizationTarget(context, session);
+    const authorizedOrganizationId = context.get("organizationId");
+    const target = authorizedOrganizationId
+      ? { conflict: false, organizationId: authorizedOrganizationId }
+      : await authOrganizationTarget(context, session);
     if (target.conflict) {
       return context.json(
         { error: "Organization selectors do not match." },
