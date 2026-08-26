@@ -18,6 +18,22 @@ describe("api", () => {
     expect(await response.text()).toBe('{"error":"Not found."}');
   });
 
+  it("exposes Retry-After to the cross-origin client", async () => {
+    const response = await app.request(
+      "/api",
+      { headers: { Origin: "https://app.test" } },
+      authBindings(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe(
+      "https://app.test",
+    );
+    expect(response.headers.get("access-control-expose-headers")).toBe(
+      "Retry-After",
+    );
+  });
+
   it("requires authentication for the inbox", async () => {
     const response = await app.request("/api/inbox", undefined, authBindings());
 
