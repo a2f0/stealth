@@ -21,12 +21,19 @@ CREATE TABLE organization_billing (
   pending_checkout_session_id TEXT UNIQUE,
   pending_checkout_url TEXT,
   pending_checkout_expires_at INTEGER,
+  pending_checkout_retry_at INTEGER,
   last_reconciled_at TEXT,
   updated_at TEXT NOT NULL
 );
 
 CREATE INDEX organization_billing_status_idx
 ON organization_billing (stripe_status, last_reconciled_at);
+
+CREATE INDEX organization_billing_pending_checkout_idx
+ON organization_billing (
+  pending_checkout_retry_at,
+  pending_checkout_expires_at
+);
 
 CREATE TABLE stripe_subscription_sync_locks (
   subscription_id TEXT NOT NULL PRIMARY KEY,

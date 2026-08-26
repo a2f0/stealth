@@ -8,6 +8,7 @@ import {
   cancelOrganizationSubscription,
   handleStripeWebhook,
   purgeStripeWebhookReceipts,
+  reconcilePendingCheckoutEntitlements,
   reconcileSubscriptionSeats,
   syncOrganizationSeats,
 } from "./billing";
@@ -86,6 +87,68 @@ describe("billing", () => {
         url: "https://checkout.stripe.test/session",
       });
       expect(checkoutRequests).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("reconciles an expired local Checkout before replacing it", async () => {
+    const fixture = await createFixture();
+    insertStalePendingCheckout(fixture.database, "cs_completed_at_expiry");
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/v1/checkout/sessions/cs_completed_at_expiry")) {
+        return Response.json({
+          client_reference_id: organizationId,
+          id: "cs_completed_at_expiry",
+          status: "complete",
+          subscription: "sub_completed_at_expiry",
+        });
+      }
+      if (url.endsWith("/v1/subscriptions/sub_completed_at_expiry")) {
+        return Response.json(
+          subscriptionEvent(
+            "evt_completed_at_expiry",
+            100,
+            "active",
+            1,
+            "sub_completed_at_expiry",
+          ).data.object,
+        );
+      }
+      throw new Error(`Unexpected Stripe request: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const response = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(response.status).toBe(409);
+      expect((await response.json()) as unknown).toEqual({
+        error: "This organization already has a Pro subscription.",
+      });
+      expect(requests).toEqual([
+        "https://api.stripe.com/v1/checkout/sessions/cs_completed_at_expiry",
+        "https://api.stripe.com/v1/subscriptions/sub_completed_at_expiry",
+      ]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT pending_checkout_session_id, stripe_subscription_id,
+                    stripe_status
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        pending_checkout_session_id: null,
+        stripe_status: "active",
+        stripe_subscription_id: "sub_completed_at_expiry",
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1259,6 +1322,80 @@ describe("billing", () => {
         { method: "POST", quantity: "1" },
       ]);
     } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("rotates failed stale Checkout reconciliations beyond the batch", async () => {
+    const fixture = await createFixture();
+    const sessions = new Map<string, string>();
+    const insertOrganization = fixture.database.query(
+      `INSERT INTO organization (id, name, slug, createdAt)
+       VALUES (?, 'Pending Checkout', ?, ?)`,
+    );
+    const insertBilling = fixture.database.query(
+      `INSERT INTO organization_billing
+       (organization_id, pending_checkout_session_id, pending_checkout_url,
+        pending_checkout_expires_at, updated_at)
+       VALUES (?, ?, 'https://checkout.stripe.test/stale', 1, ?)`,
+    );
+    for (let index = 0; index < 26; index += 1) {
+      const suffix = index === 25 ? "z" : index.toString().padStart(2, "0");
+      const target = `org_pending_${suffix}`;
+      const sessionId = `cs_pending_${suffix}`;
+      const now = new Date().toISOString();
+      insertOrganization.run(target, `pending-${suffix}`, now);
+      insertBilling.run(target, sessionId, now);
+      sessions.set(sessionId, target);
+    }
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const sessionId = String(input).split("/").at(-1) ?? "";
+      requests.push(sessionId);
+      const target = sessions.get(sessionId);
+      if (!target) throw new Error(`Unexpected Checkout session: ${sessionId}`);
+      if (sessionId !== "cs_pending_z") {
+        return Response.json(
+          { error: { message: "Stripe is unavailable" } },
+          { status: 500 },
+        );
+      }
+      return Response.json({
+        client_reference_id: target,
+        id: sessionId,
+        status: "expired",
+        subscription: null,
+      });
+    }) as typeof fetch;
+    console.error = () => {};
+
+    try {
+      await reconcilePendingCheckoutEntitlements(fixture.bindings, 100);
+      expect(requests).toHaveLength(25);
+      expect(requests).not.toContain("cs_pending_z");
+      expect(
+        fixture.database
+          .query(
+            `SELECT COUNT(*) AS count FROM organization_billing
+             WHERE pending_checkout_retry_at = 400`,
+          )
+          .get(),
+      ).toEqual({ count: 25 });
+
+      await reconcilePendingCheckoutEntitlements(fixture.bindings, 100);
+      expect(requests.at(-1)).toBe("cs_pending_z");
+      expect(
+        fixture.database
+          .query(
+            `SELECT pending_checkout_session_id
+             FROM organization_billing WHERE organization_id = 'org_pending_z'`,
+          )
+          .get(),
+      ).toEqual({ pending_checkout_session_id: null });
+    } finally {
+      console.error = originalConsoleError;
       globalThis.fetch = originalFetch;
     }
   });

@@ -23,6 +23,7 @@ const terminalSubscriptionStatuses = new Set([
 const webhookClaimTimeoutMilliseconds = 5 * 60 * 1000;
 const checkoutDurationSeconds = 35 * 60;
 const pendingCheckoutReconciliationLimit = 25;
+const pendingCheckoutRetrySeconds = 5 * 60;
 const subscriptionSeatReconciliationLimit = 25;
 const subscriptionSyncClaimSeconds = 2 * 60;
 const stripeWebhookReceiptCleanupLimit = 500;
@@ -46,6 +47,7 @@ interface BillingRow {
   current_period_end: string | null;
   last_reconciled_at: string | null;
   pending_checkout_expires_at: number | null;
+  pending_checkout_retry_at: number | null;
   pending_checkout_session_id: string | null;
   pending_checkout_url: string | null;
   seat_quantity: number;
@@ -163,29 +165,22 @@ billing.post("/checkout", async (context) => {
   const organizationId = context.get("organizationId");
   const priceId = context.env.STRIPE_PRO_PRICE_ID;
   if (!priceId) return billingUnavailableResponse(context);
-  const { billingRecord, memberCount, nowSeconds } = await checkoutState(
-    context.env.DB,
-    organizationId,
-  );
-  if (checkoutDeletionInProgress(billingRecord, nowSeconds))
-    return checkoutDisabledResponse(context);
-  if (isPaidBillingForEnvironment(billingRecord, context.env))
-    return alreadyProResponse(context);
-  const pendingCheckout = activePendingCheckout(billingRecord, nowSeconds);
-  if (pendingCheckout) return context.json({ url: pendingCheckout.url });
+  const prepared = await prepareCheckoutState(context, organizationId);
+  if (prepared instanceof Response) return prepared;
+  const state = prepared;
   const checkoutClaim = await claimCheckout(
     context.env.DB,
     organizationId,
     priceId,
-    Math.max(1, memberCount),
-    nowSeconds,
+    Math.max(1, state.memberCount),
+    state.nowSeconds,
   );
   const record = checkoutClaim.record;
   if (isPaidBillingForEnvironment(record, context.env))
     return alreadyProResponse(context);
-  if (checkoutDeletionInProgress(record, nowSeconds))
+  if (checkoutDeletionInProgress(record, state.nowSeconds))
     return checkoutDisabledResponse(context);
-  const claimedPending = activePendingCheckout(record, nowSeconds);
+  const claimedPending = activePendingCheckout(record, state.nowSeconds);
   if (claimedPending) return context.json({ url: claimedPending.url });
   if (
     !checkoutClaim.owned ||
@@ -616,10 +611,14 @@ export async function reconcilePendingCheckoutEntitlements(
      FROM organization_billing
      WHERE pending_checkout_session_id IS NOT NULL
        AND COALESCE(pending_checkout_expires_at, 0) <= ?
-     ORDER BY pending_checkout_expires_at ASC, organization_id ASC
+       AND COALESCE(pending_checkout_retry_at, 0) <= ?
+     ORDER BY pending_checkout_retry_at IS NOT NULL ASC,
+              pending_checkout_retry_at ASC,
+              pending_checkout_expires_at ASC,
+              organization_id ASC
      LIMIT ?`,
   )
-    .bind(nowSeconds, pendingCheckoutReconciliationLimit)
+    .bind(nowSeconds, nowSeconds, pendingCheckoutReconciliationLimit)
     .all<{
       organization_id: string;
       pending_checkout_session_id: string;
@@ -633,6 +632,18 @@ export async function reconcilePendingCheckoutEntitlements(
         nowSeconds,
       );
     } catch (cause) {
+      await deferPendingCheckoutReconciliation(
+        environment.DB,
+        row.organization_id,
+        row.pending_checkout_session_id,
+        nowSeconds,
+      ).catch((retryCause: unknown) => {
+        console.error(
+          "Pending Checkout retry could not be scheduled",
+          row.organization_id,
+          retryCause,
+        );
+      });
       console.error(
         "Pending Checkout reconciliation failed",
         row.organization_id,
@@ -640,6 +651,27 @@ export async function reconcilePendingCheckoutEntitlements(
       );
     }
   }
+}
+
+async function deferPendingCheckoutReconciliation(
+  database: D1Database,
+  organizationId: string,
+  sessionId: string,
+  nowSeconds: number,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET pending_checkout_retry_at = ?, updated_at = ?
+       WHERE organization_id = ? AND pending_checkout_session_id = ?`,
+    )
+    .bind(
+      nowSeconds + pendingCheckoutRetrySeconds,
+      new Date(nowSeconds * 1_000).toISOString(),
+      organizationId,
+      sessionId,
+    )
+    .run();
 }
 
 export async function purgeStripeWebhookReceipts(
@@ -726,7 +758,8 @@ async function reconcilePendingCheckoutEntitlement(
   ) {
     await environment.DB.prepare(
       `UPDATE organization_billing
-       SET pending_checkout_expires_at = ?, updated_at = ?
+       SET pending_checkout_expires_at = ?, pending_checkout_retry_at = NULL,
+           updated_at = ?
        WHERE organization_id = ? AND pending_checkout_session_id = ?`,
     )
       .bind(
@@ -1318,6 +1351,10 @@ async function persistSubscription(
              WHEN pending_checkout_session_id = ? THEN NULL
              ELSE pending_checkout_expires_at
            END,
+           pending_checkout_retry_at = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE pending_checkout_retry_at
+           END,
            updated_at = ?
        WHERE organization_id = ? AND checkout_disabled_at IS NULL
          AND (pending_checkout_session_id = ?
@@ -1334,6 +1371,7 @@ async function persistSubscription(
         cancelAtPeriodEnd ? 1 : 0,
         periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
         eventCreated,
+        checkoutSessionId,
         checkoutSessionId,
         checkoutSessionId,
         checkoutSessionId,
@@ -1508,7 +1546,8 @@ async function findBilling(database: D1Database, organizationId: string) {
             checkout_claim_expires_at,
             checkout_disabled_at, checkout_disabled_expires_at,
             pending_checkout_session_id, pending_checkout_url,
-            pending_checkout_expires_at, last_reconciled_at, updated_at
+            pending_checkout_expires_at, pending_checkout_retry_at,
+            last_reconciled_at, updated_at
      FROM organization_billing WHERE organization_id = ?`,
   );
   if (typeof statement.bind === "function") {
@@ -1560,6 +1599,7 @@ async function disableCheckoutForDeletion(
                  checkout_disabled_at, checkout_disabled_expires_at,
                  pending_checkout_session_id,
                  pending_checkout_url, pending_checkout_expires_at,
+                 pending_checkout_retry_at,
                  last_reconciled_at, updated_at`,
     )
     .bind(checkoutGuard, expiresAt, now, organizationId, nowSeconds)
@@ -1596,6 +1636,7 @@ async function clearPendingCheckout(
        SET pending_checkout_session_id = NULL,
            pending_checkout_url = NULL,
            pending_checkout_expires_at = NULL,
+           pending_checkout_retry_at = NULL,
            updated_at = ?
        WHERE organization_id = ?`,
     )
@@ -1614,6 +1655,7 @@ async function clearPendingCheckoutIfCurrent(
        SET pending_checkout_session_id = NULL,
            pending_checkout_url = NULL,
            pending_checkout_expires_at = NULL,
+           pending_checkout_retry_at = NULL,
            updated_at = ?
        WHERE organization_id = ? AND pending_checkout_session_id = ?`,
     )
@@ -1697,6 +1739,46 @@ function activeCheckoutClaimId(record: BillingRow | null, nowSeconds: number) {
     : null;
 }
 
+async function prepareCheckoutState(
+  context: Context<BillingEnv>,
+  organizationId: string,
+) {
+  let state = await checkoutState(context.env.DB, organizationId);
+  const existingResponse = checkoutStateResponse(context, state);
+  if (existingResponse) return existingResponse;
+  const staleSessionId = stalePendingCheckoutId(
+    state.billingRecord,
+    state.nowSeconds,
+  );
+  if (!staleSessionId) return state;
+  try {
+    await reconcilePendingCheckoutEntitlement(
+      context.env,
+      organizationId,
+      staleSessionId,
+      state.nowSeconds,
+    );
+  } catch (cause) {
+    return billingError(context, cause);
+  }
+  state = await checkoutState(context.env.DB, organizationId);
+  return checkoutStateResponse(context, state) ?? state;
+}
+
+function checkoutStateResponse(
+  context: Context<BillingEnv>,
+  state: Awaited<ReturnType<typeof checkoutState>>,
+) {
+  if (checkoutDeletionInProgress(state.billingRecord, state.nowSeconds)) {
+    return checkoutDisabledResponse(context);
+  }
+  if (isPaidBillingForEnvironment(state.billingRecord, context.env)) {
+    return alreadyProResponse(context);
+  }
+  const pending = activePendingCheckout(state.billingRecord, state.nowSeconds);
+  return pending ? context.json({ url: pending.url }) : null;
+}
+
 async function checkoutState(database: D1Database, organizationId: string) {
   const [billingRecord, memberCount] = await Promise.all([
     findBilling(database, organizationId),
@@ -1778,6 +1860,13 @@ function activePendingCheckout(record: BillingRow | null, nowSeconds: number) {
   };
 }
 
+function stalePendingCheckoutId(record: BillingRow | null, nowSeconds: number) {
+  return record?.pending_checkout_session_id &&
+    (record.pending_checkout_expires_at ?? 0) <= nowSeconds
+    ? record.pending_checkout_session_id
+    : null;
+}
+
 function validCreatedCheckout(checkout: StripeCheckoutSession) {
   return Boolean(
     checkout.status === "open" &&
@@ -1820,7 +1909,8 @@ async function storePendingCheckout(
     .prepare(
       `UPDATE organization_billing
        SET pending_checkout_session_id = ?, pending_checkout_url = ?,
-           pending_checkout_expires_at = ?, checkout_claim_id = NULL,
+           pending_checkout_expires_at = ?, pending_checkout_retry_at = NULL,
+           checkout_claim_id = NULL,
            checkout_claim_customer_id = NULL,
            checkout_claim_price_id = NULL, checkout_claim_quantity = NULL,
            checkout_claim_expires_at = NULL,
