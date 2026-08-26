@@ -206,15 +206,12 @@ as-is.
      re-runs), and asserts the suffix is present before merging.
    - With both reviewed SHAs, fetches and ancestry-checks the reviewed base and
      requires a fresh GitHub snapshot to report the same pair. It then inspects
-     effective branch policy. With no branch policy, it first confirms the
-     repository permits squash merges, then atomically pushes a one-parent
-     squash commit to the base and head refs with exact leases on both reviewed
-     SHAs, then compare-and-swaps the checked-out local feature branch to that
-     same squash commit so `--keep-branch` retains synchronized refs. With
-     branch policy, it uses `gh pr merge --match-head-commit` only when
-     strict up-to-date checks guard base movement and the PR is immediately
-     clean. It never enables delayed auto-merge. Pending requirements, an active
-     merge queue, and policy without strict checks all stop with setup guidance.
+     effective branch policy, then always uses GitHub's merge API with
+     `--match-head-commit` so the server atomically rechecks current PR state,
+     reviews, mergeability, policy, and the reviewed head with the merge. With
+     branch policy, strict up-to-date checks must guard base movement. It never
+     enables delayed auto-merge. Pending requirements, an active merge queue,
+     and policy without strict checks all stop with setup guidance.
    - Without review guards, runs the legacy manual path:
      `gh pr merge --squash --subject <subject-with-#pr> --body ""`.
    - On the unguarded compatibility path, waits up to ten minutes through an
@@ -292,7 +289,7 @@ as-is.
      — none of which the `MERGED` state alone can detect.
    - **Remote deletion uses the feature branch's own remote, never the base
      branch's remote.** Before deletion, its branch SHA must equal the captured
-     pre-merge head or the known atomic merge commit, and the delete itself
+     pre-merge head or GitHub's verified merge commit, and the delete itself
      carries an exact force-with-lease for that SHA. A commit pushed between
      lookup and delete makes the remote reject the deletion. An empty lookup
      means GitHub already deleted the feature branch and is treated as success.

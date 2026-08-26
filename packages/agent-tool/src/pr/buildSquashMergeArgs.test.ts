@@ -6,11 +6,7 @@ import {
   assertGuardPair,
   assertImmediatelyMergeable,
   assertMergeRequirements,
-  assertRepositoryAllowsSquash,
   assertReviewedAncestry,
-  buildAtomicPushArgs,
-  buildLocalBranchUpdateArgs,
-  buildReviewedCommitArgs,
   buildSquashMergeArgs,
   mergeStateExitCode,
   mergeWaitExitCode,
@@ -148,8 +144,8 @@ describe("reviewed merge guards", () => {
     expect(() => assertReviewedAncestry(128)).toThrow("Could not verify");
   });
 
-  test("uses ref CAS only without policy and API only with strict policy", () => {
-    expect(selectGuardedMergeStrategy(null, [])).toBe("atomic_refs");
+  test("uses GitHub's API without policy and with strict policy", () => {
+    expect(selectGuardedMergeStrategy(null, [])).toBe("github_api");
     expect(
       selectGuardedMergeStrategy(
         { required_status_checks: { strict: true } },
@@ -175,68 +171,6 @@ describe("reviewed merge guards", () => {
     expect(() =>
       selectGuardedMergeStrategy({ required_pull_request_reviews: {} }, []),
     ).toThrow("does not require branches to be up to date");
-  });
-
-  test("requires repository policy to allow handcrafted squash merges", () => {
-    expect(() =>
-      assertRepositoryAllowsSquash({ allow_squash_merge: true }),
-    ).not.toThrow();
-    expect(() =>
-      assertRepositoryAllowsSquash({ allow_squash_merge: false }),
-    ).toThrow("does not allow squash merging");
-    expect(() => assertRepositoryAllowsSquash({})).toThrow(
-      "does not allow squash merging",
-    );
-  });
-
-  test("builds a one-parent squash commit", () => {
-    expect(buildReviewedCommitArgs("tree-1", "base-1")).toEqual([
-      "commit-tree",
-      "tree-1",
-      "-p",
-      "base-1",
-    ]);
-  });
-
-  test("atomically leases both reviewed refs", () => {
-    expect(
-      buildAtomicPushArgs(
-        "https://github.com/a2f0/stealth",
-        "merge-1",
-        "main",
-        "base-1",
-        "feat/widget",
-        "head-1",
-      ),
-    ).toEqual([
-      "-c",
-      "credential.helper=",
-      "-c",
-      "credential.helper=!gh auth git-credential",
-      "-c",
-      "core.hooksPath=/dev/null",
-      "push",
-      "--porcelain",
-      "--atomic",
-      "--force-with-lease=refs/heads/main:base-1",
-      "--force-with-lease=refs/heads/feat/widget:head-1",
-      "https://github.com/a2f0/stealth",
-      "merge-1:refs/heads/main",
-      "merge-1:refs/heads/feat/widget",
-    ]);
-  });
-
-  test("synchronizes a retained local branch after the atomic merge", () => {
-    expect(
-      buildLocalBranchUpdateArgs("feat/widget", "merge-1", "head-1"),
-    ).toEqual([
-      "-c",
-      "core.hooksPath=/dev/null",
-      "update-ref",
-      "refs/heads/feat/widget",
-      "merge-1",
-      "head-1",
-    ]);
   });
 
   test("waits through active states and recognizes terminal states", () => {

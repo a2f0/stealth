@@ -3,10 +3,8 @@ import { spawnSync } from "node:child_process";
 import {
   type PrMergeIdentity,
   prState,
-  repositoryHttpsUrl,
   resolveFreshBaseRef,
   resolvePr,
-  run,
   spawnExitCode,
 } from "../git/prContext";
 import { toolEnvironment, toolExecutable } from "../process/trustedTooling";
@@ -151,7 +149,7 @@ function assertSameMergeTarget(
   }
 }
 
-type GuardedMergeStrategy = "atomic_refs" | "github_api";
+type GuardedMergeStrategy = "github_api";
 
 function recordOf(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null
@@ -161,14 +159,6 @@ function recordOf(value: unknown): Record<string, unknown> | null {
 
 function fieldOf(value: unknown, key: string): unknown {
   return recordOf(value)?.[key];
-}
-
-export function assertRepositoryAllowsSquash(repository: unknown): void {
-  if (fieldOf(repository, "allow_squash_merge") !== true) {
-    throw new Error(
-      "The repository does not allow squash merging; refusing to bypass its merge-method policy with a direct ref update.",
-    );
-  }
 }
 
 /** Select a base-race-safe strategy from GitHub's effective branch policy. */
@@ -185,9 +175,9 @@ export function selectGuardedMergeStrategy(
     );
   }
   if (classicProtection === null && ruleList.length === 0) {
-    // With no branch policy to bypass, an atomic two-ref lease is the complete
-    // server-side guard for both reviewed commits.
-    return "atomic_refs";
+    // GitHub's merge transaction still atomically enforces the current PR
+    // state, review decision, mergeability, and expected head.
+    return "github_api";
   }
 
   const requiredChecks = recordOf(
@@ -246,122 +236,6 @@ function resolveGuardedMergeStrategy(
   );
   const rules = githubApiJson(`repos/${repo}/rules/branches/${encodedBranch}`);
   return selectGuardedMergeStrategy(protection, rules);
-}
-
-/** Build a one-parent squash commit from the exact reviewed tree and base. */
-export function buildReviewedCommitArgs(
-  treeSha: string,
-  expectedBaseSha: string,
-): string[] {
-  return ["commit-tree", treeSha, "-p", expectedBaseSha];
-}
-
-/** Build an atomic compare-and-swap update for both reviewed refs. */
-export function buildAtomicPushArgs(
-  repositoryUrl: string,
-  mergeCommitSha: string,
-  baseRefName: string,
-  expectedBaseSha: string,
-  headRefName: string,
-  expectedHeadSha: string,
-): string[] {
-  const baseRef = `refs/heads/${baseRefName}`;
-  const headRef = `refs/heads/${headRefName}`;
-  return [
-    "-c",
-    "credential.helper=",
-    "-c",
-    "credential.helper=!gh auth git-credential",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "push",
-    "--porcelain",
-    "--atomic",
-    `--force-with-lease=${baseRef}:${expectedBaseSha}`,
-    `--force-with-lease=${headRef}:${expectedHeadSha}`,
-    repositoryUrl,
-    `${mergeCommitSha}:${baseRef}`,
-    `${mergeCommitSha}:${headRef}`,
-  ];
-}
-
-/** Compare-and-swap the retained local branch to the server's squash commit. */
-export function buildLocalBranchUpdateArgs(
-  branch: string,
-  mergeCommitSha: string,
-  expectedHeadSha: string,
-): string[] {
-  return [
-    "-c",
-    "core.hooksPath=/dev/null",
-    "update-ref",
-    `refs/heads/${branch}`,
-    mergeCommitSha,
-    expectedHeadSha,
-  ];
-}
-
-function createReviewedMergeCommit(
-  finalSubject: string,
-  expectedHeadSha: string,
-  expectedBaseSha: string,
-): string {
-  const localHead = run("git", ["rev-parse", "--verify", "HEAD^{commit}"]);
-  assertExpectedHeadCommit(expectedHeadSha, localHead);
-  const treeSha = run("git", [
-    "rev-parse",
-    "--verify",
-    `${expectedHeadSha}^{tree}`,
-  ]);
-  return run("git", [
-    ...buildReviewedCommitArgs(treeSha, expectedBaseSha),
-    "-m",
-    finalSubject,
-  ]);
-}
-
-function atomicReviewedMerge(
-  pr: PrMergeIdentity,
-  finalSubject: string,
-  expectedHeadSha: string,
-  expectedBaseSha: string,
-): number {
-  if (pr.headRepository !== pr.repo) {
-    throw new Error(
-      "An unprotected fork PR cannot atomically update refs in two repositories.",
-    );
-  }
-  const mergeCommitSha = createReviewedMergeCommit(
-    finalSubject,
-    expectedHeadSha,
-    expectedBaseSha,
-  );
-  const result = spawnSync(
-    toolExecutable("git"),
-    buildAtomicPushArgs(
-      repositoryHttpsUrl(pr.repo),
-      mergeCommitSha,
-      pr.baseRefName,
-      expectedBaseSha,
-      pr.headRefName,
-      expectedHeadSha,
-    ),
-    {
-      env: toolEnvironment({ GIT_TERMINAL_PROMPT: "0" }),
-      stdio: "inherit",
-    },
-  );
-  const pushExitCode = spawnExitCode("atomic reviewed merge push", result);
-  if (pushExitCode !== 0) return pushExitCode;
-
-  return spawnExitCode(
-    "synchronize local feature branch",
-    spawnSync(
-      toolExecutable("git"),
-      buildLocalBranchUpdateArgs(pr.branch, mergeCommitSha, expectedHeadSha),
-      { env: toolEnvironment(), stdio: "inherit" },
-    ),
-  );
 }
 
 export function mergeStateExitCode(state: string): number | null {
@@ -464,30 +338,16 @@ function guardedReviewedMerge(
   assertExpectedBaseCommit(expectedBaseSha, freshPr.baseRefOid);
   assertMergeRequirements(freshPr);
 
-  const strategy = resolveGuardedMergeStrategy(
-    freshPr.repo,
-    freshPr.baseRefName,
+  resolveGuardedMergeStrategy(freshPr.repo, freshPr.baseRefName);
+  assertImmediatelyMergeable(freshPr);
+  const mergeExitCode = spawnExitCode(
+    "gh pr merge",
+    spawnSync(
+      toolExecutable("gh"),
+      buildSquashMergeArgs(freshPr, finalSubject, expectedHeadSha, false),
+      { env: toolEnvironment(), stdio: "inherit" },
+    ),
   );
-  if (strategy === "github_api") assertImmediatelyMergeable(freshPr);
-  else {
-    assertRepositoryAllowsSquash(githubApiJson(`repos/${freshPr.repo}`));
-  }
-  const mergeExitCode =
-    strategy === "atomic_refs"
-      ? atomicReviewedMerge(
-          freshPr,
-          finalSubject,
-          expectedHeadSha,
-          expectedBaseSha,
-        )
-      : spawnExitCode(
-          "gh pr merge",
-          spawnSync(
-            toolExecutable("gh"),
-            buildSquashMergeArgs(freshPr, finalSubject, expectedHeadSha, false),
-            { env: toolEnvironment(), stdio: "inherit" },
-          ),
-        );
   if (mergeExitCode !== 0) return mergeExitCode;
 
   return waitForMergedPr(pr.prNumber, pr.repo);
