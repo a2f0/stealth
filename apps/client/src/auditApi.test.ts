@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { uploadIssueImagesSequentially } from "./AuditRunPage";
+import {
+  appendIssueImageSelection,
+  uploadIssueImagesSequentially,
+} from "./AuditRunPage";
 import {
   AuditApiError,
   type AuditTemplate,
@@ -82,6 +85,34 @@ describe("audit template API", () => {
 });
 
 describe("audit issue API", () => {
+  it("keeps images selected across multiple picker passes", () => {
+    const first = new File([new Uint8Array([1])], "first.png", {
+      type: "image/png",
+    });
+    const second = new File([new Uint8Array([2])], "second.png", {
+      type: "image/png",
+    });
+
+    const firstSelection = appendIssueImageSelection([], [first]);
+    expect(firstSelection).toEqual([first]);
+    if (typeof firstSelection === "string") throw new Error(firstSelection);
+    expect(appendIssueImageSelection(firstSelection, [second])).toEqual([
+      first,
+      second,
+    ]);
+
+    const nineExisting = Array.from(
+      { length: 9 },
+      (_, index) =>
+        new File([new Uint8Array([index])], `${index}.png`, {
+          type: "image/png",
+        }),
+    );
+    expect(appendIssueImageSelection(nineExisting, [first, second])).toBe(
+      "You can attach 1 more image.",
+    );
+  });
+
   it("updates assignees and uploads and removes images", async () => {
     const originalFetch = globalThis.fetch;
     const requests: Array<{

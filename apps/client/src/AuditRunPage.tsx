@@ -445,9 +445,9 @@ function IssueImagePicker({
           accept={acceptedImageTypes.join(",")}
           multiple
           onChange={(event) => {
-            const selected = validateImageFiles(
+            const selected = appendIssueImageSelection(
+              files,
               Array.from(event.target.files ?? []),
-              maxIssueImages,
             );
             if (typeof selected === "string") {
               onError(selected);
@@ -883,6 +883,19 @@ function validateImageFiles(files: File[], availableSlots: number) {
     return "Images must be 10 MB or smaller.";
   }
   return files;
+}
+
+export function appendIssueImageSelection(
+  existingFiles: File[],
+  selectedFiles: File[],
+) {
+  const validated = validateImageFiles(
+    selectedFiles,
+    maxIssueImages - existingFiles.length,
+  );
+  return typeof validated === "string"
+    ? validated
+    : [...existingFiles, ...validated];
 }
 
 function titleCase(value: string) {
