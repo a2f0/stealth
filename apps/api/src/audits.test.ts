@@ -1797,22 +1797,33 @@ describe("audits", () => {
       .run(definition, "2026-08-21T12:00:00.000Z", "2026-08-21T12:00:00.000Z");
 
     await applyMigration(database, "0023_make_nfpa70e_template_global.sql");
+    await applyMigration(database, "0033_create_audit_library_actor.sql");
 
     expect(
       database
         .query(
-          `SELECT id, scope, organization_id
+          `SELECT id, scope, organization_id, created_by
            FROM audit_template_families
            WHERE id GLOB 'nfpa70e_*'`,
         )
         .all(),
     ).toEqual([
       {
+        created_by: "system:audit-library",
         id: "nfpa70e_global",
         organization_id: null,
         scope: "global",
       },
     ]);
+    expect(
+      database
+        .query(
+          `SELECT created_by
+           FROM audit_template_versions
+           WHERE id = 'nfpa70e_global:v1'`,
+        )
+        .get(),
+    ).toEqual({ created_by: "system:audit-library" });
     expect(
       database
         .query(

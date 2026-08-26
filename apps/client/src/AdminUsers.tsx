@@ -5,6 +5,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { adminUserListQuery, adminUserPageSize } from "./adminUserList";
 import {
   type AdminOrganization,
   listAdminOrganizations,
@@ -12,8 +13,6 @@ import {
   restoreAdminOrganization,
 } from "./api";
 import { authClient } from "./authClient";
-
-const pageSize = 25;
 
 interface ListedUser {
   banned?: boolean | null | undefined;
@@ -51,12 +50,7 @@ export function AdminUsers() {
     try {
       const [result, nextOrganizations] = await Promise.all([
         authClient.admin.listUsers({
-          query: {
-            limit: pageSize,
-            offset: page * pageSize,
-            sortBy: "createdAt",
-            sortDirection: "desc",
-          },
+          query: adminUserListQuery(page),
         }),
         listAdminOrganizations(),
       ]);
@@ -451,8 +445,8 @@ function Pagination({
   page: number;
   total: number;
 }) {
-  const start = page * pageSize + 1;
-  const end = Math.min((page + 1) * pageSize, total);
+  const start = page * adminUserPageSize + 1;
+  const end = Math.min((page + 1) * adminUserPageSize, total);
   return (
     <div className="pagination">
       <span>
