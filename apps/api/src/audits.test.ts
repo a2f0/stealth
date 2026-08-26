@@ -1375,6 +1375,37 @@ describe("audits", () => {
     expect(completed.response.status).toBe(200);
   });
 
+  it("limits Free organizations to five form templates", async () => {
+    const fixture = await createFixture();
+    for (let index = 1; index <= 5; index += 1) {
+      const created = await jsonRequest(fixture, "/templates", "POST", {
+        name: `Free form ${index}`,
+      });
+      expect(created.response.status).toBe(201);
+    }
+    const limited = await jsonRequest(fixture, "/templates", "POST", {
+      name: "Sixth free form",
+    });
+    expect(limited.response.status).toBe(409);
+    expect(limited.body).toEqual({
+      error:
+        "The Free plan is limited to 5 form templates. Upgrade to Pro for unlimited forms.",
+    });
+
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_price_id, stripe_status, seat_quantity,
+          stripe_event_created, updated_at)
+         VALUES ('org_user-1', 'price_pro_test', 'active', 1, 1, ?)`,
+      )
+      .run(new Date().toISOString());
+    const pro = await jsonRequest(fixture, "/templates", "POST", {
+      name: "Sixth Pro form",
+    });
+    expect(pro.response.status).toBe(201);
+  });
+
   it("shares global templates without exposing organization templates", async () => {
     const fixture = await createFixture();
     const denied = await jsonRequest(fixture, "/templates", "POST", {
@@ -1613,6 +1644,7 @@ async function createFixture() {
   await applyMigration(database, "0028_lease_audit_image_uploads.sql");
   await applyMigration(database, "0029_tombstone_cascaded_audit_images.sql");
   await applyMigration(database, "0030_queue_deleted_objects.sql");
+  await applyMigration(database, "0031_create_billing.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,
@@ -1741,6 +1773,7 @@ function bindingsFor(
     EMAIL: {} as SendEmail,
     IMAGES: imagesFor(),
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
+    STRIPE_PRO_PRICE_ID: "price_pro_test",
     STORAGE: storageFor(stored, storageControl),
   };
 }

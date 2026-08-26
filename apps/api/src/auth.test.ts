@@ -527,6 +527,42 @@ describe("password authentication", () => {
     ).toEqual({ name: "Example Person's Organization" });
   });
 
+  it("keeps Free organizations to one user", async () => {
+    const fixture = await createFixture();
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    const signIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const organization = fixture.database
+      .query(`SELECT defaultOrganizationId AS id FROM user WHERE email = ?`)
+      .get(email) as { id: string };
+    const invite = await post(
+      fixture.auth,
+      "/organization/invite-member",
+      {
+        email: "second@example.com",
+        organizationId: organization.id,
+        role: "member",
+      },
+      signIn.headers.get("set-cookie"),
+    );
+    expect(invite.status).toBe(403);
+    expect(
+      fixture.database
+        .query(
+          `SELECT COUNT(*) AS count FROM invitation
+           WHERE organizationId = ?`,
+        )
+        .get(organization.id),
+    ).toEqual({ count: 0 });
+  });
+
   it("invites a user, accepts after sign-up, and safely leaves", async () => {
     const fixture = await createFixture();
     await post(fixture.auth, "/sign-up/email", {
@@ -549,6 +585,15 @@ describe("password authentication", () => {
       )
       .get(email) as { id: string; name: string };
     const invitedEmail = "invitee@example.com";
+
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_price_id, stripe_status, seat_quantity,
+          stripe_event_created, updated_at)
+         VALUES (?, 'price_pro_test', 'active', 1, 1, ?)`,
+      )
+      .run(organization.id, new Date().toISOString());
 
     const firstInvite = await post(
       fixture.auth,
@@ -898,6 +943,7 @@ async function createFixture() {
     } as unknown as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
+    STRIPE_PRO_PRICE_ID: "price_pro_test",
     STORAGE: {} as R2Bucket,
   } satisfies Bindings;
   const auth = createAuth(bindings, (promise) => pending.push(promise));
@@ -908,6 +954,7 @@ async function createFixture() {
   await applyMigration(database, "0010_create_organization_groups.sql");
   await applyMigration(database, "0020_add_two_factor_authentication.sql");
   await applyMigration(database, "0021_track_terms_acceptance.sql");
+  await applyMigration(database, "0031_create_billing.sql");
 
   return { auth, database, messages, pending };
 }

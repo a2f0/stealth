@@ -1,6 +1,7 @@
 import { createMiddleware } from "hono/factory";
 import type { AuthSession } from "./auth";
 import { createAuth } from "./auth";
+import { organizationUserHasSeat } from "./billing";
 import type { Bindings } from "./types";
 
 export interface AuthVariables {
@@ -66,6 +67,22 @@ export const requireOrganization = createMiddleware<AuthEnv>(
       .find((candidate) => candidate !== undefined);
     if (!membership) {
       return context.json({ error: "Organization membership required." }, 403);
+    }
+    if (
+      !(await organizationUserHasSeat(
+        context.env.DB,
+        membership.organizationId,
+        session.user.id,
+        context.env.STRIPE_PRO_PRICE_ID,
+      ))
+    ) {
+      return context.json(
+        {
+          error:
+            "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+        },
+        403,
+      );
     }
     context.set("organizationId", membership.organizationId);
     context.set("organizationRole", membership.role);

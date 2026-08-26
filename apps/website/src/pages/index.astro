@@ -31,6 +31,7 @@ const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
       <nav aria-label="Main navigation">
         <a href="#principles">Principles</a>
         <a href="#architecture">Architecture</a>
+        <a href="#pricing">Pricing</a>
       </nav>
       <a class="headerCta" href={appUrl}>Open app ↗</a>
     </header>
@@ -104,6 +105,35 @@ const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
             <div><strong>R2</strong><small>Durable object storage</small></div>
             <span class="stackStatus">Active</span>
           </div>
+        </div>
+      </section>
+
+      <section class="pricing" id="pricing">
+        <div class="pricingHeading">
+          <p class="sectionLabel">03 / Pricing</p>
+          <h2>Start free.<br />Scale by seat.</h2>
+        </div>
+        <div class="pricingGrid">
+          <article class="priceCard">
+            <p class="kicker"><span></span> Free</p>
+            <h3>$0</h3>
+            <ul>
+              <li>1 user</li>
+              <li>5 form templates</li>
+              <li>30-day audit history</li>
+            </ul>
+            <a class="secondaryCta" href={appUrl}>Get started →</a>
+          </article>
+          <article class="priceCard featured">
+            <p class="kicker"><span></span> Pro</p>
+            <h3>$10 <small class="priceCaption">/ user / month</small></h3>
+            <ul>
+              <li>Unlimited form templates</li>
+              <li>Unlimited audit history</li>
+              <li>Seats stay in sync with your team</li>
+            </ul>
+            <a class="primaryCta" href={appUrl}>Open Tearleads ↗</a>
+          </article>
         </div>
       </section>
 

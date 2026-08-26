@@ -1,5 +1,7 @@
 import { app } from "./app";
 import { purgePendingAuditIssueImages } from "./auditIssueImages";
+import { reconcileSubscriptionSeats } from "./billing";
+import { purgeExpiredFreeAuditRuns } from "./billingRetention";
 import { purgeDeletedObjects } from "./deletedObjectCleanup";
 import { handleEmail } from "./email";
 import type { Bindings } from "./types";
@@ -12,6 +14,8 @@ export default {
       Promise.all([
         purgeDeletedObjects(environment),
         purgePendingAuditIssueImages(environment),
+        purgeExpiredFreeAuditRuns(environment),
+        reconcileSubscriptionSeats(environment),
       ]),
     );
   },

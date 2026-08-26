@@ -12,6 +12,7 @@ import {
   toAuditIssueImage,
 } from "./auditIssueImages";
 import type { AuthVariables } from "./authMiddleware";
+import { freeFormTemplateLimit, organizationTemplateLimit } from "./billing";
 import { nfpa70eStarter } from "./nfpa70eStarter";
 import type { Bindings } from "./types";
 
@@ -151,25 +152,44 @@ audits.post("/templates", async (context) => {
   const versionId = crypto.randomUUID();
   const userId = context.get("authSession").user.id;
   const now = new Date().toISOString();
-  await context.env.DB.batch([
+  const organizationId = context.get("organizationId");
+  const templateLimit =
+    scope === "organization"
+      ? await organizationTemplateLimit(
+          context.env.DB,
+          organizationId,
+          context.env.STRIPE_PRO_PRICE_ID,
+        )
+      : null;
+  const results = await context.env.DB.batch([
     context.env.DB.prepare(
       `INSERT INTO audit_template_families
        (id, scope, organization_id, current_version, created_by, created_at,
         updated_at)
-       VALUES (?, ?, ?, 1, ?, ?, ?)`,
+       SELECT ?, ?, ?, 1, ?, ?, ?
+       WHERE ? IS NULL OR (
+         SELECT COUNT(*) FROM audit_template_families
+         WHERE scope = 'organization' AND organization_id = ?
+       ) < ?`,
     ).bind(
       id,
       scope,
-      scope === "organization" ? context.get("organizationId") : null,
+      scope === "organization" ? organizationId : null,
       userId,
       now,
       now,
+      templateLimit,
+      organizationId,
+      templateLimit,
     ),
     context.env.DB.prepare(
       `INSERT INTO audit_template_versions
        (id, template_id, version, name, description, definition, status,
         created_by, created_at)
-       VALUES (?, ?, 1, ?, '', ?, 'draft', ?, ?)`,
+       SELECT ?, ?, 1, ?, '', ?, 'draft', ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM audit_template_families WHERE id = ?
+       )`,
     ).bind(
       versionId,
       id,
@@ -177,8 +197,17 @@ audits.post("/templates", async (context) => {
       JSON.stringify(definition),
       userId,
       now,
+      id,
     ),
   ]);
+  if (Number(results[0]?.meta.changes) !== 1) {
+    return context.json(
+      {
+        error: `The Free plan is limited to ${templateLimit} form templates. Upgrade to Pro for unlimited forms.`,
+      },
+      409,
+    );
+  }
   const template = await findTemplate(
     context.env.DB,
     context.get("organizationId"),
@@ -214,7 +243,20 @@ audits.post("/templates/:id/copies", async (context) => {
     context.get("authSession").user.id,
     input,
     new Date().toISOString(),
+    await organizationTemplateLimit(
+      context.env.DB,
+      context.get("organizationId"),
+      context.env.STRIPE_PRO_PRICE_ID,
+    ),
   );
+  if (!saved) {
+    return context.json(
+      {
+        error: `The Free plan is limited to ${freeFormTemplateLimit} form templates. Upgrade to Pro for unlimited forms.`,
+      },
+      409,
+    );
+  }
   return context.json({ template: toTemplate(saved) }, 201);
 });
 
@@ -582,24 +624,41 @@ async function copyGlobalTemplate(
   userId: string,
   input: TemplateSaveInput,
   now: string,
+  templateLimit: number | null,
 ) {
   const id = crypto.randomUUID();
   const versionId = crypto.randomUUID();
-  await database.batch([
+  const results = await database.batch([
     database
       .prepare(
         `INSERT INTO audit_template_families
          (id, scope, organization_id, current_version, created_by, created_at,
           updated_at)
-         VALUES (?, 'organization', ?, 1, ?, ?, ?)`,
+         SELECT ?, 'organization', ?, 1, ?, ?, ?
+         WHERE ? IS NULL OR (
+           SELECT COUNT(*) FROM audit_template_families
+           WHERE scope = 'organization' AND organization_id = ?
+         ) < ?`,
       )
-      .bind(id, organizationId, userId, now, now),
+      .bind(
+        id,
+        organizationId,
+        userId,
+        now,
+        now,
+        templateLimit,
+        organizationId,
+        templateLimit,
+      ),
     database
       .prepare(
         `INSERT INTO audit_template_versions
          (id, template_id, version, name, description, definition, status,
           created_by, created_at)
-         VALUES (?, ?, 1, ?, ?, ?, 'draft', ?, ?)`,
+         SELECT ?, ?, 1, ?, ?, ?, 'draft', ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM audit_template_families WHERE id = ?
+         )`,
       )
       .bind(
         versionId,
@@ -609,8 +668,10 @@ async function copyGlobalTemplate(
         JSON.stringify(input.definition),
         userId,
         now,
+        id,
       ),
   ]);
+  if (Number(results[0]?.meta.changes) !== 1) return null;
   const saved = await findTemplate(database, organizationId, id);
   if (!saved) throw new Error("Copied template could not be loaded.");
   return saved;

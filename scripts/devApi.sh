@@ -10,6 +10,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/cloudflareEnv.sh"
 source_env_file "$REPO_ROOT/.secrets/root.env"
 validate_auth_env
+validate_stripe_env
 
 auth_env_file="$(mktemp)"
 trap 'rm -f "$auth_env_file"' EXIT
@@ -23,7 +24,9 @@ printf '%s\n' \
 for secret_name in \
   PLAID_CLIENT_ID \
   PLAID_SECRET \
-  PLAID_TOKEN_ENCRYPTION_KEY; do
+  PLAID_TOKEN_ENCRYPTION_KEY \
+  STRIPE_SECRET_KEY \
+  STRIPE_WEBHOOK_SECRET; do
   if [[ -n "${!secret_name:-}" ]]; then
     printf '%s=%s\n' "$secret_name" "${!secret_name}" >>"$auth_env_file"
   fi

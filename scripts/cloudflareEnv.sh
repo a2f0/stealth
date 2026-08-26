@@ -78,3 +78,30 @@ validate_plaid_env() {
     return 1
   fi
 }
+
+validate_stripe_env() {
+  local required_mode="${1:-any}"
+  local missing=()
+
+  [[ -z "${STRIPE_SECRET_KEY:-}" ]] && missing+=("STRIPE_SECRET_KEY")
+  [[ -z "${STRIPE_WEBHOOK_SECRET:-}" ]] &&
+    missing+=("STRIPE_WEBHOOK_SECRET")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "ERROR: Missing required Stripe variables:" >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    return 1
+  fi
+
+  if [[ "$required_mode" == "live" ]] &&
+    [[ "$STRIPE_SECRET_KEY" != sk_live_* ]] &&
+    [[ "$STRIPE_SECRET_KEY" != rk_live_* ]]; then
+    echo "ERROR: STRIPE_SECRET_KEY must be a live-mode key for production." >&2
+    return 1
+  fi
+
+  if [[ "$STRIPE_WEBHOOK_SECRET" != whsec_* ]]; then
+    echo "ERROR: STRIPE_WEBHOOK_SECRET must be a Stripe signing secret." >&2
+    return 1
+  fi
+}

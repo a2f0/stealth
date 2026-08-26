@@ -157,6 +157,7 @@ async function createFixture() {
   await applyMigration(database, "0010_create_organization_groups.sql");
   await applyMigration(database, "0011_soft_delete_organizations.sql");
   await applyMigration(database, "0013_track_organization_deletion_actor.sql");
+  await applyMigration(database, "0031_create_billing.sql");
   insertSession(database, "owner-user", targetOrganizationId);
   insertSession(database, "member-user", targetOrganizationId);
   const bindings = { DB: toD1(database) } as Bindings;

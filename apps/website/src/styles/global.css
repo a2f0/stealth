@@ -245,6 +245,81 @@ nav a:hover {
   padding: 120px 7vw 140px;
 }
 
+.pricing {
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr;
+  gap: 7vw;
+  padding: 120px 7vw;
+  border-top: 1px solid #d8d6ce;
+  background: #f8f7f1;
+}
+
+.pricingHeading h2 {
+  margin: 0;
+  font-size: clamp(38px, 5vw, 72px);
+  font-weight: 500;
+  letter-spacing: -0.06em;
+  line-height: 0.98;
+}
+
+.pricingGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.priceCard {
+  display: grid;
+  align-content: start;
+  gap: 28px;
+  min-height: 390px;
+  padding: 32px;
+  border: 1px solid #d6d5cd;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.priceCard.featured {
+  border-color: #84b74a;
+  background: #e9ffcc;
+}
+
+.priceCard h3 {
+  margin: 0;
+  font-size: clamp(34px, 4vw, 54px);
+  font-weight: 500;
+  letter-spacing: -0.06em;
+}
+
+.priceCaption {
+  color: #56624d;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.priceCard ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 13px;
+  color: #62645c;
+  font-size: 12px;
+  list-style: none;
+}
+
+.priceCard li::before {
+  margin-right: 9px;
+  color: #5f9a1d;
+  content: "✓";
+}
+
+.priceCard a {
+  align-self: end;
+  justify-self: start;
+  margin-top: auto;
+}
+
 .sectionLabel {
   margin: 0 0 50px;
   color: #898980;
@@ -628,6 +703,19 @@ nav a:hover {
   .architecture {
     grid-template-columns: 1fr;
     padding: 90px 7vw;
+  }
+
+  .pricing,
+  .pricingGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .pricing {
+    padding: 90px 7vw;
+  }
+
+  .pricingGrid {
+    margin-top: 35px;
   }
 
   .stack {

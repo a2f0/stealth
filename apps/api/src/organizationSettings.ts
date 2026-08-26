@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { cancelOrganizationSubscription } from "./billing";
 import { markOrganizationForDeletion } from "./organizationDeletion";
 import {
   canManageOrganization,
@@ -61,6 +62,19 @@ organizationSettings.delete("/current", async (context) => {
     return context.json(
       { error: "Only an organization owner can delete this organization." },
       403,
+    );
+  }
+
+  try {
+    await cancelOrganizationSubscription(context.env, organizationId);
+  } catch (cause) {
+    console.error("Could not cancel organization billing.", cause);
+    return context.json(
+      {
+        error:
+          "The Stripe subscription could not be canceled, so the organization was not deleted.",
+      },
+      502,
     );
   }
 

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { cancelOrganizationSubscription } from "./billing";
 import {
   markOrganizationForDeletion,
   restoreOrganization,
@@ -66,6 +67,18 @@ adminOrganizations.get("/", async (context) => {
 adminOrganizations.delete("/:organizationId", async (context) => {
   const organizationId = context.req.param("organizationId");
   const actor = context.get("authSession").user;
+  try {
+    await cancelOrganizationSubscription(context.env, organizationId);
+  } catch (cause) {
+    console.error("Could not cancel organization billing.", cause);
+    return context.json(
+      {
+        error:
+          "The Stripe subscription could not be canceled, so the organization was not deleted.",
+      },
+      502,
+    );
+  }
   const deletion = await markOrganizationForDeletion(
     context.env.DB,
     organizationId,

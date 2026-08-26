@@ -153,6 +153,32 @@ URIs for OAuth institutions. Before switching `PLAID_ENV` to `production` in
 the API Wrangler configuration, replace the Sandbox secret with the Production
 secret and complete Plaid's application and company profile requirements.
 
+## Billing and plans
+
+Every organization starts on the cardless Free plan with one usable member
+seat, up to five organization form templates, and 30 days of audit-run history.
+An hourly Worker task removes older Free-plan audit runs and their associated
+issue images. Tearleads Pro costs $10 per active organization member each month
+and includes unlimited form templates and audit history. Membership hooks update
+the licensed Stripe subscription quantity, and an hourly reconciliation repairs
+any quantity drift.
+
+Owners and organization admins can upgrade or manage billing at
+`/organization/billing`. Checkout and subscription management use Stripe-hosted
+pages. Add the following values to the ignored `.secrets/root.env` before local
+billing work or a production API deployment:
+
+```sh
+export STRIPE_SECRET_KEY=your-live-or-test-secret-key
+export STRIPE_WEBHOOK_SECRET=your-endpoint-signing-secret
+```
+
+The public Stripe webhook URL is
+`https://api.tearleads.com/api/billing/webhook`. The non-secret Pro price and
+optional Billing Portal configuration IDs belong in `apps/api/wrangler.jsonc`;
+the API deployment script uploads the two secret values as encrypted Worker
+secrets and requires a live-mode API key for production.
+
 ## Provision Cloudflare resources
 
 Link or create the ignored `.secrets` directory, then review the Terraform

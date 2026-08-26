@@ -71,6 +71,22 @@ describe("organization middleware", () => {
       error: "A default organization is required.",
     });
   });
+
+  it("rejects an extra Free-plan member without a seat", async () => {
+    const response = await requestOrganization(
+      "active-org",
+      null,
+      ["active-org"],
+      [],
+      "owner-id",
+    );
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      error:
+        "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+    });
+  });
 });
 
 function testApp(
@@ -103,28 +119,32 @@ function requestOrganization(
   defaultOrganizationId: string | null,
   memberships: string[],
   deletedMemberships: string[] = [],
+  freeSeatUserId = "user-id",
 ) {
   return testApp(activeOrganizationId, defaultOrganizationId).request(
     "/",
     undefined,
-    { DB: membershipDatabase(memberships, deletedMemberships) } as Bindings,
+    {
+      DB: membershipDatabase(memberships, deletedMemberships, freeSeatUserId),
+    } as Bindings,
   );
 }
 
 function membershipDatabase(
   memberships: string[],
   deletedMemberships: string[],
+  freeSeatUserId: string,
 ) {
   return {
     prepare: (query: string) => ({
-      bind: (userId: string, ...organizationIds: string[]) => ({
+      bind: (...values: string[]) => ({
         all: async () => ({
           results:
-            userId === "user-id"
+            values[0] === "user-id"
               ? [...memberships, ...deletedMemberships]
                   .filter(
                     (organizationId) =>
-                      organizationIds.includes(organizationId) &&
+                      values.slice(1).includes(organizationId) &&
                       (!deletedMemberships.includes(organizationId) ||
                         !query.includes('organization."deletedAt" IS NULL')),
                   )
@@ -134,6 +154,13 @@ function membershipDatabase(
                   }))
               : [],
         }),
+        first: async () => {
+          if (query.includes("FROM organization_billing")) return null;
+          if (query.includes("SELECT userId")) {
+            return { userId: freeSeatUserId };
+          }
+          return null;
+        },
       }),
     }),
   } as unknown as D1Database;

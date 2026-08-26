@@ -93,6 +93,14 @@ export function OrganizationPeople({
             busy={state.busy}
             managerRole={state.data.memberRole}
             members={state.data.members}
+            onRemove={(member) =>
+              removeOrganizationMember(
+                member,
+                organization,
+                state,
+                onAccessChanged,
+              )
+            }
             onRoleChange={updateMemberRole}
           />
           {canManage && state.data.invitations.length > 0 && (
@@ -119,6 +127,37 @@ export function OrganizationPeople({
       )}
     </>
   );
+}
+
+async function removeOrganizationMember(
+  member: OrganizationMember,
+  organization: WorkspaceOrganization,
+  state: ReturnType<typeof useOrganizationPeopleData>,
+  onAccessChanged: () => Promise<void>,
+) {
+  if (
+    !window.confirm(`Remove ${member.user.name} from ${organization.name}?`)
+  ) {
+    return;
+  }
+  state.startAction();
+  try {
+    const result = await authClient.organization.removeMember({
+      memberIdOrEmail: member.id,
+      organizationId: organization.id,
+    });
+    if (result.error) {
+      throw new Error(
+        result.error.message ?? "Could not remove this organization member.",
+      );
+    }
+    state.setNotice(`${member.user.name} was removed from the organization.`);
+    await Promise.all([state.load(), onAccessChanged()]);
+  } catch (cause) {
+    state.setError(messageFrom(cause));
+  } finally {
+    state.setBusy(false);
+  }
 }
 
 function useOrganizationPeopleData(organizationId: string) {
@@ -261,6 +300,7 @@ function OrganizationMembers({
   managerRole,
   members,
   onRoleChange,
+  onRemove,
 }: {
   busy: boolean;
   managerRole: string;
@@ -269,6 +309,7 @@ function OrganizationMembers({
     member: OrganizationMember,
     role: OrganizationInvitationRole,
   ) => Promise<void>;
+  onRemove: (member: OrganizationMember) => Promise<void>;
 }) {
   const memberRoles = members.map(({ role }) => role);
   return (
@@ -291,28 +332,39 @@ function OrganizationMembers({
                 <strong>{member.user.name}</strong>
                 <small>{member.user.email}</small>
               </span>
-              {roles.length > 0 ? (
-                <select
-                  aria-label={`Role for ${member.user.name}`}
-                  className="memberRoleSelect"
-                  disabled={busy || roles.length === 1}
-                  onChange={(event) =>
-                    void onRoleChange(
-                      member,
-                      event.target.value as OrganizationInvitationRole,
-                    )
-                  }
-                  value={role}
-                >
-                  {roles.map((assignableRole) => (
-                    <option key={assignableRole} value={assignableRole}>
-                      {formatRole(assignableRole)}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <b>{role}</b>
-              )}
+              <div className="organizationMemberActions">
+                {roles.length > 0 ? (
+                  <select
+                    aria-label={`Role for ${member.user.name}`}
+                    className="memberRoleSelect"
+                    disabled={busy || roles.length === 1}
+                    onChange={(event) =>
+                      void onRoleChange(
+                        member,
+                        event.target.value as OrganizationInvitationRole,
+                      )
+                    }
+                    value={role}
+                  >
+                    {roles.map((assignableRole) => (
+                      <option key={assignableRole} value={assignableRole}>
+                        {formatRole(assignableRole)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <b>{role}</b>
+                )}
+                {roles.length > 1 && (
+                  <button
+                    disabled={busy}
+                    onClick={() => void onRemove(member)}
+                    type="button"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
