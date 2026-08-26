@@ -289,6 +289,31 @@ describe("billing", () => {
     }
   });
 
+  it("skips terminal subscriptions during organization deletion", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_subscription_id, stripe_status, updated_at)
+         VALUES (?, 'sub_incomplete_expired', 'incomplete_expired', ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+    const originalFetch = globalThis.fetch;
+    let requestedStripe = false;
+    globalThis.fetch = (async (_input): Promise<Response> => {
+      requestedStripe = true;
+      throw new Error("Terminal subscriptions must not reach Stripe.");
+    }) as typeof fetch;
+    try {
+      expect(
+        await cancelOrganizationSubscription(fixture.bindings, organizationId),
+      ).toMatchObject({ canceled: false, checkoutGuard: expect.any(String) });
+      expect(requestedStripe).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("uses signed, idempotent, ordered webhooks as the entitlement source", async () => {
     const fixture = await createFixture();
     const active = subscriptionEvent("evt_active", 100, "active", 3);
@@ -545,6 +570,80 @@ describe("billing", () => {
         },
       ]);
     } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("waits for a Checkout webhook before confirming its subscription", async () => {
+    const fixture = await createFixture();
+    insertStalePendingCheckout(fixture.database, "cs_sync_race");
+    const subscription = subscriptionEvent(
+      "unused_sync_race",
+      101,
+      "active",
+      1,
+      "sub_sync_race",
+    ).data.object;
+    const checkout = {
+      created: 101,
+      data: {
+        object: {
+          client_reference_id: organizationId,
+          id: "cs_sync_race",
+          subscription: "sub_sync_race",
+        },
+      },
+      id: "evt_sync_race",
+      type: "checkout.session.completed",
+    };
+    let markSubscriptionFetchStarted = () => {};
+    let markCheckoutFetched = () => {};
+    let releaseSubscriptionFetch = () => {};
+    const subscriptionFetchStarted = new Promise<void>((resolve) => {
+      markSubscriptionFetchStarted = resolve;
+    });
+    const checkoutFetched = new Promise<void>((resolve) => {
+      markCheckoutFetched = resolve;
+    });
+    const subscriptionFetchReleased = new Promise<void>((resolve) => {
+      releaseSubscriptionFetch = resolve;
+    });
+    let subscriptionFetchCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/v1/checkout/sessions/cs_sync_race")) {
+        markCheckoutFetched();
+        return Response.json({
+          client_reference_id: organizationId,
+          id: "cs_sync_race",
+          status: "complete",
+          subscription: "sub_sync_race",
+        });
+      }
+      if (url.pathname.endsWith("/v1/subscriptions/sub_sync_race")) {
+        subscriptionFetchCount += 1;
+        markSubscriptionFetchStarted();
+        await subscriptionFetchReleased;
+        return Response.json(subscription);
+      }
+      throw new Error(`Unexpected Stripe request: ${url.href}`);
+    }) as typeof fetch;
+    try {
+      const webhookResponse = sendWebhook(fixture, checkout);
+      await subscriptionFetchStarted;
+      const confirmationResponse = fixture.app.request(
+        "/?session_id=cs_sync_race",
+        undefined,
+        fixture.bindings,
+      );
+      await checkoutFetched;
+      releaseSubscriptionFetch();
+      expect((await webhookResponse).status).toBe(200);
+      expect((await confirmationResponse).status).toBe(200);
+      expect(subscriptionFetchCount).toBe(1);
+    } finally {
+      releaseSubscriptionFetch();
       globalThis.fetch = originalFetch;
     }
   });

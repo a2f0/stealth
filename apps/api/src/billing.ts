@@ -721,7 +721,10 @@ export async function cancelOrganizationSubscription(
       record,
     );
     const subscriptionIds = new Set<string>();
-    if (record?.stripe_subscription_id && record.stripe_status !== "canceled") {
+    if (
+      record?.stripe_subscription_id &&
+      !terminalSubscriptionStatuses.has(record.stripe_status ?? "")
+    ) {
       subscriptionIds.add(record.stripe_subscription_id);
     }
     if (pendingSubscriptionId) subscriptionIds.add(pendingSubscriptionId);
@@ -1042,40 +1045,69 @@ async function refreshSubscription(
   knownOrganizationId?: string,
   checkoutSessionId?: string,
 ) {
-  return withSubscriptionSyncLock(environment.DB, subscriptionId, async () => {
-    const subscription = await expandedSubscription(
-      environment,
-      subscriptionId,
-    );
-    if (!subscription) return false;
-    if (
-      checkoutSessionId &&
-      knownOrganizationId &&
-      !(await prepareCheckoutSubscriptionReplacement(
+  const checkoutRefresh = Boolean(checkoutSessionId && knownOrganizationId);
+  return withSubscriptionSyncLock(
+    environment.DB,
+    subscriptionId,
+    async () => {
+      if (
+        checkoutSessionId &&
+        knownOrganizationId &&
+        (await checkoutSubscriptionAlreadyPersisted(
+          environment.DB,
+          knownOrganizationId,
+          subscriptionId,
+        ))
+      ) {
+        return true;
+      }
+      const subscription = await expandedSubscription(
         environment,
+        subscriptionId,
+      );
+      if (!subscription) return false;
+      if (
+        checkoutSessionId &&
+        knownOrganizationId &&
+        !(await prepareCheckoutSubscriptionReplacement(
+          environment,
+          knownOrganizationId,
+          checkoutSessionId,
+          subscription,
+        ))
+      ) {
+        return false;
+      }
+      const persisted = await persistSubscription(
+        environment,
+        subscription,
+        eventCreated,
         knownOrganizationId,
         checkoutSessionId,
+      );
+      if (persisted || !checkoutSessionId || !knownOrganizationId) {
+        return persisted;
+      }
+      return resolveRejectedCheckoutPersistence(
+        environment,
+        knownOrganizationId,
         subscription,
-      ))
-    ) {
-      return false;
-    }
-    const persisted = await persistSubscription(
-      environment,
-      subscription,
-      eventCreated,
-      knownOrganizationId,
-      checkoutSessionId,
-    );
-    if (persisted || !checkoutSessionId || !knownOrganizationId) {
-      return persisted;
-    }
-    return resolveRejectedCheckoutPersistence(
-      environment,
-      knownOrganizationId,
-      subscription,
-    );
-  });
+      );
+    },
+    checkoutRefresh,
+  );
+}
+
+async function checkoutSubscriptionAlreadyPersisted(
+  database: D1Database,
+  organizationId: string,
+  subscriptionId: string,
+) {
+  const current = await findBilling(database, organizationId);
+  return (
+    current?.stripe_subscription_id === subscriptionId &&
+    !current.pending_checkout_session_id
+  );
 }
 
 async function prepareCheckoutSubscriptionReplacement(
