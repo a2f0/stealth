@@ -15,6 +15,7 @@ it("tombstones expired audit images before scheduled cleanup", async () => {
       events.push("retention finished");
     },
     purgePendingAuditIssueImages: async () => events.push("issue images"),
+    purgeStripeWebhookReceipts: async () => events.push("webhook receipts"),
     reconcileSubscriptionSeats: async () => events.push("seats"),
   });
 
@@ -27,6 +28,7 @@ it("tombstones expired audit images before scheduled cleanup", async () => {
     "retention finished",
     "deleted objects",
     "issue images",
+    "webhook receipts",
     "seats",
   ]);
 });
@@ -41,6 +43,7 @@ it("runs independent maintenance after retention fails", async () => {
       throw retentionFailure;
     },
     purgePendingAuditIssueImages: async () => events.push("issue images"),
+    purgeStripeWebhookReceipts: async () => events.push("webhook receipts"),
     reconcileSubscriptionSeats: async () => events.push("seats"),
   });
 
@@ -49,6 +52,7 @@ it("runs independent maintenance after retention fails", async () => {
     "retention",
     "deleted objects",
     "issue images",
+    "webhook receipts",
     "seats",
   ]);
 });

@@ -1,6 +1,9 @@
 import { app } from "./app";
 import { purgePendingAuditIssueImages } from "./auditIssueImages";
-import { reconcileSubscriptionSeats } from "./billing";
+import {
+  purgeStripeWebhookReceipts,
+  reconcileSubscriptionSeats,
+} from "./billing";
 import { purgeExpiredFreeAuditRuns } from "./billingRetention";
 import { purgeDeletedObjects } from "./deletedObjectCleanup";
 import { handleEmail } from "./email";
@@ -16,6 +19,8 @@ export default {
         purgeExpiredFreeAuditRuns: () => purgeExpiredFreeAuditRuns(environment),
         purgePendingAuditIssueImages: () =>
           purgePendingAuditIssueImages(environment),
+        purgeStripeWebhookReceipts: () =>
+          purgeStripeWebhookReceipts(environment),
         reconcileSubscriptionSeats: () =>
           reconcileSubscriptionSeats(environment),
       }),
@@ -27,6 +32,7 @@ interface ScheduledMaintenanceTasks {
   purgeDeletedObjects: () => Promise<unknown>;
   purgeExpiredFreeAuditRuns: () => Promise<unknown>;
   purgePendingAuditIssueImages: () => Promise<unknown>;
+  purgeStripeWebhookReceipts: () => Promise<unknown>;
   reconcileSubscriptionSeats: () => Promise<unknown>;
 }
 
@@ -42,6 +48,7 @@ export async function runScheduledMaintenance(
   const results = await Promise.allSettled([
     tasks.purgeDeletedObjects(),
     tasks.purgePendingAuditIssueImages(),
+    tasks.purgeStripeWebhookReceipts(),
     tasks.reconcileSubscriptionSeats(),
   ]);
   for (const result of results) {

@@ -25,6 +25,8 @@ const checkoutDurationSeconds = 35 * 60;
 const pendingCheckoutReconciliationLimit = 25;
 const subscriptionSeatReconciliationLimit = 25;
 const subscriptionSyncClaimSeconds = 2 * 60;
+const stripeWebhookReceiptCleanupLimit = 500;
+const stripeWebhookReceiptRetentionDays = 31;
 
 type BillingEnv = {
   Bindings: Bindings;
@@ -582,7 +584,6 @@ export async function reconcilePendingCheckoutEntitlements(
       organization_id: string;
       pending_checkout_session_id: string;
     }>();
-  let firstFailure: unknown;
   for (const row of pending.results) {
     try {
       await reconcilePendingCheckoutEntitlement(
@@ -592,10 +593,34 @@ export async function reconcilePendingCheckoutEntitlements(
         nowSeconds,
       );
     } catch (cause) {
-      firstFailure ??= cause;
+      console.error(
+        "Pending Checkout reconciliation failed",
+        row.organization_id,
+        cause,
+      );
     }
   }
-  if (firstFailure !== undefined) throw firstFailure;
+}
+
+export async function purgeStripeWebhookReceipts(
+  environment: Pick<Bindings, "DB">,
+  retainedAfter = new Date(
+    Date.now() - stripeWebhookReceiptRetentionDays * 24 * 60 * 60 * 1_000,
+  ).toISOString(),
+) {
+  const deleted = await environment.DB.prepare(
+    `DELETE FROM stripe_webhook_events
+     WHERE id IN (
+       SELECT id FROM stripe_webhook_events
+       WHERE datetime(COALESCE(processed_at, received_at)) < datetime(?)
+       ORDER BY datetime(COALESCE(processed_at, received_at)) ASC, id ASC
+       LIMIT ?
+     )
+     RETURNING id`,
+  )
+    .bind(retainedAfter, stripeWebhookReceiptCleanupLimit)
+    .all<{ id: string }>();
+  return deleted.results.length;
 }
 
 async function reconcilePendingCheckoutEntitlement(
@@ -1253,10 +1278,20 @@ async function persistSubscription(
      ON CONFLICT (organization_id) DO UPDATE SET
        stripe_customer_id = excluded.stripe_customer_id,
        stripe_subscription_id = excluded.stripe_subscription_id,
-       stripe_subscription_item_id = excluded.stripe_subscription_item_id,
-       stripe_price_id = excluded.stripe_price_id,
+       stripe_subscription_item_id = COALESCE(
+         excluded.stripe_subscription_item_id,
+         organization_billing.stripe_subscription_item_id
+       ),
+       stripe_price_id = COALESCE(
+         excluded.stripe_price_id,
+         organization_billing.stripe_price_id
+       ),
        stripe_status = excluded.stripe_status,
-       seat_quantity = excluded.seat_quantity,
+       seat_quantity = CASE
+         WHEN excluded.stripe_subscription_item_id IS NOT NULL
+           THEN excluded.seat_quantity
+         ELSE organization_billing.seat_quantity
+       END,
        cancel_at_period_end = excluded.cancel_at_period_end,
        current_period_end = excluded.current_period_end,
        stripe_event_created = MAX(
@@ -1332,13 +1367,14 @@ async function organizationHasPro(
 
 function isPaidBilling(
   record: BillingRow | null,
-  expectedPriceId: string | undefined,
+  configuredPriceId: string | undefined,
 ) {
   return Boolean(
-    expectedPriceId &&
+    configuredPriceId &&
       record?.stripe_status &&
       paidStatuses.has(record.stripe_status) &&
-      record.stripe_price_id === expectedPriceId,
+      (record.stripe_subscription_item_id ||
+        record.stripe_price_id === configuredPriceId),
   );
 }
 

@@ -7,6 +7,7 @@ import {
   billing,
   cancelOrganizationSubscription,
   handleStripeWebhook,
+  purgeStripeWebhookReceipts,
   reconcileSubscriptionSeats,
   syncOrganizationSeats,
 } from "./billing";
@@ -356,6 +357,28 @@ describe("billing", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("prunes Stripe webhook receipts outside the replay window", async () => {
+    const fixture = await createFixture();
+    fixture.database.exec(
+      `INSERT INTO stripe_webhook_events
+       (id, event_type, stripe_created, received_at, processed_at)
+       VALUES
+         ('evt_old_processed', 'invoice.paid', 1,
+          '2026-06-01', '2026-06-01'),
+         ('evt_old_unprocessed', 'invoice.paid', 2,
+          '2026-06-01', NULL),
+         ('evt_recent', 'invoice.paid', 3,
+          '2026-08-20', '2026-08-20')`,
+    );
+
+    expect(
+      await purgeStripeWebhookReceipts(fixture.bindings, "2026-07-01"),
+    ).toBe(2);
+    expect(
+      fixture.database.query("SELECT id FROM stripe_webhook_events").all(),
+    ).toEqual([{ id: "evt_recent" }]);
   });
 
   it("rejects missing, invalid, and stale webhook signatures", async () => {
@@ -880,9 +903,9 @@ describe("billing", () => {
     fixture.database
       .query(
         `INSERT INTO organization_billing
-         (organization_id, stripe_price_id, stripe_status, seat_quantity,
-          stripe_event_created, updated_at)
-         VALUES ('org_user-2', ?, 'active', 1, 1, ?)`,
+         (organization_id, stripe_subscription_item_id, stripe_price_id,
+          stripe_status, seat_quantity, stripe_event_created, updated_at)
+         VALUES ('org_user-2', 'si_retention_pro', ?, 'active', 1, 1, ?)`,
       )
       .run(proPriceId, new Date().toISOString());
     fixture.database
@@ -909,6 +932,58 @@ describe("billing", () => {
     expect(
       fixture.database.query("SELECT id FROM audits ORDER BY id").all(),
     ).toEqual([{ id: "free-recent" }, { id: "pro-old" }]);
+  });
+
+  it("keeps Pro history after the configured price rotates", async () => {
+    const fixture = await createFixture();
+    let subscription = subscriptionEvent(
+      "evt_before_price_rotation",
+      100,
+      "active",
+      1,
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input) =>
+      Response.json(subscription.data.object)) as typeof fetch;
+    try {
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      fixture.bindings.STRIPE_PRO_PRICE_ID = "price_rotated";
+      subscription = subscriptionEvent(
+        "evt_after_price_rotation",
+        101,
+        "active",
+        1,
+      );
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      insertAudit(
+        fixture.database,
+        "rotated-price-pro-old",
+        organizationId,
+        "2026-06-01",
+      );
+
+      expect(
+        await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+      ).toBe(0);
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_price_id, stripe_subscription_item_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        stripe_price_id: proPriceId,
+        stripe_subscription_item_id: "si_test",
+      });
+      expect(
+        await (
+          await fixture.app.request("/", undefined, fixture.bindings)
+        ).json(),
+      ).toMatchObject({ plan: "pro" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("caps expired Free audit cleanup per invocation", async () => {
@@ -1112,6 +1187,37 @@ describe("billing", () => {
         "https://api.stripe.com/v1/checkout/sessions/cs_retention_abandoned/expire",
       ]);
     } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("isolates failed Checkout reconciliation during retention", async () => {
+    const fixture = await createFixture();
+    insertStalePendingCheckout(fixture.database, "cs_retention_failed");
+    insertAudit(
+      fixture.database,
+      "failed-checkout-old",
+      organizationId,
+      "2026-06-01",
+    );
+    insertAudit(fixture.database, "other-free-old", "org_user-2", "2026-06-01");
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input) =>
+      Response.json(
+        { error: { message: "Stripe is unavailable" } },
+        { status: 500 },
+      )) as typeof fetch;
+    console.error = () => {};
+    try {
+      expect(
+        await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+      ).toBe(1);
+      expect(
+        fixture.database.query("SELECT id FROM audits ORDER BY id").all(),
+      ).toEqual([{ id: "failed-checkout-old" }]);
+    } finally {
+      console.error = originalConsoleError;
       globalThis.fetch = originalFetch;
     }
   });
