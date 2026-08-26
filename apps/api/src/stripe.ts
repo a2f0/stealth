@@ -3,10 +3,6 @@ import type { Bindings } from "./types";
 const stripeApiVersion = "2026-06-24.dahlia";
 const webhookToleranceSeconds = 5 * 60;
 
-interface StripeErrorResponse {
-  error?: { message?: string; type?: string };
-}
-
 export class StripeConfigurationError extends Error {}
 
 export class StripeApiError extends Error {
@@ -18,16 +14,16 @@ export class StripeApiError extends Error {
   }
 }
 
-export async function stripeGet<T>(
+export async function stripeGet(
   environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
   path: string,
   query?: URLSearchParams,
 ) {
   const suffix = query && query.size > 0 ? `?${query}` : "";
-  return stripeRequest<T>(environment, `${path}${suffix}`, { method: "GET" });
+  return stripeRequest(environment, `${path}${suffix}`, { method: "GET" });
 }
 
-export async function stripePost<T>(
+export async function stripePost(
   environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
   path: string,
   parameters: URLSearchParams,
@@ -40,17 +36,17 @@ export async function stripePost<T>(
   if (idempotencyKey) {
     init.headers = { "Idempotency-Key": idempotencyKey };
   }
-  return stripeRequest<T>(environment, path, init);
+  return stripeRequest(environment, path, init);
 }
 
-export async function stripeDelete<T>(
+export async function stripeDelete(
   environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
   path: string,
 ) {
-  return stripeRequest<T>(environment, path, { method: "DELETE" });
+  return stripeRequest(environment, path, { method: "DELETE" });
 }
 
-async function stripeRequest<T>(
+async function stripeRequest(
   environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
   path: string,
   init: RequestInit,
@@ -70,15 +66,9 @@ async function stripeRequest<T>(
       ...init.headers,
     },
   });
-  const body = (await response.json().catch(() => null)) as
-    | StripeErrorResponse
-    | T
-    | null;
+  const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const message =
-      body && typeof body === "object" && "error" in body
-        ? body.error?.message
-        : "Stripe rejected the billing request.";
+    const message = stripeErrorMessage(body);
     throw new StripeApiError(
       message ?? "Stripe rejected the billing request.",
       response.status,
@@ -87,7 +77,20 @@ async function stripeRequest<T>(
   if (body === null) {
     throw new StripeApiError("Stripe returned an empty response.", 502);
   }
-  return body as T;
+  return body;
+}
+
+function stripeErrorMessage(value: unknown) {
+  if (!value || typeof value !== "object" || !("error" in value)) {
+    return "Stripe rejected the billing request.";
+  }
+  const error = value.error;
+  if (!error || typeof error !== "object" || !("message" in error)) {
+    return "Stripe rejected the billing request.";
+  }
+  return typeof error.message === "string"
+    ? error.message
+    : "Stripe rejected the billing request.";
 }
 
 export async function verifyStripeWebhook(

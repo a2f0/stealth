@@ -67,6 +67,11 @@ interface StripeSubscriptionItem {
   quantity?: number;
 }
 
+interface StripeSeatItemResponse {
+  id: string;
+  quantity: number;
+}
+
 interface StripeSubscription {
   cancel_at?: number | null;
   cancel_at_period_end?: boolean;
@@ -83,6 +88,26 @@ interface StripeEvent {
   data: { object: unknown };
   id: string;
   type: string;
+}
+
+interface StripePayloadRecord extends Record<string, unknown> {
+  cancel_at?: unknown;
+  cancel_at_period_end?: unknown;
+  client_reference_id?: unknown;
+  current_period_end?: unknown;
+  customer?: unknown;
+  data?: unknown;
+  expires_at?: unknown;
+  id?: unknown;
+  items?: unknown;
+  metadata?: unknown;
+  parent?: unknown;
+  price?: unknown;
+  quantity?: unknown;
+  status?: unknown;
+  subscription?: unknown;
+  subscription_details?: unknown;
+  url?: unknown;
 }
 
 type StripeExpandable = string | { id: string };
@@ -171,13 +196,15 @@ billing.post("/checkout", async (context) => {
     billingRecord?.stripe_customer_id,
   );
   try {
-    const checkout = await stripePost<StripeCheckoutSession>(
-      context.env,
-      "/v1/checkout/sessions",
-      parameters,
-      `checkout:${organizationId}:${claimedBilling.checkout_claim_id}`,
+    const checkout = parseStripeCheckoutSession(
+      await stripePost(
+        context.env,
+        "/v1/checkout/sessions",
+        parameters,
+        `checkout:${organizationId}:${claimedBilling.checkout_claim_id}`,
+      ),
     );
-    if (!checkout.url || !checkout.id || !checkout.expires_at) {
+    if (!validCreatedCheckout(checkout)) {
       throw new Error("Stripe did not return a checkout URL.");
     }
     const stored = await storePendingCheckout(
@@ -227,10 +254,8 @@ billing.post("/portal", async (context) => {
     parameters.set("configuration", context.env.STRIPE_PORTAL_CONFIGURATION_ID);
   }
   try {
-    const portal = await stripePost<{ url?: string }>(
-      context.env,
-      "/v1/billing_portal/sessions",
-      parameters,
+    const portal = parseStripePortalSession(
+      await stripePost(context.env, "/v1/billing_portal/sessions", parameters),
     );
     if (!portal.url) throw new Error("Stripe did not return a portal URL.");
     return context.json({ url: portal.url });
@@ -361,10 +386,42 @@ export async function syncOrganizationSeats(
   organizationId: string,
   verifyStripeQuantity = false,
 ) {
+  const initialRecord = await findBilling(environment.DB, organizationId);
+  if (
+    !isPaidBilling(initialRecord, environment.STRIPE_PRO_PRICE_ID) ||
+    !initialRecord?.stripe_subscription_item_id
+  ) {
+    return false;
+  }
+  const lockId = subscriptionLockId(initialRecord);
+  return withSubscriptionSyncLock(
+    environment.DB,
+    lockId,
+    async () =>
+      syncOrganizationSeatsLocked(
+        environment,
+        organizationId,
+        lockId,
+        verifyStripeQuantity,
+      ),
+    true,
+  );
+}
+
+async function syncOrganizationSeatsLocked(
+  environment: Pick<
+    Bindings,
+    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+  >,
+  organizationId: string,
+  lockId: string,
+  verifyStripeQuantity: boolean,
+) {
   const record = await findBilling(environment.DB, organizationId);
   if (
     !isPaidBilling(record, environment.STRIPE_PRO_PRICE_ID) ||
-    !record?.stripe_subscription_item_id
+    !record?.stripe_subscription_item_id ||
+    subscriptionLockId(record) !== lockId
   ) {
     return false;
   }
@@ -374,11 +431,16 @@ export async function syncOrganizationSeats(
   );
   if (quantity === record.seat_quantity && !verifyStripeQuantity) return false;
   if (verifyStripeQuantity) {
-    const stripeItem = await stripeGet<StripeSubscriptionItem>(
-      environment,
-      `/v1/subscription_items/${encodeURIComponent(record.stripe_subscription_item_id)}`,
+    const stripeItem = parseStripeSeatItemResponse(
+      await stripeGet(
+        environment,
+        `/v1/subscription_items/${encodeURIComponent(record.stripe_subscription_item_id)}`,
+      ),
     );
-    if (Math.max(1, stripeItem.quantity ?? 1) === quantity) {
+    if (
+      stripeItem.id === record.stripe_subscription_item_id &&
+      stripeItem.quantity === quantity
+    ) {
       if (record.seat_quantity !== quantity) {
         await updateStoredSeatQuantity(
           environment.DB,
@@ -390,22 +452,30 @@ export async function syncOrganizationSeats(
       return false;
     }
   }
-  await stripePost(
-    environment,
-    `/v1/subscription_items/${encodeURIComponent(record.stripe_subscription_item_id)}`,
-    new URLSearchParams({
-      proration_behavior: "create_prorations",
-      quantity: String(quantity),
-    }),
-    [
-      "seats",
-      organizationId,
-      record.stripe_subscription_item_id,
-      record.seat_quantity,
-      quantity,
-      record.updated_at,
-    ].join(":"),
+  const stripeItem = parseStripeSeatItemResponse(
+    await stripePost(
+      environment,
+      `/v1/subscription_items/${encodeURIComponent(record.stripe_subscription_item_id)}`,
+      new URLSearchParams({
+        proration_behavior: "create_prorations",
+        quantity: String(quantity),
+      }),
+      [
+        "seats",
+        organizationId,
+        record.stripe_subscription_item_id,
+        record.seat_quantity,
+        quantity,
+        record.updated_at,
+      ].join(":"),
+    ),
   );
+  if (
+    stripeItem.id !== record.stripe_subscription_item_id ||
+    stripeItem.quantity !== quantity
+  ) {
+    throw new StripeApiError("Stripe did not update the seat quantity.", 502);
+  }
   await updateStoredSeatQuantity(
     environment.DB,
     organizationId,
@@ -413,6 +483,13 @@ export async function syncOrganizationSeats(
     quantity,
   );
   return true;
+}
+
+function subscriptionLockId(record: BillingRow) {
+  return (
+    record.stripe_subscription_id ??
+    `subscription-item:${record.stripe_subscription_item_id ?? "missing"}`
+  );
 }
 
 export async function reconcileSubscriptionSeats(
@@ -531,9 +608,11 @@ async function deleteStripeSubscription(
   environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
   subscriptionId: string,
 ) {
-  const subscription = await stripeDelete<StripeSubscription>(
-    environment,
-    `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+  const subscription = parseStripeSubscription(
+    await stripeDelete(
+      environment,
+      `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    ),
   );
   if (subscription.status !== "canceled") {
     throw new StripeApiError("Stripe did not cancel the subscription.", 502);
@@ -562,16 +641,20 @@ async function resolvePendingCheckoutForDeletion(
 ) {
   if (!record?.pending_checkout_session_id) return null;
   const sessionId = record.pending_checkout_session_id;
-  let session = await stripeGet<StripeCheckoutSession>(
-    environment,
-    `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+  let session = parseStripeCheckoutSession(
+    await stripeGet(
+      environment,
+      `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+    ),
   );
   if (session.status === "open") {
     try {
-      session = await stripePost<StripeCheckoutSession>(
-        environment,
-        `/v1/checkout/sessions/${encodeURIComponent(sessionId)}/expire`,
-        new URLSearchParams(),
+      session = parseStripeCheckoutSession(
+        await stripePost(
+          environment,
+          `/v1/checkout/sessions/${encodeURIComponent(sessionId)}/expire`,
+          new URLSearchParams(),
+        ),
       );
     } catch (cause) {
       if (
@@ -580,9 +663,11 @@ async function resolvePendingCheckoutForDeletion(
       ) {
         throw cause;
       }
-      session = await stripeGet<StripeCheckoutSession>(
-        environment,
-        `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+      session = parseStripeCheckoutSession(
+        await stripeGet(
+          environment,
+          `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+        ),
       );
     }
   }
@@ -643,10 +728,12 @@ async function confirmCheckoutSession(
 ) {
   const query = new URLSearchParams();
   query.append("expand[]", "subscription");
-  const session = await stripeGet<StripeCheckoutSession>(
-    environment,
-    `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
-    query,
+  const session = parseStripeCheckoutSession(
+    await stripeGet(
+      environment,
+      `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+      query,
+    ),
   );
   if (
     session.client_reference_id !== organizationId ||
@@ -681,7 +768,7 @@ async function processStripeEvent(
   event: StripeEvent,
 ) {
   if (event.type === "checkout.session.completed") {
-    const session = event.data.object as StripeCheckoutSession;
+    const session = parseStripeCheckoutSession(event.data.object);
     const organizationId =
       session.client_reference_id ?? session.metadata?.organization_id;
     if (!organizationId) return;
@@ -698,24 +785,39 @@ async function processStripeEvent(
     return;
   }
   if (event.type.startsWith("customer.subscription.")) {
-    const eventSubscription = event.data.object as StripeSubscription;
-    await refreshSubscription(environment, eventSubscription.id, event.created);
+    const subscriptionId = stripeObjectId(event.data.object, "sub_");
+    await refreshSubscription(environment, subscriptionId, event.created);
     return;
   }
   if (
     event.type === "invoice.paid" ||
     event.type === "invoice.payment_failed"
   ) {
-    const invoice = event.data.object as {
-      parent?: { subscription_details?: { subscription?: StripeExpandable } };
-      subscription?: StripeExpandable;
-    };
-    const subscriptionId =
-      invoice.parent?.subscription_details?.subscription ??
-      invoice.subscription;
-    const id = optionalExpandableId(subscriptionId ?? null);
+    const id = stripeInvoiceSubscriptionId(event.data.object);
     if (id) await refreshSubscription(environment, id, event.created);
   }
+}
+
+function stripeInvoiceSubscriptionId(value: unknown) {
+  const invoice = stripeRecord(value, "Invoice");
+  if (invoice.subscription !== undefined && invoice.subscription !== null) {
+    return expandableId(stripeExpandable(invoice.subscription, "sub_"));
+  }
+  if (invoice.parent === undefined || invoice.parent === null) return null;
+  const parent = stripeRecord(invoice.parent, "Invoice parent");
+  if (
+    parent.subscription_details === undefined ||
+    parent.subscription_details === null
+  ) {
+    return null;
+  }
+  const details = stripeRecord(
+    parent.subscription_details,
+    "Invoice subscription details",
+  );
+  return details.subscription === undefined || details.subscription === null
+    ? null
+    : expandableId(stripeExpandable(details.subscription, "sub_"));
 }
 
 async function refreshSubscription(
@@ -838,9 +940,8 @@ async function expandedSubscription(
   if (!value) return null;
   if (typeof value === "object" && "items" in value) return value;
   const id = expandableId(value);
-  return stripeGet<StripeSubscription>(
-    environment,
-    `/v1/subscriptions/${encodeURIComponent(id)}`,
+  return parseStripeSubscription(
+    await stripeGet(environment, `/v1/subscriptions/${encodeURIComponent(id)}`),
   );
 }
 
@@ -1187,6 +1288,15 @@ function activePendingCheckout(record: BillingRow | null, nowSeconds: number) {
   };
 }
 
+function validCreatedCheckout(checkout: StripeCheckoutSession) {
+  return Boolean(
+    checkout.status === "open" &&
+      checkout.url &&
+      checkout.id &&
+      checkout.expires_at,
+  );
+}
+
 function checkoutParameters(
   origin: string,
   organizationId: string,
@@ -1242,10 +1352,12 @@ async function expireCheckoutSession(
   environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
   sessionId: string,
 ) {
-  await stripePost(
-    environment,
-    `/v1/checkout/sessions/${encodeURIComponent(sessionId)}/expire`,
-    new URLSearchParams(),
+  parseStripeCheckoutSession(
+    await stripePost(
+      environment,
+      `/v1/checkout/sessions/${encodeURIComponent(sessionId)}/expire`,
+      new URLSearchParams(),
+    ),
   );
 }
 
@@ -1324,29 +1436,15 @@ async function withSubscriptionSyncLock<T>(
   database: D1Database,
   subscriptionId: string,
   action: () => Promise<T>,
+  waitForLock = false,
 ) {
   const claimId = crypto.randomUUID();
-  const nowSeconds = Math.floor(Date.now() / 1_000);
-  const claimed = await database
-    .prepare(
-      `INSERT INTO stripe_subscription_sync_locks
-       (subscription_id, claim_id, claim_expires_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT (subscription_id) DO UPDATE SET
-         claim_id = excluded.claim_id,
-         claim_expires_at = excluded.claim_expires_at
-       WHERE stripe_subscription_sync_locks.claim_expires_at <= ?`,
-    )
-    .bind(
-      subscriptionId,
-      claimId,
-      nowSeconds + subscriptionSyncClaimSeconds,
-      nowSeconds,
-    )
-    .run();
-  if (Number(claimed.meta.changes) !== 1) {
-    throw new Error("Stripe subscription synchronization is already running.");
-  }
+  await claimSubscriptionSyncLock(
+    database,
+    subscriptionId,
+    claimId,
+    waitForLock,
+  );
   try {
     return await action();
   } finally {
@@ -1360,12 +1458,241 @@ async function withSubscriptionSyncLock<T>(
   }
 }
 
+async function claimSubscriptionSyncLock(
+  database: D1Database,
+  subscriptionId: string,
+  claimId: string,
+  waitForLock: boolean,
+) {
+  const waitDeadline = Date.now() + 10_000;
+  while (true) {
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    const claimed = await database
+      .prepare(
+        `INSERT INTO stripe_subscription_sync_locks
+         (subscription_id, claim_id, claim_expires_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT (subscription_id) DO UPDATE SET
+           claim_id = excluded.claim_id,
+           claim_expires_at = excluded.claim_expires_at
+         WHERE stripe_subscription_sync_locks.claim_expires_at <= ?`,
+      )
+      .bind(
+        subscriptionId,
+        claimId,
+        nowSeconds + subscriptionSyncClaimSeconds,
+        nowSeconds,
+      )
+      .run();
+    if (Number(claimed.meta.changes) === 1) return;
+    if (!waitForLock || Date.now() >= waitDeadline) {
+      throw new Error(
+        "Stripe subscription synchronization is already running.",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 function optionalExpandableId(value: StripeExpandable | null) {
   return value ? expandableId(value) : null;
 }
 
 function expandableId(value: StripeExpandable) {
   return typeof value === "string" ? value : value.id;
+}
+
+function parseStripeCheckoutSession(value: unknown): StripeCheckoutSession {
+  const record = stripeRecord(value, "Checkout session");
+  const session: StripeCheckoutSession = {
+    client_reference_id: stripeNullableString(
+      record.client_reference_id,
+      "Checkout client reference",
+    ),
+    customer: stripeOptionalExpandable(record.customer, "cus_"),
+    id: stripeString(record.id, "Checkout session ID", "cs_"),
+    status: stripeNullableString(record.status, "Checkout status"),
+    subscription: stripeOptionalSubscription(record.subscription),
+  };
+  const expiresAt = stripeOptionalInteger(
+    record.expires_at,
+    "Checkout expiration",
+  );
+  if (expiresAt !== undefined) session.expires_at = expiresAt;
+  const metadata = stripeOptionalMetadata(record.metadata);
+  if (metadata) session.metadata = metadata;
+  const url = stripeOptionalNullableString(record.url, "Checkout URL");
+  if (url !== undefined) session.url = url;
+  return session;
+}
+
+function parseStripeSubscription(value: unknown): StripeSubscription {
+  const record = stripeRecord(value, "Subscription");
+  const items = stripeRecord(record.items, "Subscription items").data;
+  if (!Array.isArray(items)) {
+    throw malformedStripeResponse("Subscription items");
+  }
+  const subscription: StripeSubscription = {
+    customer: stripeExpandable(record.customer, "cus_"),
+    id: stripeString(record.id, "Subscription ID", "sub_"),
+    items: { data: items.map((item) => parseStripeSubscriptionItem(item)) },
+    status: stripeString(record.status, "Subscription status"),
+  };
+  const cancelAt = stripeOptionalInteger(
+    record.cancel_at,
+    "Subscription cancel",
+  );
+  if (cancelAt !== undefined) subscription.cancel_at = cancelAt;
+  if (record.cancel_at === null) subscription.cancel_at = null;
+  const cancelAtPeriodEnd = stripeOptionalBoolean(
+    record.cancel_at_period_end,
+    "Subscription cancellation",
+  );
+  if (cancelAtPeriodEnd !== undefined) {
+    subscription.cancel_at_period_end = cancelAtPeriodEnd;
+  }
+  const periodEnd = stripeOptionalInteger(
+    record.current_period_end,
+    "Subscription period end",
+  );
+  if (periodEnd !== undefined) subscription.current_period_end = periodEnd;
+  const metadata = stripeOptionalMetadata(record.metadata);
+  if (metadata) subscription.metadata = metadata;
+  return subscription;
+}
+
+function parseStripeSubscriptionItem(value: unknown): StripeSubscriptionItem {
+  const record = stripeRecord(value, "Subscription item");
+  const price = stripeRecord(record.price, "Subscription item price");
+  const item: StripeSubscriptionItem = {
+    id: stripeString(record.id, "Subscription item ID", "si_"),
+    price: { id: stripeString(price.id, "Stripe price ID", "price_") },
+  };
+  const periodEnd = stripeOptionalInteger(
+    record.current_period_end,
+    "Subscription item period end",
+  );
+  if (periodEnd !== undefined) item.current_period_end = periodEnd;
+  const quantity = stripeOptionalInteger(
+    record.quantity,
+    "Subscription item quantity",
+  );
+  if (quantity !== undefined && quantity < 1) {
+    throw malformedStripeResponse("Subscription item quantity");
+  }
+  if (quantity !== undefined) item.quantity = quantity;
+  return item;
+}
+
+function parseStripeSeatItemResponse(value: unknown): StripeSeatItemResponse {
+  const record = stripeRecord(value, "Subscription item");
+  const quantity = stripeOptionalInteger(
+    record.quantity,
+    "Subscription item quantity",
+  );
+  if (quantity === undefined || quantity < 1) {
+    throw malformedStripeResponse("Subscription item quantity");
+  }
+  return {
+    id: stripeString(record.id, "Subscription item ID", "si_"),
+    quantity,
+  };
+}
+
+function parseStripePortalSession(value: unknown) {
+  const record = stripeRecord(value, "Billing Portal session");
+  return {
+    url: stripeString(record.url, "Billing Portal URL", "https://"),
+  };
+}
+
+function stripeOptionalSubscription(
+  value: unknown,
+): StripeExpandable | StripeSubscription | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "object" && value !== null && "items" in value) {
+    return parseStripeSubscription(value);
+  }
+  return stripeExpandable(value, "sub_");
+}
+
+function stripeOptionalExpandable(
+  value: unknown,
+  prefix: string,
+): StripeExpandable | null {
+  if (value === undefined || value === null) return null;
+  return stripeExpandable(value, prefix);
+}
+
+function stripeExpandable(value: unknown, prefix: string): StripeExpandable {
+  if (typeof value === "string") {
+    return stripeString(value, "Stripe object ID", prefix);
+  }
+  const record = stripeRecord(value, "Expandable Stripe object");
+  return { id: stripeString(record.id, "Stripe object ID", prefix) };
+}
+
+function stripeObjectId(value: unknown, prefix: string) {
+  return stripeString(
+    stripeRecord(value, "Stripe event object").id,
+    "Stripe event object ID",
+    prefix,
+  );
+}
+
+function stripeRecord(value: unknown, label: string): StripePayloadRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw malformedStripeResponse(label);
+  }
+  return value as StripePayloadRecord;
+}
+
+function stripeString(value: unknown, label: string, prefix?: string) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    (prefix !== undefined && !value.startsWith(prefix))
+  ) {
+    throw malformedStripeResponse(label);
+  }
+  return value;
+}
+
+function stripeNullableString(value: unknown, label: string) {
+  if (value === undefined || value === null) return null;
+  return stripeString(value, label);
+}
+
+function stripeOptionalNullableString(value: unknown, label: string) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return stripeString(value, label);
+}
+
+function stripeOptionalInteger(value: unknown, label: string) {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value)) throw malformedStripeResponse(label);
+  return value as number;
+}
+
+function stripeOptionalBoolean(value: unknown, label: string) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw malformedStripeResponse(label);
+  return value;
+}
+
+function stripeOptionalMetadata(value: unknown) {
+  if (value === undefined) return undefined;
+  const record = stripeRecord(value, "Stripe metadata");
+  const metadata: Record<string, string> = {};
+  for (const [key, field] of Object.entries(record)) {
+    metadata[key] = stripeString(field, "Stripe metadata value");
+  }
+  return metadata;
+}
+
+function malformedStripeResponse(label: string) {
+  return new StripeApiError(`Stripe returned a malformed ${label}.`, 502);
 }
 
 function validEvent(value: StripeEvent) {

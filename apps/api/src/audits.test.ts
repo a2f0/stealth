@@ -1644,7 +1644,7 @@ async function createFixture() {
   await applyMigration(database, "0028_lease_audit_image_uploads.sql");
   await applyMigration(database, "0029_tombstone_cascaded_audit_images.sql");
   await applyMigration(database, "0030_queue_deleted_objects.sql");
-  await applyMigration(database, "0031_create_billing.sql");
+  await applyMigration(database, "0032_create_billing.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,

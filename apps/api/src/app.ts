@@ -36,6 +36,12 @@ app.use(
   }),
 );
 
+app.use(
+  "/api/auth/organization/*",
+  requireAuth,
+  requireOrganizationPluginAccess,
+  requireAuthOrganizationSeat,
+);
 app.post("/api/auth/organization/leave", async (context) => {
   const input = (await context.req.raw
     .clone()
@@ -55,13 +61,6 @@ app.post("/api/auth/organization/leave", async (context) => {
   }
   return response;
 });
-
-app.use(
-  "/api/auth/organization/*",
-  requireAuth,
-  requireOrganizationPluginAccess,
-  requireAuthOrganizationSeat,
-);
 app.all("/api/auth/*", (context) =>
   createAuth(context.env, (promise) =>
     context.executionCtx.waitUntil(promise),

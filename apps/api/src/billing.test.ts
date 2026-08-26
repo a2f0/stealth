@@ -186,6 +186,29 @@ describe("billing", () => {
     }
   });
 
+  it("rejects malformed successful Stripe responses", async () => {
+    const fixture = await createFixture();
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json({ id: "not-a-checkout-session" })) as typeof fetch;
+    console.error = () => {};
+    try {
+      const response = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        fixture.bindings,
+      );
+      expect(response.status).toBe(502);
+      expect((await response.json()) as unknown).toEqual({
+        error: "Stripe returned a malformed Checkout session ID.",
+      });
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("invalidates an in-flight Checkout before organization deletion", async () => {
     const fixture = await createFixture();
     const originalFetch = globalThis.fetch;
@@ -317,6 +340,47 @@ describe("billing", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("rejects missing, invalid, and stale webhook signatures", async () => {
+    const fixture = await createFixture();
+    const event = subscriptionEvent("evt_bad_signature", 100, "active", 1);
+    const payload = JSON.stringify(event);
+    const timestamp = Math.floor(Date.now() / 1_000);
+    const staleTimestamp = timestamp - 301;
+    const staleSignature = await webhookSignature(
+      fixture.bindings.STRIPE_WEBHOOK_SECRET ?? "",
+      staleTimestamp,
+      payload,
+    );
+    const requests = [
+      new Request("https://api.test/", { body: payload, method: "POST" }),
+      new Request("https://api.test/", {
+        body: payload,
+        headers: {
+          "stripe-signature": `t=${timestamp},v1=${"0".repeat(64)}`,
+        },
+        method: "POST",
+      }),
+      new Request("https://api.test/", {
+        body: payload,
+        headers: {
+          "stripe-signature": `t=${staleTimestamp},v1=${staleSignature}`,
+        },
+        method: "POST",
+      }),
+    ];
+    for (const request of requests) {
+      expect(
+        (await fixture.webhook.request(request, undefined, fixture.bindings))
+          .status,
+      ).toBe(400);
+    }
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM stripe_webhook_events")
+        .get(),
+    ).toEqual({ count: 0 });
   });
 
   it("only lets verified Checkout replace the current subscription", async () => {
@@ -565,6 +629,65 @@ describe("billing", () => {
     }
   });
 
+  it("serializes concurrent seat changes to the final member count", async () => {
+    const fixture = await createFixture();
+    addMember(fixture.database, "user-2", organizationId);
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_customer_id, stripe_subscription_id,
+          stripe_subscription_item_id, stripe_price_id, stripe_status,
+          seat_quantity, stripe_event_created, updated_at)
+         VALUES (?, 'cus_test', 'sub_test', 'si_test', ?, 'active', 1, 1, ?)`,
+      )
+      .run(organizationId, proPriceId, new Date().toISOString());
+    let markFirstRequestStarted = () => {};
+    let releaseFirstRequest = () => {};
+    const firstRequestStarted = new Promise<void>((resolve) => {
+      markFirstRequestStarted = resolve;
+    });
+    const firstRequestReleased = new Promise<void>((resolve) => {
+      releaseFirstRequest = resolve;
+    });
+    const quantities: number[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, init) => {
+      const quantity = Number(
+        new URLSearchParams(String(init?.body)).get("quantity"),
+      );
+      quantities.push(quantity);
+      if (quantities.length === 1) {
+        markFirstRequestStarted();
+        await firstRequestReleased;
+      }
+      return Response.json({ id: "si_test", quantity });
+    }) as typeof fetch;
+    try {
+      const firstSync = syncOrganizationSeats(fixture.bindings, organizationId);
+      await firstRequestStarted;
+      addMember(fixture.database, "user-3", organizationId);
+      const secondSync = syncOrganizationSeats(
+        fixture.bindings,
+        organizationId,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      releaseFirstRequest();
+      expect(await Promise.all([firstSync, secondSync])).toEqual([true, true]);
+      expect(quantities).toEqual([2, 3]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT seat_quantity FROM organization_billing
+             WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ seat_quantity: 3 });
+    } finally {
+      releaseFirstRequest();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reconciles every subscription when more than one batch is active", async () => {
     const fixture = await createFixture();
     const now = new Date().toISOString();
@@ -624,7 +747,10 @@ describe("billing", () => {
         method: init?.method ?? "GET",
         quantity: new URLSearchParams(String(init?.body ?? "")).get("quantity"),
       });
-      return Response.json({ id: "si_drift", quantity: 2 });
+      return Response.json({
+        id: "si_drift",
+        quantity: init?.method === "POST" ? 1 : 2,
+      });
     }) as typeof fetch;
     try {
       await reconcileSubscriptionSeats(fixture.bindings);
@@ -733,7 +859,7 @@ async function createFixture(organizationRole = "owner") {
   await applyMigration(database, "0005_create_audits.sql");
   await applyMigration(database, "0011_soft_delete_organizations.sql");
   await applyMigration(database, "0022_version_audit_templates.sql");
-  await applyMigration(database, "0031_create_billing.sql");
+  await applyMigration(database, "0032_create_billing.sql");
   const bindings = {
     AUTH_EMAIL_FROM: "security@auth.tearleads.test",
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",

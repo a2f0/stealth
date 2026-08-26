@@ -41,3 +41,13 @@ CREATE TABLE stripe_webhook_events (
 
 CREATE INDEX stripe_webhook_events_processing_idx
 ON stripe_webhook_events (processed_at, received_at);
+
+CREATE TRIGGER organization_after_restore_billing
+AFTER UPDATE OF deletedAt ON organization
+WHEN OLD.deletedAt IS NOT NULL AND NEW.deletedAt IS NULL
+BEGIN
+  UPDATE organization_billing
+  SET checkout_disabled_at = NULL,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  WHERE organization_id = NEW.id;
+END;

@@ -968,7 +968,7 @@ async function createFixture() {
   await applyMigration(database, "0020_add_two_factor_authentication.sql");
   await applyMigration(database, "0021_track_terms_acceptance.sql");
   await applyMigration(database, "0031_require_member_two_factor.sql");
-  await applyMigration(database, "0031_create_billing.sql");
+  await applyMigration(database, "0032_create_billing.sql");
 
   return { auth, database, messages, pending };
 }

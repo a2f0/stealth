@@ -84,28 +84,14 @@ export async function restoreOrganization(
     .prepare(
       `UPDATE organization
        SET deletedAt = NULL, deletedByUserId = NULL
-       WHERE id = ? AND deletedAt IS NOT NULL`,
+       WHERE id = ? AND deletedAt IS NOT NULL
+         AND (
+           SELECT checkout_disabled_at FROM organization_billing
+           WHERE organization_id = organization.id
+         ) IS ?`,
     )
-    .bind(organizationId)
+    .bind(organizationId, billing?.checkout_disabled_at ?? null)
     .run();
   if (result.meta.changes < 1) return undefined;
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET checkout_disabled_at = NULL, updated_at = ?
-       WHERE organization_id = ?
-         AND checkout_disabled_at IS ?
-         AND EXISTS (
-           SELECT 1 FROM organization
-           WHERE id = ? AND deletedAt IS NULL
-         )`,
-    )
-    .bind(
-      new Date().toISOString(),
-      organizationId,
-      billing?.checkout_disabled_at ?? null,
-      organizationId,
-    )
-    .run();
   return { organizationId };
 }
