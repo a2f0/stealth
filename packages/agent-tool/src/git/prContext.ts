@@ -215,7 +215,7 @@ export function resolveFreshBaseRef(
   }
   const fetchResult = spawnSync(
     toolExecutable("git"),
-    ["fetch", "--quiet", repositoryUrl, baseRefName],
+    buildAuthenticatedFetchArgs(repositoryUrl, baseRefName),
     {
       env: toolEnvironment(),
       stdio: "ignore",
@@ -235,6 +235,23 @@ export function resolveFreshBaseRef(
   }
   assertFetchedCommit(baseRefName, expectedOid, fetchedOid);
   return fetchedOid;
+}
+
+/** Fetch through the validated `gh` executable on the trusted tool PATH. */
+export function buildAuthenticatedFetchArgs(
+  repositoryUrl: string,
+  baseRefName: string,
+): string[] {
+  return [
+    "-c",
+    "credential.helper=",
+    "-c",
+    "credential.helper=!gh auth git-credential",
+    "fetch",
+    "--quiet",
+    repositoryUrl,
+    baseRefName,
+  ];
 }
 
 export function assertFetchedCommit(

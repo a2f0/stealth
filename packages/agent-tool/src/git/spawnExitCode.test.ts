@@ -6,11 +6,29 @@ import {
   assertPrHeadMatchesLocal,
   assertSameReviewContext,
   assertSpawnSucceeded,
+  buildAuthenticatedFetchArgs,
   captureReviewDiff,
   MAX_REVIEW_DIFF_BYTES,
   selectOpenPrNumber,
   spawnExitCode,
 } from "./prContext";
+
+describe("buildAuthenticatedFetchArgs", () => {
+  test("uses the trusted GitHub CLI credential helper for private repos", () => {
+    expect(
+      buildAuthenticatedFetchArgs("https://github.com/acme/private", "main"),
+    ).toEqual([
+      "-c",
+      "credential.helper=",
+      "-c",
+      "credential.helper=!gh auth git-credential",
+      "fetch",
+      "--quiet",
+      "https://github.com/acme/private",
+      "main",
+    ]);
+  });
+});
 
 describe("assertCleanReviewWorktree", () => {
   test("accepts an empty status and rejects unreviewed files", () => {
