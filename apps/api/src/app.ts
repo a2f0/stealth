@@ -33,6 +33,8 @@ app.use(
   }),
 );
 
+app.use("/api/auth/organization/*", requireAuth, requireOrganization);
+
 app.all("/api/auth/*", (context) =>
   createAuth(context.env, (promise) =>
     context.executionCtx.waitUntil(promise),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getOrganizationAccess,
   type OrganizationCapability,
@@ -14,27 +14,36 @@ interface AccessState {
   userId: string;
 }
 
+interface RequirementState {
+  organizationId: string;
+  requirement: OrganizationTwoFactorRequirement;
+  userId: string;
+}
+
 export function useOrganizationAccess(
   userId: string | undefined,
   organizationId: string | undefined,
 ) {
+  const requestSequence = useRef(0);
   const [state, setState] = useState<AccessState>();
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string>();
-  const [twoFactorRequirement, setTwoFactorRequirement] =
-    useState<OrganizationTwoFactorRequirement>();
+  const [requirementState, setRequirementState] = useState<RequirementState>();
   const refresh = useCallback(async () => {
+    const requestId = ++requestSequence.current;
     if (!userId || !organizationId) {
       setState(undefined);
       setLoadError(undefined);
-      setTwoFactorRequirement(undefined);
+      setRequirementState(undefined);
+      setLoading(false);
       return;
     }
     setLoading(true);
     setLoadError(undefined);
-    setTwoFactorRequirement(undefined);
+    setRequirementState(undefined);
     try {
       const result = await getOrganizationAccess();
+      if (requestId !== requestSequence.current) return;
       setState({
         capabilities: result.capabilities,
         memberRole: result.memberRole,
@@ -43,7 +52,11 @@ export function useOrganizationAccess(
         userId,
       });
     } catch (cause) {
-      setTwoFactorRequirement(twoFactorRequirementFrom(cause));
+      if (requestId !== requestSequence.current) return;
+      const requirement = twoFactorRequirementFrom(cause);
+      setRequirementState(
+        requirement ? { organizationId, requirement, userId } : undefined,
+      );
       setLoadError(
         cause instanceof Error
           ? cause.message
@@ -57,13 +70,24 @@ export function useOrganizationAccess(
         userId,
       });
     } finally {
-      setLoading(false);
+      if (requestId === requestSequence.current) setLoading(false);
     }
   }, [organizationId, userId]);
-  useEffect(() => void refresh(), [refresh]);
+  useEffect(() => {
+    void refresh();
+    return () => {
+      requestSequence.current += 1;
+    };
+  }, [refresh]);
   const current =
     state?.organizationId === organizationId && state?.userId === userId
       ? state
+      : undefined;
+  const currentRequirement =
+    requirementState &&
+    requirementState.organizationId === organizationId &&
+    requirementState.userId === userId
+      ? requirementState.requirement
       : undefined;
   return {
     can: (capability: OrganizationCapability) =>
@@ -73,6 +97,6 @@ export function useOrganizationAccess(
     memberRole: current?.memberRole || undefined,
     ownerCount: current?.ownerCount ?? 0,
     refresh,
-    twoFactorRequirement,
+    twoFactorRequirement: currentRequirement,
   };
 }

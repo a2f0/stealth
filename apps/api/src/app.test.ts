@@ -133,6 +133,25 @@ describe("api", () => {
 
     expect(response.status).toBe(401);
   });
+
+  it("requires authentication for organization plugin mutations", async () => {
+    const response = await app.request(
+      "/api/auth/organization/update",
+      {
+        body: JSON.stringify({
+          data: { name: "Bypassed Requirement" },
+          organizationId: "organization-id",
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+    const body: unknown = await response.json();
+    expect(body).toEqual({ error: "Authentication required." });
+  });
 });
 
 function authBindings(): Bindings {

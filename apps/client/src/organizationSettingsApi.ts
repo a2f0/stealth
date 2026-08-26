@@ -4,8 +4,8 @@ import type { WorkspaceOrganization } from "./organizationState";
 export interface OrganizationMember {
   id: string;
   role: string;
-  twoFactorEnabled: boolean;
-  twoFactorRequired: boolean;
+  twoFactorEnabled?: boolean;
+  twoFactorRequired?: boolean;
   user: { email: string; id: string; name: string };
 }
 

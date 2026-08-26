@@ -45,13 +45,20 @@ organizationSettings.get("/organizations", async (context) => {
 organizationSettings.get("/people", async (context) => {
   const organizationId = context.get("organizationId");
   const memberRole = context.get("organizationRole");
+  const canManage = canManageOrganization(memberRole);
   const [members, invitations] = await Promise.all([
     listOrganizationMembers(context.env.DB, organizationId),
-    canManageOrganization(memberRole)
+    canManage
       ? listPendingInvitations(context.env.DB, organizationId)
       : Promise.resolve([]),
   ]);
-  return context.json({ invitations, memberRole, members });
+  return context.json({
+    invitations,
+    memberRole,
+    members: canManage
+      ? members
+      : members.map(({ id, role, user }) => ({ id, role, user })),
+  });
 });
 
 organizationSettings.patch(

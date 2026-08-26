@@ -105,6 +105,10 @@ describe("organization groups", () => {
     expect(memberListing.body.memberRole).toBe("member");
     expect(memberListing.body.members).toHaveLength(2);
     expect(memberListing.body.invitations).toEqual([]);
+    for (const listedMember of memberListing.body.members) {
+      expect(listedMember).not.toHaveProperty("twoFactorEnabled");
+      expect(listedMember).not.toHaveProperty("twoFactorRequired");
+    }
   });
 
   it("creates and deletes arbitrary organization groups", async () => {
@@ -153,6 +157,8 @@ interface AccessListing {
 interface MemberListing {
   id: string;
   role: string;
+  twoFactorEnabled?: boolean;
+  twoFactorRequired?: boolean;
   user: { email: string; id: string; name: string };
 }
 
