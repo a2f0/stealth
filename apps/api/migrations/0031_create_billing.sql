@@ -24,6 +24,12 @@ CREATE TABLE organization_billing (
 CREATE INDEX organization_billing_status_idx
 ON organization_billing (stripe_status, last_reconciled_at);
 
+CREATE TABLE stripe_subscription_sync_locks (
+  subscription_id TEXT NOT NULL PRIMARY KEY,
+  claim_id TEXT NOT NULL,
+  claim_expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE stripe_webhook_events (
   id TEXT NOT NULL PRIMARY KEY,
   event_type TEXT NOT NULL,

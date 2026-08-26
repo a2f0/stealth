@@ -113,6 +113,27 @@ describe("organization middleware", () => {
     );
     expect(switchResponse.status).toBe(200);
   });
+
+  it("rejects organization selectors that conflict with a canonical resource", async () => {
+    const bindings = {
+      DB: membershipDatabase(["active-org", "unseated-org"], [], "owner-id", {
+        invitations: { "invite-unseated": "unseated-org" },
+      }),
+    } as Bindings;
+    const response = await authOrganizationApp().request(
+      "/api/auth/organization/cancel-invitation?organizationId=active-org",
+      {
+        body: JSON.stringify({ invitationId: "invite-unseated" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      bindings,
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()) as unknown).toEqual({
+      error: "Organization selectors do not match.",
+    });
+  });
 });
 
 function authOrganizationApp() {
@@ -180,6 +201,11 @@ function membershipDatabase(
   memberships: string[],
   deletedMemberships: string[],
   freeSeatUserId: string,
+  resources: {
+    invitations?: Record<string, string>;
+    members?: Record<string, string>;
+    teams?: Record<string, string>;
+  } = {},
 ) {
   return {
     prepare: (query: string) => ({
@@ -204,6 +230,19 @@ function membershipDatabase(
           if (query.includes("FROM organization_billing")) return null;
           if (query.includes("SELECT userId")) {
             return { userId: freeSeatUserId };
+          }
+          const resourceId = values[0];
+          if (query.includes("FROM invitation")) {
+            const organizationId = resources.invitations?.[resourceId ?? ""];
+            return organizationId ? { organizationId } : null;
+          }
+          if (query.includes("FROM member")) {
+            const organizationId = resources.members?.[resourceId ?? ""];
+            return organizationId ? { organizationId } : null;
+          }
+          if (query.includes("FROM team")) {
+            const organizationId = resources.teams?.[resourceId ?? ""];
+            return organizationId ? { organizationId } : null;
           }
           return null;
         },

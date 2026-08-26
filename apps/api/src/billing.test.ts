@@ -189,6 +189,66 @@ describe("billing", () => {
     }
   });
 
+  it("serializes concurrent same-second subscription refreshes", async () => {
+    const fixture = await createFixture();
+    const active = subscriptionEvent("evt_concurrent_active", 100, "active", 1);
+    const canceled = subscriptionEvent(
+      "evt_concurrent_canceled",
+      100,
+      "canceled",
+      1,
+    );
+    let currentSubscription = active.data.object;
+    let releaseFirstFetch = () => {};
+    let markFirstFetchStarted = () => {};
+    const firstFetchStarted = new Promise<void>((resolve) => {
+      markFirstFetchStarted = resolve;
+    });
+    const firstFetchReleased = new Promise<void>((resolve) => {
+      releaseFirstFetch = resolve;
+    });
+    let fetchCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, _init) => {
+      fetchCount += 1;
+      const snapshot = currentSubscription;
+      if (fetchCount === 1) {
+        markFirstFetchStarted();
+        await firstFetchReleased;
+      }
+      return Response.json(snapshot);
+    }) as typeof fetch;
+    try {
+      const firstResponse = sendWebhook(fixture, active);
+      await firstFetchStarted;
+      currentSubscription = canceled.data.object;
+      const concurrentResponse = await sendWebhook(fixture, canceled);
+      expect(concurrentResponse.status).toBe(500);
+      releaseFirstFetch();
+      expect((await firstResponse).status).toBe(200);
+      expect((await sendWebhook(fixture, canceled)).status).toBe(200);
+      expect(
+        (
+          await sendWebhook(
+            fixture,
+            subscriptionEvent("evt_same_second_retry", 100, "active", 1),
+          )
+        ).status,
+      ).toBe(200);
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_status FROM organization_billing
+             WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ stripe_status: "canceled" });
+    } finally {
+      releaseFirstFetch();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("synchronizes Stripe quantity to active organization members", async () => {
     const fixture = await createFixture();
     addMember(fixture.database, "user-2", organizationId);
@@ -254,10 +314,49 @@ describe("billing", () => {
         .run(target, `si_${index}`, proPriceId, now);
     }
 
-    await reconcileSubscriptionSeats(fixture.bindings);
-    expect(reconciledCount(fixture.database)).toEqual({ count: 25 });
-    await reconcileSubscriptionSeats(fixture.bindings);
-    expect(reconciledCount(fixture.database)).toEqual({ count: 30 });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const id = String(input).split("/").at(-1);
+      return Response.json({ id, quantity: 1 });
+    }) as typeof fetch;
+    try {
+      await reconcileSubscriptionSeats(fixture.bindings);
+      expect(reconciledCount(fixture.database)).toEqual({ count: 25 });
+      await reconcileSubscriptionSeats(fixture.bindings);
+      expect(reconciledCount(fixture.database)).toEqual({ count: 30 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("repairs Stripe seat drift even when the cached quantity matches", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_subscription_item_id, stripe_price_id,
+          stripe_status, seat_quantity, stripe_event_created, updated_at)
+         VALUES (?, 'si_drift', ?, 'active', 1, 1, ?)`,
+      )
+      .run(organizationId, proPriceId, new Date().toISOString());
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; quantity: string | null }> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requests.push({
+        method: init?.method ?? "GET",
+        quantity: new URLSearchParams(String(init?.body ?? "")).get("quantity"),
+      });
+      return Response.json({ id: "si_drift", quantity: 2 });
+    }) as typeof fetch;
+    try {
+      await reconcileSubscriptionSeats(fixture.bindings);
+      expect(requests).toEqual([
+        { method: "GET", quantity: null },
+        { method: "POST", quantity: "1" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("purges old Free audit history without touching Pro history", async () => {

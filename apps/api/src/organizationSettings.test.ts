@@ -8,6 +8,7 @@ import type { Bindings } from "./types";
 
 const targetOrganizationId = "org_owner-user";
 const fallbackOrganizationId = "org_member-user";
+const proPriceId = "price_pro_test";
 
 describe("organization deletion", () => {
   it("only lets an organization owner delete the organization", async () => {
@@ -111,6 +112,72 @@ describe("organization deletion", () => {
       fixture.database.query("SELECT COUNT(*) AS count FROM user").get(),
     ).toEqual({ count: 2 });
   });
+
+  it("cancels paid billing before an owner deletes the organization", async () => {
+    const fixture = await createFixture();
+    insertPaidBilling(fixture.database, targetOrganizationId);
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; url: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      requests.push({ method: init?.method ?? "GET", url: String(input) });
+      return Response.json(canceledSubscription(targetOrganizationId));
+    }) as typeof fetch;
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(200);
+      expect(requests).toEqual([
+        {
+          method: "DELETE",
+          url: "https://api.stripe.com/v1/subscriptions/sub_test",
+        },
+      ]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT organization.deletedAt, organization_billing.stripe_status
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toMatchObject({
+        deletedAt: expect.any(String),
+        stripe_status: "canceled",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps a paid organization when owner cancellation fails", async () => {
+    const fixture = await createFixture();
+    insertPaidBilling(fixture.database, targetOrganizationId);
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(
+        { error: { message: "Stripe unavailable" } },
+        { status: 503 },
+      )) as typeof fetch;
+    console.error = () => {};
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(502);
+      expect(
+        fixture.database
+          .query("SELECT deletedAt FROM organization WHERE id = ?")
+          .get(targetOrganizationId),
+      ).toEqual({ deletedAt: null });
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 async function createFixture() {
@@ -160,11 +227,46 @@ async function createFixture() {
   await applyMigration(database, "0031_create_billing.sql");
   insertSession(database, "owner-user", targetOrganizationId);
   insertSession(database, "member-user", targetOrganizationId);
-  const bindings = { DB: toD1(database) } as Bindings;
+  const bindings = {
+    DB: toD1(database),
+    STRIPE_PRO_PRICE_ID: proPriceId,
+    STRIPE_SECRET_KEY: "sk_live_test",
+  } as Bindings;
   return {
     app: (userId: string, organizationRole: string) =>
       testApp(bindings, userId, organizationRole),
     database,
+  };
+}
+
+function insertPaidBilling(database: Database, organizationId: string) {
+  database
+    .query(
+      `INSERT INTO organization_billing
+       (organization_id, stripe_customer_id, stripe_subscription_id,
+        stripe_subscription_item_id, stripe_price_id, stripe_status,
+        seat_quantity, stripe_event_created, updated_at)
+       VALUES (?, 'cus_test', 'sub_test', 'si_test', ?, 'active', 2, 1, ?)`,
+    )
+    .run(organizationId, proPriceId, now());
+}
+
+function canceledSubscription(organizationId: string) {
+  return {
+    cancel_at_period_end: false,
+    customer: "cus_test",
+    id: "sub_test",
+    items: {
+      data: [
+        {
+          id: "si_test",
+          price: { id: proPriceId },
+          quantity: 2,
+        },
+      ],
+    },
+    metadata: { organization_id: organizationId },
+    status: "canceled",
   };
 }
 
@@ -244,7 +346,10 @@ function toD1(database: Database) {
           };
         },
         first: async () => database.query(query).get(...values),
-        run: async () => database.query(query).run(...values),
+        run: async () => {
+          const result = database.query(query).run(...values);
+          return { meta: { changes: result.changes } };
+        },
       };
       return statement;
     },

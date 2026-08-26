@@ -17,6 +17,7 @@ const unlimitedSeatLimit = Number.MAX_SAFE_INTEGER;
 const paidStatuses = new Set(["active", "past_due", "trialing"]);
 const webhookClaimTimeoutMilliseconds = 5 * 60 * 1000;
 const checkoutDurationSeconds = 35 * 60;
+const subscriptionSyncClaimSeconds = 2 * 60;
 
 type BillingEnv = {
   Bindings: Bindings;
@@ -349,6 +350,7 @@ export async function syncOrganizationSeats(
     "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
   >,
   organizationId: string,
+  verifyStripeQuantity = false,
 ) {
   const record = await findBilling(environment.DB, organizationId);
   if (
@@ -361,7 +363,24 @@ export async function syncOrganizationSeats(
     1,
     await countMembers(environment.DB, organizationId),
   );
-  if (quantity === record.seat_quantity) return false;
+  if (quantity === record.seat_quantity && !verifyStripeQuantity) return false;
+  if (verifyStripeQuantity) {
+    const stripeItem = await stripeGet<StripeSubscriptionItem>(
+      environment,
+      `/v1/subscription_items/${encodeURIComponent(record.stripe_subscription_item_id)}`,
+    );
+    if (Math.max(1, stripeItem.quantity ?? 1) === quantity) {
+      if (record.seat_quantity !== quantity) {
+        await updateStoredSeatQuantity(
+          environment.DB,
+          organizationId,
+          record.stripe_subscription_item_id,
+          quantity,
+        );
+      }
+      return false;
+    }
+  }
   await stripePost(
     environment,
     `/v1/subscription_items/${encodeURIComponent(record.stripe_subscription_item_id)}`,
@@ -378,18 +397,12 @@ export async function syncOrganizationSeats(
       record.updated_at,
     ].join(":"),
   );
-  await environment.DB.prepare(
-    `UPDATE organization_billing
-     SET seat_quantity = ?, updated_at = ?
-     WHERE organization_id = ? AND stripe_subscription_item_id = ?`,
-  )
-    .bind(
-      quantity,
-      new Date().toISOString(),
-      organizationId,
-      record.stripe_subscription_item_id,
-    )
-    .run();
+  await updateStoredSeatQuantity(
+    environment.DB,
+    organizationId,
+    record.stripe_subscription_item_id,
+    quantity,
+  );
   return true;
 }
 
@@ -410,7 +423,7 @@ export async function reconcileSubscriptionSeats(
   let firstFailure: unknown;
   for (const row of rows.results) {
     try {
-      await syncOrganizationSeats(environment, row.organization_id);
+      await syncOrganizationSeats(environment, row.organization_id, true);
     } catch (cause) {
       firstFailure ??= cause;
     } finally {
@@ -440,16 +453,19 @@ export async function cancelOrganizationSubscription(
   if (!record?.stripe_subscription_id || record.stripe_status === "canceled") {
     return false;
   }
-  const subscription = await stripeDelete<StripeSubscription>(
-    environment,
-    `/v1/subscriptions/${encodeURIComponent(record.stripe_subscription_id)}`,
-  );
-  await persistSubscription(
-    environment,
-    subscription,
-    Math.floor(Date.now() / 1000),
-    organizationId,
-  );
+  const subscriptionId = record.stripe_subscription_id;
+  await withSubscriptionSyncLock(environment.DB, subscriptionId, async () => {
+    const subscription = await stripeDelete<StripeSubscription>(
+      environment,
+      `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    );
+    await persistSubscription(
+      environment,
+      subscription,
+      Math.floor(Date.now() / 1000),
+      organizationId,
+    );
+  });
   return true;
 }
 
@@ -513,19 +529,19 @@ async function confirmCheckoutSession(
       409,
     );
   }
-  const subscription = await expandedSubscription(
-    environment,
-    session.subscription,
-  );
-  if (!subscription) {
+  const subscriptionId = optionalExpandableId(session.subscription);
+  if (!subscriptionId) {
     throw new StripeApiError("Checkout did not create a subscription.", 409);
   }
-  await persistSubscription(
+  const persisted = await refreshSubscription(
     environment,
-    subscription,
+    subscriptionId,
     Math.floor(Date.now() / 1000),
     organizationId,
   );
+  if (!persisted) {
+    throw new StripeApiError("Checkout did not create a subscription.", 409);
+  }
 }
 
 async function processStripeEvent(
@@ -540,14 +556,11 @@ async function processStripeEvent(
     const organizationId =
       session.client_reference_id ?? session.metadata?.organization_id;
     if (!organizationId) return;
-    const subscription = await expandedSubscription(
-      environment,
-      session.subscription,
-    );
-    if (subscription) {
-      await persistSubscription(
+    const subscriptionId = optionalExpandableId(session.subscription);
+    if (subscriptionId) {
+      await refreshSubscription(
         environment,
-        subscription,
+        subscriptionId,
         event.created,
         organizationId,
       );
@@ -556,12 +569,7 @@ async function processStripeEvent(
   }
   if (event.type.startsWith("customer.subscription.")) {
     const eventSubscription = event.data.object as StripeSubscription;
-    const subscription = await expandedSubscription(
-      environment,
-      eventSubscription.id,
-    );
-    if (!subscription) return;
-    await persistSubscription(environment, subscription, event.created);
+    await refreshSubscription(environment, eventSubscription.id, event.created);
     return;
   }
   if (
@@ -575,14 +583,33 @@ async function processStripeEvent(
     const subscriptionId =
       invoice.parent?.subscription_details?.subscription ??
       invoice.subscription;
+    const id = optionalExpandableId(subscriptionId ?? null);
+    if (id) await refreshSubscription(environment, id, event.created);
+  }
+}
+
+async function refreshSubscription(
+  environment: Pick<
+    Bindings,
+    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+  >,
+  subscriptionId: string,
+  eventCreated: number,
+  knownOrganizationId?: string,
+) {
+  return withSubscriptionSyncLock(environment.DB, subscriptionId, async () => {
     const subscription = await expandedSubscription(
       environment,
-      subscriptionId ?? null,
+      subscriptionId,
     );
-    if (subscription) {
-      await persistSubscription(environment, subscription, event.created);
-    }
-  }
+    if (!subscription) return false;
+    return persistSubscription(
+      environment,
+      subscription,
+      eventCreated,
+      knownOrganizationId,
+    );
+  });
 }
 
 async function expandedSubscription(
@@ -642,16 +669,17 @@ async function persistSubscription(
        seat_quantity = excluded.seat_quantity,
        cancel_at_period_end = excluded.cancel_at_period_end,
        current_period_end = excluded.current_period_end,
-       stripe_event_created = excluded.stripe_event_created,
+       stripe_event_created = MAX(
+         organization_billing.stripe_event_created,
+         excluded.stripe_event_created
+       ),
        checkout_claim_id = NULL,
        checkout_claim_quantity = NULL,
        checkout_claim_expires_at = NULL,
        pending_checkout_session_id = NULL,
        pending_checkout_url = NULL,
        pending_checkout_expires_at = NULL,
-       updated_at = excluded.updated_at
-     WHERE organization_billing.stripe_event_created <=
-           excluded.stripe_event_created`,
+       updated_at = excluded.updated_at`,
   )
     .bind(
       organizationId,
@@ -881,6 +909,71 @@ async function organizationExists(
       .bind(organizationId)
       .first(),
   );
+}
+
+async function updateStoredSeatQuantity(
+  database: D1Database,
+  organizationId: string,
+  subscriptionItemId: string,
+  quantity: number,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET seat_quantity = ?, updated_at = ?
+       WHERE organization_id = ? AND stripe_subscription_item_id = ?`,
+    )
+    .bind(
+      quantity,
+      new Date().toISOString(),
+      organizationId,
+      subscriptionItemId,
+    )
+    .run();
+}
+
+async function withSubscriptionSyncLock<T>(
+  database: D1Database,
+  subscriptionId: string,
+  action: () => Promise<T>,
+) {
+  const claimId = crypto.randomUUID();
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const claimed = await database
+    .prepare(
+      `INSERT INTO stripe_subscription_sync_locks
+       (subscription_id, claim_id, claim_expires_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (subscription_id) DO UPDATE SET
+         claim_id = excluded.claim_id,
+         claim_expires_at = excluded.claim_expires_at
+       WHERE stripe_subscription_sync_locks.claim_expires_at <= ?`,
+    )
+    .bind(
+      subscriptionId,
+      claimId,
+      nowSeconds + subscriptionSyncClaimSeconds,
+      nowSeconds,
+    )
+    .run();
+  if (Number(claimed.meta.changes) !== 1) {
+    throw new Error("Stripe subscription synchronization is already running.");
+  }
+  try {
+    return await action();
+  } finally {
+    await database
+      .prepare(
+        `DELETE FROM stripe_subscription_sync_locks
+         WHERE subscription_id = ? AND claim_id = ?`,
+      )
+      .bind(subscriptionId, claimId)
+      .run();
+  }
+}
+
+function optionalExpandableId(value: StripeExpandable | null) {
+  return value ? expandableId(value) : null;
 }
 
 function expandableId(value: StripeExpandable) {

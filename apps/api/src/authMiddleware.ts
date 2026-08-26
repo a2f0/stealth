@@ -108,11 +108,17 @@ export const requireAuthOrganizationSeat = createMiddleware<AuthEnv>(
     if (organizationSeatRouteExemptions.has(context.req.path)) return next();
     const session = context.get("authSession");
     const target = await authOrganizationTarget(context, session);
-    if (!target) return next();
+    if (target.conflict) {
+      return context.json(
+        { error: "Organization selectors do not match." },
+        400,
+      );
+    }
+    if (!target.organizationId) return next();
     if (
       !(await organizationUserHasSeat(
         context.env.DB,
-        target,
+        target.organizationId,
         session.user.id,
         context.env.STRIPE_PRO_PRICE_ID,
       ))
@@ -137,56 +143,102 @@ async function authOrganizationTarget(
     .clone()
     .json()
     .catch(() => null)) as {
+    data?: { organizationId?: unknown; [key: string]: unknown };
     invitationId?: unknown;
+    memberId?: unknown;
+    memberIdOrEmail?: unknown;
     organizationId?: unknown;
     organizationSlug?: unknown;
     teamId?: unknown;
     [key: string]: unknown;
   } | null;
-  const explicitOrganizationId = stringValue(
-    body?.organizationId ?? context.req.query("organizationId"),
-  );
-  if (explicitOrganizationId) return explicitOrganizationId;
+  const targets = new Set<string>();
+  addStringValue(targets, body?.organizationId);
+  addStringValue(targets, body?.data?.organizationId);
+  addStringValue(targets, context.req.query("organizationId"));
 
-  const organizationSlug = stringValue(
-    body?.organizationSlug ?? context.req.query("organizationSlug"),
-  );
-  if (organizationSlug) {
+  for (const slugValue of [
+    body?.organizationSlug,
+    context.req.query("organizationSlug"),
+  ]) {
+    const slug = stringValue(slugValue);
+    if (!slug) continue;
     const organization = await context.env.DB.prepare(
       `SELECT id FROM organization WHERE slug = ? AND deletedAt IS NULL`,
     )
-      .bind(organizationSlug)
+      .bind(slug)
       .first<{ id: string }>();
-    if (organization) return organization.id;
+    if (organization) targets.add(organization.id);
   }
 
   const teamId = stringValue(body?.teamId ?? context.req.query("teamId"));
   if (teamId) {
-    const team = await context.env.DB.prepare(
+    await addResourceOrganization(
+      targets,
+      context.env.DB,
       `SELECT organizationId FROM team WHERE id = ?`,
-    )
-      .bind(teamId)
-      .first<{ organizationId: string }>();
-    if (team) return team.organizationId;
+      teamId,
+    );
   }
 
   const invitationId = stringValue(
     body?.invitationId ?? context.req.query("invitationId"),
   );
   if (invitationId) {
-    const invitation = await context.env.DB.prepare(
+    await addResourceOrganization(
+      targets,
+      context.env.DB,
       `SELECT organizationId FROM invitation WHERE id = ?`,
-    )
-      .bind(invitationId)
-      .first<{ organizationId: string }>();
-    if (invitation) return invitation.organizationId;
+      invitationId,
+    );
   }
 
-  return (
-    session.session.activeOrganizationId ??
-    session.user.defaultOrganizationId ??
-    null
-  );
+  const memberIdOrEmail = stringValue(body?.memberIdOrEmail);
+  const memberId =
+    stringValue(body?.memberId) ??
+    (memberIdOrEmail && !memberIdOrEmail.includes("@")
+      ? memberIdOrEmail
+      : null);
+  if (memberId) {
+    await addResourceOrganization(
+      targets,
+      context.env.DB,
+      `SELECT organizationId FROM member WHERE id = ?`,
+      memberId,
+    );
+  }
+
+  if (targets.size > 0) {
+    return {
+      conflict: targets.size > 1,
+      organizationId: targets.values().next().value ?? null,
+    };
+  }
+  return {
+    conflict: false,
+    organizationId:
+      session.session.activeOrganizationId ??
+      session.user.defaultOrganizationId ??
+      null,
+  };
+}
+
+async function addResourceOrganization(
+  targets: Set<string>,
+  database: D1Database,
+  query: string,
+  resourceId: string,
+) {
+  const resource = await database
+    .prepare(query)
+    .bind(resourceId)
+    .first<{ organizationId: string }>();
+  if (resource) targets.add(resource.organizationId);
+}
+
+function addStringValue(targets: Set<string>, value: unknown) {
+  const string = stringValue(value);
+  if (string) targets.add(string);
 }
 
 function stringValue(value: unknown) {
