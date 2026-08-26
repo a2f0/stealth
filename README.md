@@ -171,9 +171,14 @@ billing work or a production API deployment:
 ```sh
 export STRIPE_SECRET_KEY=your-live-or-test-secret-key
 export STRIPE_WEBHOOK_SECRET=your-endpoint-signing-secret
+export STRIPE_PRO_PRICE_ID=your-matching-live-or-test-price-id
+export STRIPE_PORTAL_CONFIGURATION_ID=your-matching-portal-configuration-id
 ```
 
-The public Stripe webhook URL is
+The price ID is required for local billing; the Portal configuration is
+optional. Local development overrides the production IDs in Wrangler with
+these values, so test-mode keys must be paired with test-mode IDs. The public
+Stripe webhook URL is
 `https://api.tearleads.com/api/billing/webhook`. The non-secret Pro price and
 optional Billing Portal configuration IDs belong in `apps/api/wrangler.jsonc`;
 the API deployment script uploads the two secret values as encrypted Worker

@@ -860,19 +860,167 @@ describe("billing", () => {
     expect(
       await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
     ).toBe(0);
-    fixture.database
-      .query(
-        `UPDATE organization_billing
-         SET stripe_price_id = ?, stripe_status = 'active',
-             pending_checkout_session_id = NULL,
-             pending_checkout_url = NULL,
-             pending_checkout_expires_at = NULL
-         WHERE organization_id = ?`,
-      )
-      .run(proPriceId, organizationId);
     expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
       { id: "pending-checkout-old" },
     ]);
+  });
+
+  it("keeps history while Checkout creation is in flight", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, checkout_claim_id, checkout_claim_quantity,
+          checkout_claim_expires_at, updated_at)
+         VALUES (?, 'claim_retention_race', 1, 2000000000, ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+    insertAudit(
+      fixture.database,
+      "checkout-claim-old",
+      organizationId,
+      "2026-06-01",
+    );
+
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(0);
+    fixture.database
+      .query(
+        `UPDATE organization_billing SET checkout_claim_expires_at = 1
+         WHERE organization_id = ?`,
+      )
+      .run(organizationId);
+    expect(
+      await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+    ).toBe(1);
+  });
+
+  it("reconciles a completed stale Checkout before retention", async () => {
+    const fixture = await createFixture();
+    insertStalePendingCheckout(fixture.database, "cs_retention_complete");
+    insertAudit(
+      fixture.database,
+      "completed-checkout-old",
+      organizationId,
+      "2026-06-01",
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v1/checkout/sessions/cs_retention_complete")) {
+        return Response.json({
+          client_reference_id: organizationId,
+          id: "cs_retention_complete",
+          status: "complete",
+          subscription: "sub_retention_complete",
+        });
+      }
+      if (url.endsWith("/v1/subscriptions/sub_retention_complete")) {
+        return Response.json(
+          subscriptionEvent(
+            "evt_retention_complete",
+            100,
+            "active",
+            1,
+            "sub_retention_complete",
+          ).data.object,
+        );
+      }
+      throw new Error(`Unexpected Stripe request: ${url}`);
+    }) as typeof fetch;
+    try {
+      expect(
+        await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+      ).toBe(0);
+      expect(
+        fixture.database
+          .query(
+            `SELECT pending_checkout_session_id, stripe_price_id,
+                    stripe_status
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        pending_checkout_session_id: null,
+        stripe_price_id: proPriceId,
+        stripe_status: "active",
+      });
+      expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
+        { id: "completed-checkout-old" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("clears an expired stale Checkout before retention", async () => {
+    const fixture = await createFixture();
+    insertStalePendingCheckout(fixture.database, "cs_retention_expired");
+    insertAudit(
+      fixture.database,
+      "expired-checkout-old",
+      organizationId,
+      "2026-06-01",
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input) =>
+      Response.json({
+        client_reference_id: organizationId,
+        id: "cs_retention_expired",
+        status: "expired",
+        subscription: null,
+      })) as typeof fetch;
+    try {
+      expect(
+        await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+      ).toBe(1);
+      expect(
+        fixture.database
+          .query(
+            `SELECT pending_checkout_session_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ pending_checkout_session_id: null });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("expires an abandoned stale Checkout before retention", async () => {
+    const fixture = await createFixture();
+    insertStalePendingCheckout(fixture.database, "cs_retention_abandoned");
+    insertAudit(
+      fixture.database,
+      "abandoned-checkout-old",
+      organizationId,
+      "2026-06-01",
+    );
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      return Response.json({
+        client_reference_id: organizationId,
+        expires_at: 1,
+        id: "cs_retention_abandoned",
+        status: requests.length === 1 ? "open" : "expired",
+        subscription: null,
+      });
+    }) as typeof fetch;
+    try {
+      expect(
+        await purgeExpiredFreeAuditRuns(fixture.bindings, "2026-07-27"),
+      ).toBe(1);
+      expect(requests).toEqual([
+        "https://api.stripe.com/v1/checkout/sessions/cs_retention_abandoned",
+        "https://api.stripe.com/v1/checkout/sessions/cs_retention_abandoned/expire",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("fails closed when retention billing configuration is missing", async () => {
@@ -1084,6 +1232,17 @@ function reserveCheckout(database: Database, sessionId: string) {
        WHERE organization_id = ?`,
     )
     .run(sessionId, organizationId);
+}
+
+function insertStalePendingCheckout(database: Database, sessionId: string) {
+  database
+    .query(
+      `INSERT INTO organization_billing
+       (organization_id, pending_checkout_session_id, pending_checkout_url,
+        pending_checkout_expires_at, updated_at)
+       VALUES (?, ?, 'https://checkout.stripe.test/stale', 1, ?)`,
+    )
+    .run(organizationId, sessionId, new Date().toISOString());
 }
 
 function reconciledCount(database: Database) {

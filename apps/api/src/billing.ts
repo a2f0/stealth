@@ -22,6 +22,7 @@ const terminalSubscriptionStatuses = new Set([
 ]);
 const webhookClaimTimeoutMilliseconds = 5 * 60 * 1000;
 const checkoutDurationSeconds = 35 * 60;
+const pendingCheckoutReconciliationLimit = 25;
 const subscriptionSyncClaimSeconds = 2 * 60;
 
 type BillingEnv = {
@@ -567,6 +568,123 @@ export async function reconcileSubscriptionSeats(
   if (firstFailure !== undefined) throw firstFailure;
 }
 
+export async function reconcilePendingCheckoutEntitlements(
+  environment: Pick<
+    Bindings,
+    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+  >,
+  nowSeconds = Math.floor(Date.now() / 1_000),
+) {
+  const pending = await environment.DB.prepare(
+    `SELECT organization_id, pending_checkout_session_id
+     FROM organization_billing
+     WHERE pending_checkout_session_id IS NOT NULL
+       AND COALESCE(pending_checkout_expires_at, 0) <= ?
+     ORDER BY pending_checkout_expires_at ASC, organization_id ASC
+     LIMIT ?`,
+  )
+    .bind(nowSeconds, pendingCheckoutReconciliationLimit)
+    .all<{
+      organization_id: string;
+      pending_checkout_session_id: string;
+    }>();
+  let firstFailure: unknown;
+  for (const row of pending.results) {
+    try {
+      await reconcilePendingCheckoutEntitlement(
+        environment,
+        row.organization_id,
+        row.pending_checkout_session_id,
+        nowSeconds,
+      );
+    } catch (cause) {
+      firstFailure ??= cause;
+    }
+  }
+  if (firstFailure !== undefined) throw firstFailure;
+}
+
+async function reconcilePendingCheckoutEntitlement(
+  environment: Pick<
+    Bindings,
+    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+  >,
+  organizationId: string,
+  sessionId: string,
+  nowSeconds: number,
+) {
+  let session = parseStripeCheckoutSession(
+    await stripeGet(
+      environment,
+      `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+    ),
+  );
+  const sessionOrganizationId =
+    session.client_reference_id ?? session.metadata?.organization_id;
+  if (sessionOrganizationId !== organizationId) {
+    throw new StripeApiError(
+      "Pending Checkout does not belong to its organization.",
+      409,
+    );
+  }
+  if (
+    session.status === "open" &&
+    (!session.expires_at || session.expires_at <= nowSeconds)
+  ) {
+    session = await expireOrReloadCheckoutSession(environment, sessionId);
+  }
+  if (session.status === "expired") {
+    await clearPendingCheckoutIfCurrent(
+      environment.DB,
+      organizationId,
+      sessionId,
+    );
+    return;
+  }
+  if (session.status === "complete") {
+    const subscriptionId = optionalExpandableId(session.subscription);
+    if (
+      !subscriptionId ||
+      !(await refreshSubscription(
+        environment,
+        subscriptionId,
+        nowSeconds,
+        organizationId,
+        sessionId,
+      ))
+    ) {
+      throw new StripeApiError(
+        "Pending Checkout entitlement could not be reconciled.",
+        409,
+      );
+    }
+    return;
+  }
+  if (
+    session.status === "open" &&
+    session.expires_at &&
+    session.expires_at > nowSeconds
+  ) {
+    await environment.DB.prepare(
+      `UPDATE organization_billing
+       SET pending_checkout_expires_at = ?, updated_at = ?
+       WHERE organization_id = ? AND pending_checkout_session_id = ?`,
+    )
+      .bind(
+        session.expires_at,
+        new Date().toISOString(),
+        organizationId,
+        sessionId,
+      )
+      .run();
+    return;
+  }
+  throw new StripeApiError(
+    "Pending Checkout entitlement could not be reconciled.",
+    409,
+  );
+}
+
 export async function cancelOrganizationSubscription(
   environment: Pick<
     Bindings,
@@ -716,28 +834,7 @@ async function resolvePendingCheckoutForDeletion(
     ),
   );
   if (session.status === "open") {
-    try {
-      session = parseStripeCheckoutSession(
-        await stripePost(
-          environment,
-          `/v1/checkout/sessions/${encodeURIComponent(sessionId)}/expire`,
-          new URLSearchParams(),
-        ),
-      );
-    } catch (cause) {
-      if (
-        !(cause instanceof StripeApiError) ||
-        (cause.status !== 400 && cause.status !== 409)
-      ) {
-        throw cause;
-      }
-      session = parseStripeCheckoutSession(
-        await stripeGet(
-          environment,
-          `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
-        ),
-      );
-    }
+    session = await expireOrReloadCheckoutSession(environment, sessionId);
   }
   if (session.status === "expired") return null;
   if (session.status === "complete") {
@@ -748,6 +845,34 @@ async function resolvePendingCheckoutForDeletion(
     "Stripe Checkout could not be resolved before organization deletion.",
     409,
   );
+}
+
+async function expireOrReloadCheckoutSession(
+  environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
+  sessionId: string,
+) {
+  try {
+    return parseStripeCheckoutSession(
+      await stripePost(
+        environment,
+        `/v1/checkout/sessions/${encodeURIComponent(sessionId)}/expire`,
+        new URLSearchParams(),
+      ),
+    );
+  } catch (cause) {
+    if (
+      !(cause instanceof StripeApiError) ||
+      (cause.status !== 400 && cause.status !== 409)
+    ) {
+      throw cause;
+    }
+    return parseStripeCheckoutSession(
+      await stripeGet(
+        environment,
+        `/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
+      ),
+    );
+  }
 }
 
 async function billingSummary(
@@ -1277,6 +1402,24 @@ async function clearPendingCheckout(
        WHERE organization_id = ?`,
     )
     .bind(new Date().toISOString(), organizationId)
+    .run();
+}
+
+async function clearPendingCheckoutIfCurrent(
+  database: D1Database,
+  organizationId: string,
+  sessionId: string,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET pending_checkout_session_id = NULL,
+           pending_checkout_url = NULL,
+           pending_checkout_expires_at = NULL,
+           updated_at = ?
+       WHERE organization_id = ? AND pending_checkout_session_id = ?`,
+    )
+    .bind(new Date().toISOString(), organizationId, sessionId)
     .run();
 }
 

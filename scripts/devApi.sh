@@ -11,6 +11,10 @@ source "$SCRIPT_DIR/cloudflareEnv.sh"
 source_env_file "$REPO_ROOT/.secrets/root.env"
 validate_auth_env
 validate_stripe_env
+if [[ -z "${STRIPE_PRO_PRICE_ID:-}" ]]; then
+  echo "ERROR: Missing STRIPE_PRO_PRICE_ID for local billing." >&2
+  exit 1
+fi
 
 auth_env_file="$(mktemp)"
 trap 'rm -f "$auth_env_file"' EXIT
@@ -33,4 +37,7 @@ for secret_name in \
 done
 
 cd "$REPO_ROOT/apps/api"
-bunx wrangler dev --env-file "$auth_env_file"
+bunx wrangler dev \
+  --env-file "$auth_env_file" \
+  --var "STRIPE_PRO_PRICE_ID:$STRIPE_PRO_PRICE_ID" \
+  --var "STRIPE_PORTAL_CONFIGURATION_ID:${STRIPE_PORTAL_CONFIGURATION_ID:-}"
