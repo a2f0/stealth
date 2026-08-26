@@ -1494,6 +1494,105 @@ button:disabled {
   max-width: none;
 }
 
+.billingSettings {
+  display: grid;
+  max-width: 760px;
+  gap: 18px;
+}
+
+.billingSummaryCard {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  max-width: none;
+}
+
+.billingSummaryCard h2,
+.billingPlan h2 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.04em;
+}
+
+.billingPlanBadge {
+  padding: 7px 10px;
+  border: 1px solid #d3d2ca;
+  border-radius: 999px;
+  color: #62625b;
+  background: #f2f1eb;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.billingPlanBadge.pro {
+  border-color: #a7cb77;
+  color: #365c16;
+  background: #effbdd;
+}
+
+.billingSummaryCard .billingNotice {
+  grid-column: 1 / -1;
+  padding-top: 14px;
+  border-top: 1px solid #ddddd5;
+  color: #6d5518;
+}
+
+.billingPlans {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.billingPlan {
+  display: grid;
+  align-content: start;
+  gap: 24px;
+  padding: 26px;
+  border: 1px solid #ddddd5;
+  border-radius: 14px;
+  background: #faf9f5;
+}
+
+.billingPlan.featured {
+  border-color: #9ec86a;
+  background: #f2fbe7;
+}
+
+.billingPlan ul {
+  display: grid;
+  min-height: 88px;
+  margin: 0;
+  padding: 0;
+  gap: 10px;
+  color: #65655e;
+  font-size: 12px;
+  list-style: none;
+}
+
+.billingPlan li::before {
+  margin-right: 8px;
+  color: #5c941c;
+  content: "✓";
+}
+
+.billingPlan button {
+  justify-self: start;
+}
+
+.billingPlan button:not(.primaryButton) {
+  padding: 0;
+  border: 0;
+  color: #77776f;
+  background: transparent;
+  font-size: 11px;
+}
+
+.billingManagerNote {
+  margin: 0;
+  color: #77776f;
+  font-size: 11px;
+}
+
 .accountSecurityContent {
   max-width: 760px;
 }
@@ -1832,6 +1931,12 @@ button:disabled {
   font-size: 8px;
   font-weight: 500;
   text-transform: uppercase;
+}
+
+.organizationMemberActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .memberRoleSelect {
@@ -2219,6 +2324,10 @@ button:disabled {
 
 .auditRunList > button:hover {
   background: #f0efe9;
+}
+
+.auditLoadMore {
+  margin-top: 16px;
 }
 
 .auditRunList strong,
@@ -3269,8 +3378,14 @@ button:disabled {
   }
 
   .securityStatusCard,
+  .billingPlans,
+  .billingSummaryCard,
   .recoveryCodeGrid {
     grid-template-columns: 1fr;
+  }
+
+  .billingPlanBadge {
+    justify-self: start;
   }
 
   .securityStatus {

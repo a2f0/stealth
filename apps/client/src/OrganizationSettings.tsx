@@ -1,5 +1,6 @@
 import { type FormEvent, type MouseEvent, useEffect, useState } from "react";
 import { authClient } from "./authClient";
+import { OrganizationBilling } from "./OrganizationBilling";
 import { OrganizationAccessSettings } from "./OrganizationGroups";
 import { OrganizationPeople } from "./OrganizationPeople";
 import { deleteCurrentOrganization } from "./organizationSettingsApi";
@@ -113,6 +114,9 @@ function OrganizationSettingsPageContent({
       />
     );
   }
+  if (page === "billing") {
+    return <OrganizationBilling organizationId={organization.id} />;
+  }
   return (
     <OrganizationGeneral
       accessError={accessError}
@@ -138,6 +142,7 @@ function OrganizationSettingsNavigation({
   const items = [
     { label: "General", page: "general", path: "/organization" },
     { label: "People", page: "people", path: "/organization/people" },
+    { label: "Billing", page: "billing", path: "/organization/billing" },
     ...(canManage
       ? [
           {

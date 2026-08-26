@@ -42,6 +42,11 @@ interface RunResponse {
   auditId: string;
 }
 
+interface RunListResponse {
+  audits: Array<{ id: string }>;
+  nextCursor: string | null;
+}
+
 interface IssueResponse {
   issueId: string;
 }
@@ -122,6 +127,87 @@ describe("audits", () => {
       ),
     ]);
     expect(timeoutOutcome).toBeInstanceOf(ImageUploadReadTimeoutError);
+  });
+
+  it("paginates every retained audit run with a stable cursor", async () => {
+    const fixture = await createFixture();
+    const insert = fixture.database.query(
+      `INSERT INTO audits
+       (id, organization_id, template_name, definition, responses, status,
+        started_by, created_at, updated_at)
+       VALUES (?, 'org_user-1', 'History test', ?, '{}', 'completed',
+               'user-1', ?, ?)`,
+    );
+    const definition = JSON.stringify({
+      sections: [{ id: "section", items: [], title: "History" }],
+      version: 1,
+    });
+    for (let index = 0; index < 105; index += 1) {
+      const createdAt = new Date(
+        Date.UTC(2026, 7, 1, 0, 0, index),
+      ).toISOString();
+      insert.run(
+        `history-${index.toString().padStart(3, "0")}`,
+        definition,
+        createdAt,
+        createdAt,
+      );
+    }
+
+    const first = await jsonRequest<RunListResponse>(fixture, "/runs", "GET");
+    expect(first.response.status).toBe(200);
+    expect(first.body.audits).toHaveLength(100);
+    expect(first.body.nextCursor).toBeString();
+
+    const second = await jsonRequest<RunListResponse>(
+      fixture,
+      `/runs?cursor=${encodeURIComponent(first.body.nextCursor ?? "")}`,
+      "GET",
+    );
+    expect(second.response.status).toBe(200);
+    expect(second.body.audits).toHaveLength(5);
+    expect(second.body.nextCursor).toBeNull();
+    const ids = [...first.body.audits, ...second.body.audits].map(
+      ({ id }) => id,
+    );
+    expect(ids).toHaveLength(105);
+    expect(new Set(ids)).toHaveLength(105);
+    expect(ids[0]).toBe("history-104");
+    expect(ids.at(-1)).toBe("history-000");
+
+    const invalid = await jsonRequest(fixture, "/runs?cursor=not-valid", "GET");
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body).toEqual({ error: "Invalid audit cursor." });
+  });
+
+  it("reports an audit removed during an update as missing", async () => {
+    const fixture = await createFixture();
+    const now = "2026-08-25T12:00:00.000Z";
+    fixture.database
+      .query(
+        `INSERT INTO audits
+         (id, organization_id, template_name, definition, responses, status,
+          started_by, created_at, updated_at)
+         VALUES ('update-race', 'org_user-1', 'Race test', ?, '{}',
+                 'in_progress', 'user-1', ?, ?)`,
+      )
+      .run(
+        JSON.stringify({
+          sections: [{ id: "section", items: [], title: "Race" }],
+          version: 1,
+        }),
+        now,
+        now,
+      );
+    fixture.databaseControl.deleteAuditBeforeRunUpdate = true;
+
+    const updated = await jsonRequest(fixture, "/runs/update-race", "PATCH", {
+      responses: {},
+      status: "in_progress",
+    });
+
+    expect(updated.response.status).toBe(404);
+    expect(updated.body).toEqual({ error: "Audit not found." });
   });
 
   it("normalizes and stores every supported issue image format", async () => {
@@ -1375,6 +1461,37 @@ describe("audits", () => {
     expect(completed.response.status).toBe(200);
   });
 
+  it("limits Free organizations to five form templates", async () => {
+    const fixture = await createFixture();
+    for (let index = 1; index <= 5; index += 1) {
+      const created = await jsonRequest(fixture, "/templates", "POST", {
+        name: `Free form ${index}`,
+      });
+      expect(created.response.status).toBe(201);
+    }
+    const limited = await jsonRequest(fixture, "/templates", "POST", {
+      name: "Sixth free form",
+    });
+    expect(limited.response.status).toBe(409);
+    expect(limited.body).toEqual({
+      error:
+        "The Free plan is limited to 5 form templates. Upgrade to Pro for unlimited forms.",
+    });
+
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_price_id, stripe_status, seat_quantity,
+          stripe_event_created, updated_at)
+         VALUES ('org_user-1', 'price_pro_test', 'active', 1, 1, ?)`,
+      )
+      .run(new Date().toISOString());
+    const pro = await jsonRequest(fixture, "/templates", "POST", {
+      name: "Sixth Pro form",
+    });
+    expect(pro.response.status).toBe(201);
+  });
+
   it("shares global templates without exposing organization templates", async () => {
     const fixture = await createFixture();
     const denied = await jsonRequest(fixture, "/templates", "POST", {
@@ -1613,10 +1730,12 @@ async function createFixture() {
   await applyMigration(database, "0028_lease_audit_image_uploads.sql");
   await applyMigration(database, "0029_tombstone_cascaded_audit_images.sql");
   await applyMigration(database, "0030_queue_deleted_objects.sql");
+  await applyMigration(database, "0032_create_billing.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
+    deleteAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -1727,6 +1846,7 @@ function bindingsFor(
   databaseControl = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
+    deleteAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -1741,6 +1861,7 @@ function bindingsFor(
     EMAIL: {} as SendEmail,
     IMAGES: imagesFor(),
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
+    STRIPE_PRO_PRICE_ID: "price_pro_test",
     STORAGE: storageFor(stored, storageControl),
   };
 }
@@ -1789,6 +1910,7 @@ function toD1(
   control = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
+    deleteAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -1823,6 +1945,23 @@ function toD1(
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const runSync = () => {
+        if (
+          control.deleteAuditBeforeRunUpdate &&
+          query.includes("UPDATE audits SET responses")
+        ) {
+          control.deleteAuditBeforeRunUpdate = false;
+          const auditId = values.at(-2);
+          const organizationId = values.at(-1);
+          if (
+            typeof auditId !== "string" ||
+            typeof organizationId !== "string"
+          ) {
+            throw new Error("Expected an audit and organization id.");
+          }
+          database
+            .query("DELETE FROM audits WHERE id = ? AND organization_id = ?")
+            .run(auditId, organizationId);
+        }
         if (
           control.deleteAssigneeBeforeIssueUpdate &&
           query.includes("UPDATE audit_issues") &&

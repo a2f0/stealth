@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import {
+  cancelOrganizationSubscription,
+  recoverCheckoutAfterFailedDeletion,
+} from "./billing";
+import {
   markOrganizationForDeletion,
   restoreOrganization,
 } from "./organizationDeletion";
@@ -66,12 +70,51 @@ adminOrganizations.get("/", async (context) => {
 adminOrganizations.delete("/:organizationId", async (context) => {
   const organizationId = context.req.param("organizationId");
   const actor = context.get("authSession").user;
-  const deletion = await markOrganizationForDeletion(
-    context.env.DB,
-    organizationId,
-    actor.id,
-  );
+  let checkoutGuard: string | null;
+  try {
+    ({ checkoutGuard } = await cancelOrganizationSubscription(
+      context.env,
+      organizationId,
+    ));
+  } catch (cause) {
+    console.error("Could not cancel organization billing.", cause);
+    return context.json(
+      {
+        error:
+          "The Stripe subscription could not be canceled, so the organization was not deleted.",
+      },
+      502,
+    );
+  }
+  let deletion: Awaited<ReturnType<typeof markOrganizationForDeletion>>;
+  try {
+    deletion = await markOrganizationForDeletion(
+      context.env.DB,
+      organizationId,
+      actor.id,
+      checkoutGuard,
+    );
+  } catch (cause) {
+    console.error("Could not record organization deletion.", cause);
+    await recoverCheckoutAfterFailedDeletion(
+      context.env.DB,
+      organizationId,
+      checkoutGuard,
+    );
+    return context.json(
+      {
+        error:
+          "Billing was canceled, but the organization could not be deleted. Checkout was re-enabled so billing can be restarted.",
+      },
+      500,
+    );
+  }
   if (!deletion) {
+    await recoverCheckoutAfterFailedDeletion(
+      context.env.DB,
+      organizationId,
+      checkoutGuard,
+    );
     const organization = await context.env.DB.prepare(
       "SELECT deletedAt FROM organization WHERE id = ?",
     )

@@ -6,6 +6,9 @@ import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import type { Bindings } from "./types";
 
+const proPriceId = "price_pro_test";
+const targetOrganizationId = "org_member-user";
+
 describe("admin organizations", () => {
   it("lists organizations with their owners and member counts", async () => {
     const database = new Database(":memory:");
@@ -138,6 +141,136 @@ describe("admin organizations", () => {
     });
   });
 
+  it("returns not found without creating billing for an unknown organization", async () => {
+    const database = await createDeletionFixture();
+    const response = await testApp(database).request("/org_missing", {
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(404);
+    expect(
+      database
+        .query(
+          `SELECT COUNT(*) AS count FROM organization_billing
+           WHERE organization_id = 'org_missing'`,
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("cancels paid billing before an admin deletes the organization", async () => {
+    const database = await createDeletionFixture();
+    insertPaidBilling(database);
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; url: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      requests.push({ method: init?.method ?? "GET", url: String(input) });
+      return Response.json(canceledSubscription());
+    }) as typeof fetch;
+    try {
+      const response = await testApp(database).request(
+        `/${targetOrganizationId}`,
+        { method: "DELETE" },
+      );
+      expect(response.status).toBe(200);
+      expect(requests).toEqual([
+        {
+          method: "DELETE",
+          url: "https://api.stripe.com/v1/subscriptions/sub_admin_test",
+        },
+      ]);
+      expect(
+        database
+          .query(
+            `SELECT organization.deletedAt, organization_billing.stripe_status
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toMatchObject({
+        deletedAt: expect.any(String),
+        stripe_status: "canceled",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps a paid organization when admin cancellation fails", async () => {
+    const database = await createDeletionFixture();
+    insertPaidBilling(database);
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(
+        { error: { message: "Stripe unavailable" } },
+        { status: 503 },
+      )) as typeof fetch;
+    console.error = () => {};
+    try {
+      const response = await testApp(database).request(
+        `/${targetOrganizationId}`,
+        { method: "DELETE" },
+      );
+      expect(response.status).toBe(502);
+      expect(
+        database
+          .query("SELECT deletedAt FROM organization WHERE id = ?")
+          .get(targetOrganizationId),
+      ).toEqual({ deletedAt: null });
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("re-enables checkout when deletion storage fails after cancellation", async () => {
+    const database = await createDeletionFixture();
+    insertPaidBilling(database);
+    database.exec(
+      `CREATE TRIGGER fail_admin_organization_deletion
+       BEFORE UPDATE OF deletedAt ON organization
+       WHEN NEW.deletedAt IS NOT NULL
+       BEGIN
+         SELECT RAISE(ABORT, 'forced organization deletion failure');
+       END`,
+    );
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(canceledSubscription())) as typeof fetch;
+    console.error = () => {};
+    try {
+      const response = await testApp(database).request(
+        `/${targetOrganizationId}`,
+        { method: "DELETE" },
+      );
+      expect(response.status).toBe(500);
+      expect(
+        database
+          .query(
+            `SELECT organization.deletedAt,
+                    organization_billing.checkout_disabled_at,
+                    organization_billing.stripe_status
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toEqual({
+        checkout_disabled_at: null,
+        deletedAt: null,
+        stripe_status: "canceled",
+      });
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("restores a deleted organization without overriding other defaults", async () => {
     const database = await createDeletionFixture();
     const deletion = await testApp(database).request("/org_member-user", {
@@ -200,6 +333,14 @@ describe("admin organizations", () => {
     expect(
       database
         .query(
+          `SELECT checkout_disabled_at FROM organization_billing
+           WHERE organization_id = 'org_member-user'`,
+        )
+        .get(),
+    ).toEqual({ checkout_disabled_at: null });
+    expect(
+      database
+        .query(
           `SELECT defaultOrganizationId
            FROM user WHERE id = 'user-1'`,
         )
@@ -211,6 +352,26 @@ describe("admin organizations", () => {
       { method: "POST" },
     );
     expect(repeated.status).toBe(409);
+    database
+      .query(
+        `UPDATE organization_billing
+         SET checkout_disabled_at = 'concurrent-deletion'
+         WHERE organization_id = 'org_member-user'`,
+      )
+      .run();
+    const concurrent = await testApp(database).request(
+      "/org_member-user/restore",
+      { method: "POST" },
+    );
+    expect(concurrent.status).toBe(409);
+    expect(
+      database
+        .query(
+          `SELECT checkout_disabled_at FROM organization_billing
+           WHERE organization_id = 'org_member-user'`,
+        )
+        .get(),
+    ).toEqual({ checkout_disabled_at: "concurrent-deletion" });
   });
 });
 
@@ -263,6 +424,7 @@ async function createDeletionFixture() {
     "0011_soft_delete_organizations.sql",
     "0013_track_organization_deletion_actor.sql",
     "0014_restore_organization_defaults.sql",
+    "0032_create_billing.sql",
   ]) {
     database.exec(
       await Bun.file(
@@ -321,6 +483,40 @@ function bindingsFor(database: Database): Bindings {
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
     STORAGE: {} as R2Bucket,
+    STRIPE_PRO_PRICE_ID: proPriceId,
+    STRIPE_SECRET_KEY: "sk_live_test",
+  };
+}
+
+function insertPaidBilling(database: Database) {
+  database
+    .query(
+      `INSERT INTO organization_billing
+       (organization_id, stripe_customer_id, stripe_subscription_id,
+        stripe_subscription_item_id, stripe_price_id, stripe_status,
+        seat_quantity, stripe_event_created, updated_at)
+       VALUES (?, 'cus_admin_test', 'sub_admin_test', 'si_admin_test', ?,
+               'active', 1, 1, ?)`,
+    )
+    .run(targetOrganizationId, proPriceId, "2026-08-26T12:00:00.000Z");
+}
+
+function canceledSubscription() {
+  return {
+    cancel_at_period_end: false,
+    customer: "cus_admin_test",
+    id: "sub_admin_test",
+    items: {
+      data: [
+        {
+          id: "si_admin_test",
+          price: { id: proPriceId },
+          quantity: 1,
+        },
+      ],
+    },
+    metadata: { organization_id: targetOrganizationId },
+    status: "canceled",
   };
 }
 
@@ -348,6 +544,10 @@ function toD1(database: Database) {
           };
         },
         first: async () => database.query(query).get(...values),
+        run: async () => {
+          const result = database.query(query).run(...values);
+          return { meta: { changes: result.changes } };
+        },
       };
       return statement;
     },

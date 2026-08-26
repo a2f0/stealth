@@ -53,6 +53,14 @@ export function OrganizationPeople({
             busy={state.busy}
             managerRole={state.data.memberRole}
             members={state.data.members}
+            onRemove={(member) =>
+              removeOrganizationMember(
+                member,
+                organization,
+                state,
+                onAccessChanged,
+              )
+            }
             onRoleChange={actions.updateMemberRole}
             onTwoFactorRequiredChange={actions.updateTwoFactorRequirement}
           />
@@ -80,6 +88,37 @@ export function OrganizationPeople({
       )}
     </>
   );
+}
+
+async function removeOrganizationMember(
+  member: OrganizationMember,
+  organization: WorkspaceOrganization,
+  state: ReturnType<typeof useOrganizationPeopleData>,
+  onAccessChanged: () => Promise<void>,
+) {
+  if (
+    !window.confirm(`Remove ${member.user.name} from ${organization.name}?`)
+  ) {
+    return;
+  }
+  state.startAction();
+  try {
+    const result = await authClient.organization.removeMember({
+      memberIdOrEmail: member.id,
+      organizationId: organization.id,
+    });
+    if (result.error) {
+      throw new Error(
+        result.error.message ?? "Could not remove this organization member.",
+      );
+    }
+    state.setNotice(`${member.user.name} was removed from the organization.`);
+    await Promise.all([state.load(), onAccessChanged()]);
+  } catch (cause) {
+    state.setError(messageFrom(cause));
+  } finally {
+    state.setBusy(false);
+  }
 }
 
 function useOrganizationPeopleData(organizationId: string) {
@@ -301,6 +340,7 @@ function OrganizationMembers({
   managerRole,
   members,
   onRoleChange,
+  onRemove,
   onTwoFactorRequiredChange,
 }: {
   busy: boolean;
@@ -310,6 +350,7 @@ function OrganizationMembers({
     member: OrganizationMember,
     role: OrganizationInvitationRole,
   ) => Promise<void>;
+  onRemove: (member: OrganizationMember) => Promise<void>;
   onTwoFactorRequiredChange: (
     member: OrganizationMember,
     required: boolean,
@@ -382,6 +423,15 @@ function OrganizationMembers({
                   </select>
                 ) : (
                   <b>{role}</b>
+                )}
+                {roles.length > 1 && (
+                  <button
+                    disabled={busy}
+                    onClick={() => void onRemove(member)}
+                    type="button"
+                  >
+                    Remove
+                  </button>
                 )}
               </div>
             </div>

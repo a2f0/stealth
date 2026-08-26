@@ -6,10 +6,12 @@ import { createAuth } from "./auth";
 import {
   type AuthVariables,
   requireAuth,
+  requireAuthOrganizationSeat,
   requireOrganization,
   requireOrganizationPluginAccess,
   requireRole,
 } from "./authMiddleware";
+import { billing, handleStripeWebhook, syncOrganizationSeats } from "./billing";
 import { businesses } from "./businesses";
 import { finance } from "./finance";
 import { inbox } from "./inbox";
@@ -38,8 +40,27 @@ app.use(
   "/api/auth/organization/*",
   requireAuth,
   requireOrganizationPluginAccess,
+  requireAuthOrganizationSeat,
 );
-
+app.post("/api/auth/organization/leave", async (context) => {
+  const input = (await context.req.raw
+    .clone()
+    .json()
+    .catch(() => null)) as { organizationId?: unknown } | null;
+  const response = await createAuth(context.env, (promise) =>
+    context.executionCtx.waitUntil(promise),
+  ).handler(context.req.raw);
+  if (response.ok && typeof input?.organizationId === "string") {
+    context.executionCtx.waitUntil(
+      syncOrganizationSeats(context.env, input.organizationId).catch(
+        (cause) => {
+          console.error("Could not synchronize Stripe seat quantity.", cause);
+        },
+      ),
+    );
+  }
+  return response;
+});
 app.all("/api/auth/*", (context) =>
   createAuth(context.env, (promise) =>
     context.executionCtx.waitUntil(promise),
@@ -59,6 +80,7 @@ app.get("/api", (context) =>
     endpoints: {
       adminOrganizations: "/api/admin/organizations",
       audits: "/api/audits",
+      billing: "/api/billing",
       businesses: "/api/businesses",
       finance: "/api/finance",
       inbox: "/api/inbox",
@@ -90,6 +112,11 @@ app.route("/api/audits", audits);
 app.use("/api/businesses", requireAuth, requireOrganization);
 app.use("/api/businesses/*", requireAuth, requireOrganization);
 app.route("/api/businesses", businesses);
+
+app.post("/api/billing/webhook", handleStripeWebhook);
+app.use("/api/billing", requireAuth, requireOrganization);
+app.use("/api/billing/*", requireAuth, requireOrganization);
+app.route("/api/billing", billing);
 
 app.use("/api/inbox", requireAuth, requireOrganization);
 app.use("/api/inbox/*", requireAuth, requireOrganization);

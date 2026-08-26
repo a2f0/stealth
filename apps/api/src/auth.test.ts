@@ -540,6 +540,117 @@ describe("password authentication", () => {
     ).toEqual({ name: "Example Person's Organization" });
   });
 
+  it("keeps Free organizations to one user", async () => {
+    const fixture = await createFixture();
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    const signIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const organization = fixture.database
+      .query(`SELECT defaultOrganizationId AS id FROM user WHERE email = ?`)
+      .get(email) as { id: string };
+    const invite = await post(
+      fixture.auth,
+      "/organization/invite-member",
+      {
+        email: "second@example.com",
+        organizationId: organization.id,
+        role: "member",
+      },
+      signIn.headers.get("set-cookie"),
+    );
+    expect(invite.status).toBe(403);
+    expect(
+      fixture.database
+        .query(
+          `SELECT COUNT(*) AS count FROM invitation
+           WHERE organizationId = ?`,
+        )
+        .get(organization.id),
+    ).toEqual({ count: 0 });
+  });
+
+  it("rejects a pending Pro invitation after downgrade to Free", async () => {
+    const fixture = await createFixture();
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    const ownerSignIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const organization = fixture.database
+      .query(`SELECT defaultOrganizationId AS id FROM user WHERE email = ?`)
+      .get(email) as { id: string };
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_price_id, stripe_status, seat_quantity,
+          stripe_event_created, updated_at)
+         VALUES (?, 'price_pro_test', 'active', 1, 1, ?)`,
+      )
+      .run(organization.id, new Date().toISOString());
+    const invitedEmail = "downgraded-invitee@example.com";
+    const invite = await post(
+      fixture.auth,
+      "/organization/invite-member",
+      {
+        email: invitedEmail,
+        organizationId: organization.id,
+        role: "member",
+      },
+      ownerSignIn.headers.get("set-cookie"),
+    );
+    expect(invite.status).toBe(200);
+    const invitation = (await invite.json()) as { id: string };
+    fixture.database
+      .query(
+        `UPDATE organization_billing SET stripe_status = 'canceled',
+         updated_at = ? WHERE organization_id = ?`,
+      )
+      .run(new Date().toISOString(), organization.id);
+
+    await post(fixture.auth, "/sign-up/email", {
+      email: invitedEmail,
+      name: "Invited Person",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    const inviteeSignIn = await post(fixture.auth, "/sign-in/email", {
+      email: invitedEmail,
+      password: originalPassword,
+    });
+    const accepted = await post(
+      fixture.auth,
+      "/organization/accept-invitation",
+      { invitationId: invitation.id },
+      inviteeSignIn.headers.get("set-cookie"),
+    );
+
+    expect(accepted.status).toBe(403);
+    expect(
+      fixture.database
+        .query(
+          `SELECT invitation.status,
+                  (SELECT COUNT(*) FROM member
+                   JOIN user ON user.id = member.userId
+                   WHERE member.organizationId = invitation.organizationId
+                     AND user.email = invitation.email) AS memberCount
+           FROM invitation WHERE invitation.id = ?`,
+        )
+        .get(invitation.id),
+    ).toEqual({ memberCount: 0, status: "pending" });
+  });
+
   it("invites a user, accepts after sign-up, and safely leaves", async () => {
     const fixture = await createFixture();
     await post(fixture.auth, "/sign-up/email", {
@@ -562,6 +673,15 @@ describe("password authentication", () => {
       )
       .get(email) as { id: string; name: string };
     const invitedEmail = "invitee@example.com";
+
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_price_id, stripe_status, seat_quantity,
+          stripe_event_created, updated_at)
+         VALUES (?, 'price_pro_test', 'active', 1, 1, ?)`,
+      )
+      .run(organization.id, new Date().toISOString());
 
     const firstInvite = await post(
       fixture.auth,
@@ -911,6 +1031,7 @@ async function createFixture() {
     } as unknown as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
+    STRIPE_PRO_PRICE_ID: "price_pro_test",
     STORAGE: {} as R2Bucket,
   } satisfies Bindings;
   const auth = createAuth(bindings, (promise) => pending.push(promise));
@@ -922,6 +1043,7 @@ async function createFixture() {
   await applyMigration(database, "0020_add_two_factor_authentication.sql");
   await applyMigration(database, "0021_track_terms_acceptance.sql");
   await applyMigration(database, "0031_require_member_two_factor.sql");
+  await applyMigration(database, "0032_create_billing.sql");
 
   return { auth, database, messages, pending };
 }

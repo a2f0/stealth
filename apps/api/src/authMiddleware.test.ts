@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import {
   type AuthVariables,
+  requireAuthOrganizationSeat,
   requireOrganization,
   requireOrganizationPluginAccess,
 } from "./authMiddleware";
@@ -76,6 +77,132 @@ describe("organization middleware", () => {
     });
   });
 
+  it("rejects an extra Free-plan member without a seat", async () => {
+    const response = await requestOrganization(
+      "active-org",
+      null,
+      ["active-org"],
+      [],
+      { freeSeatUserId: "owner-id" },
+    );
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      error:
+        "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+    });
+  });
+
+  it("blocks an unseated member from organization auth data but permits switching", async () => {
+    const bindings = {
+      DB: membershipDatabase(["active-org"], [], [], "owner-id"),
+    } as Bindings;
+    const protectedResponse = await authOrganizationApp().request(
+      "/api/auth/organization/list-members?organizationId=active-org",
+      undefined,
+      bindings,
+    );
+    expect(protectedResponse.status).toBe(403);
+    const switchResponse = await authOrganizationApp().request(
+      "/api/auth/organization/set-active",
+      {
+        body: JSON.stringify({ organizationId: "default-org" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      bindings,
+    );
+    expect(switchResponse.status).toBe(200);
+  });
+
+  it("rejects organization selectors that conflict with a canonical resource", async () => {
+    const bindings = {
+      DB: membershipDatabase(
+        ["active-org", "unseated-org"],
+        [],
+        [],
+        "owner-id",
+        { invitation: { "invite-unseated": "unseated-org" } },
+      ),
+    } as Bindings;
+    const response = await authOrganizationApp().request(
+      "/api/auth/organization/cancel-invitation?organizationId=active-org",
+      {
+        body: JSON.stringify({ invitationId: "invite-unseated" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      bindings,
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()) as unknown).toEqual({
+      error: "Organization selectors do not match.",
+    });
+  });
+
+  it("lets a verified member leave without a Free-plan seat", async () => {
+    const bindings = {
+      DB: membershipDatabase(["active-org"], [], ["active-org"], "owner-id"),
+    } as Bindings;
+    const response = await combinedAuthOrganizationApp().request(
+      "/api/auth/organization/leave",
+      {
+        body: JSON.stringify({ organizationId: "active-org" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      bindings,
+    );
+
+    expect(response.status).toBe(200);
+  });
+});
+
+function authOrganizationApp() {
+  const app = new Hono<{
+    Bindings: Bindings;
+    Variables: AuthVariables;
+  }>();
+  app.use("*", async (context, next) => {
+    context.set("authSession", {
+      session: { activeOrganizationId: "active-org" },
+      user: {
+        defaultOrganizationId: "active-org",
+        id: "user-id",
+      },
+    } as unknown as AuthSession);
+    await next();
+  });
+  app.use("*", requireAuthOrganizationSeat);
+  app.all("*", (context) => context.json({ ok: true }));
+  return app;
+}
+
+function combinedAuthOrganizationApp() {
+  const app = new Hono<{
+    Bindings: Bindings;
+    Variables: AuthVariables;
+  }>();
+  app.use("*", async (context, next) => {
+    context.set("authSession", {
+      session: {
+        activeOrganizationId: "active-org",
+        twoFactorVerified: true,
+      },
+      user: {
+        defaultOrganizationId: "active-org",
+        id: "user-id",
+        twoFactorEnabled: true,
+      },
+    } as unknown as AuthSession);
+    await next();
+  });
+  app.use("*", requireOrganizationPluginAccess, requireAuthOrganizationSeat);
+  app.all("*", (context) => context.json({ ok: true }));
+  return app;
+}
+
+describe("organization two-factor middleware", () => {
   it("requires two-factor setup for a protected membership", async () => {
     const response = await requestOrganization(
       "active-org",
@@ -185,18 +312,25 @@ describe("organization plugin middleware", () => {
     });
   });
 
-  it("filters protected teams from an unverified cross-organization list", async () => {
+  it("filters teams without two-factor access or a seat", async () => {
     const response = await pluginRequest(
       "/api/auth/organization/list-user-teams",
       null,
       "active-org",
-      ["active-org", "protected-org"],
+      ["active-org", "protected-org", "unseated-org"],
       ["protected-org"],
       {},
       [
         { id: "active-team", organizationId: "active-org" },
         { id: "protected-team", organizationId: "protected-org" },
+        { id: "unseated-team", organizationId: "unseated-org" },
       ],
+      null,
+      {
+        "active-org": "user-id",
+        "protected-org": "user-id",
+        "unseated-org": "owner-id",
+      },
     );
 
     expect(response.status).toBe(200);
@@ -224,6 +358,46 @@ describe("organization plugin middleware", () => {
     });
   });
 
+  it("checks seats against the canonically authorized active team", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/list-team-members",
+      null,
+      "active-org",
+      ["active-org", "unseated-org"],
+      [],
+      { team: { "unseated-team": "unseated-org" } },
+      undefined,
+      "unseated-team",
+      { "active-org": "user-id", "unseated-org": "owner-id" },
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()) as unknown).toEqual({
+      error:
+        "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+    });
+  });
+
+  it("checks seats against a nested canonical resource", async () => {
+    const response = await pluginRequest(
+      "/api/auth/organization/update",
+      { data: { teamId: "unseated-team" } },
+      "active-org",
+      ["active-org", "unseated-org"],
+      [],
+      { team: { "unseated-team": "unseated-org" } },
+      undefined,
+      null,
+      { "active-org": "user-id", "unseated-org": "owner-id" },
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()) as unknown).toEqual({
+      error:
+        "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+    });
+  });
+
   it("allows organization creation without an existing organization", async () => {
     const response = await pluginRequest(
       "/api/auth/organization/create",
@@ -240,6 +414,7 @@ describe("organization plugin middleware", () => {
 });
 
 interface TwoFactorState {
+  freeSeatUserId?: string;
   twoFactorEnabled?: boolean;
   twoFactorRequired?: boolean;
   twoFactorVerified?: boolean;
@@ -294,6 +469,7 @@ function requestOrganization(
       memberships,
       deletedMemberships,
       twoFactorState.twoFactorRequired ? memberships : [],
+      twoFactorState.freeSeatUserId ?? "user-id",
     ),
   } as Bindings);
 }
@@ -307,6 +483,7 @@ function pluginRequest(
   resourceOrganizations: ResourceOrganizations = {},
   responseBody?: unknown,
   activeTeamId: string | null = null,
+  freeSeatUserIds: string | Record<string, string> = "user-id",
 ) {
   const app = new Hono<{
     Bindings: Bindings;
@@ -327,7 +504,11 @@ function pluginRequest(
     } as unknown as AuthSession);
     await next();
   });
-  app.use("/api/auth/organization/*", requireOrganizationPluginAccess);
+  app.use(
+    "/api/auth/organization/*",
+    requireOrganizationPluginAccess,
+    requireAuthOrganizationSeat,
+  );
   app.all("/api/auth/organization/*", async (context) =>
     context.json(
       responseBody ?? { request: body ? await context.req.json() : null },
@@ -347,6 +528,7 @@ function pluginRequest(
         memberships,
         [],
         twoFactorRequiredOrganizations,
+        freeSeatUserIds,
         resourceOrganizations,
       ),
     } as Bindings,
@@ -363,6 +545,7 @@ function membershipDatabase(
   memberships: string[],
   deletedMemberships: string[],
   twoFactorRequiredOrganizations: string[],
+  freeSeatUserIds: string | Record<string, string> = "user-id",
   resourceOrganizations: ResourceOrganizations = {},
 ) {
   return {
@@ -388,8 +571,20 @@ function membershipDatabase(
               : [],
         }),
         first: async () => {
+          if (query.includes("FROM organization_billing")) return null;
+          if (query.includes("SELECT userId")) {
+            return {
+              userId:
+                typeof freeSeatUserIds === "string"
+                  ? freeSeatUserIds
+                  : freeSeatUserIds[firstValue],
+            };
+          }
           for (const table of ["invitation", "member", "team"] as const) {
-            if (query.includes(`FROM "${table}"`)) {
+            if (
+              query.includes(`FROM "${table}"`) ||
+              query.includes(`FROM ${table}`)
+            ) {
               const organizationId = resourceOrganizations[table]?.[firstValue];
               return organizationId ? { organizationId } : null;
             }

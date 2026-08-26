@@ -8,6 +8,7 @@ import type { Bindings } from "./types";
 
 const targetOrganizationId = "org_owner-user";
 const fallbackOrganizationId = "org_member-user";
+const proPriceId = "price_pro_test";
 
 describe("organization deletion", () => {
   it("only lets an organization owner delete the organization", async () => {
@@ -110,6 +111,220 @@ describe("organization deletion", () => {
     expect(
       fixture.database.query("SELECT COUNT(*) AS count FROM user").get(),
     ).toEqual({ count: 2 });
+  });
+
+  it("cancels paid billing before an owner deletes the organization", async () => {
+    const fixture = await createFixture();
+    insertPaidBilling(fixture.database, targetOrganizationId);
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; url: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      requests.push({ method: init?.method ?? "GET", url: String(input) });
+      return Response.json(canceledSubscription(targetOrganizationId));
+    }) as typeof fetch;
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(200);
+      expect(requests).toEqual([
+        {
+          method: "DELETE",
+          url: "https://api.stripe.com/v1/subscriptions/sub_test",
+        },
+      ]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT organization.deletedAt, organization_billing.stripe_status
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toMatchObject({
+        deletedAt: expect.any(String),
+        stripe_status: "canceled",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("expires an open Checkout before an owner deletes the organization", async () => {
+    const fixture = await createFixture();
+    insertPendingCheckout(fixture.database, "cs_pending_open");
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; url: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = { method: init?.method ?? "GET", url: String(input) };
+      requests.push(request);
+      return Response.json({
+        id: "cs_pending_open",
+        status: request.method === "POST" ? "expired" : "open",
+        subscription: null,
+      });
+    }) as typeof fetch;
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(200);
+      expect(requests).toEqual([
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/checkout/sessions/cs_pending_open",
+        },
+        {
+          method: "POST",
+          url: "https://api.stripe.com/v1/checkout/sessions/cs_pending_open/expire",
+        },
+      ]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_disabled_at, pending_checkout_session_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toMatchObject({
+        checkout_disabled_at: expect.any(String),
+        pending_checkout_session_id: null,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("cancels a completed pending Checkout before owner deletion", async () => {
+    const fixture = await createFixture();
+    insertPendingCheckout(fixture.database, "cs_pending_complete");
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; url: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = { method: init?.method ?? "GET", url: String(input) };
+      requests.push(request);
+      if (request.method === "GET") {
+        return Response.json({
+          id: "cs_pending_complete",
+          status: "complete",
+          subscription: "sub_pending",
+        });
+      }
+      return Response.json(
+        canceledSubscription(targetOrganizationId, "sub_pending"),
+      );
+    }) as typeof fetch;
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(200);
+      expect(requests).toEqual([
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/checkout/sessions/cs_pending_complete",
+        },
+        {
+          method: "DELETE",
+          url: "https://api.stripe.com/v1/subscriptions/sub_pending",
+        },
+      ]);
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_status, stripe_subscription_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toEqual({
+        stripe_status: "canceled",
+        stripe_subscription_id: "sub_pending",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps a paid organization when owner cancellation fails", async () => {
+    const fixture = await createFixture();
+    insertPaidBilling(fixture.database, targetOrganizationId);
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(
+        { error: { message: "Stripe unavailable" } },
+        { status: 503 },
+      )) as typeof fetch;
+    console.error = () => {};
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(502);
+      expect(
+        fixture.database
+          .query(
+            `SELECT organization.deletedAt,
+                    organization_billing.checkout_disabled_at
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toEqual({ checkout_disabled_at: null, deletedAt: null });
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("re-enables checkout when deletion storage fails after cancellation", async () => {
+    const fixture = await createFixture();
+    insertPaidBilling(fixture.database, targetOrganizationId);
+    fixture.database.exec(
+      `CREATE TRIGGER fail_owner_organization_deletion
+       BEFORE UPDATE OF deletedAt ON organization
+       WHEN NEW.deletedAt IS NOT NULL
+       BEGIN
+         SELECT RAISE(ABORT, 'forced organization deletion failure');
+       END`,
+    );
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async (_input, _init) =>
+      Response.json(
+        canceledSubscription(targetOrganizationId),
+      )) as typeof fetch;
+    console.error = () => {};
+    try {
+      const response = await fixture
+        .app("owner-user", "owner")
+        .request("/current", { method: "DELETE" });
+      expect(response.status).toBe(500);
+      expect(
+        fixture.database
+          .query(
+            `SELECT organization.deletedAt,
+                    organization_billing.checkout_disabled_at,
+                    organization_billing.stripe_status
+             FROM organization
+             JOIN organization_billing
+               ON organization_billing.organization_id = organization.id
+             WHERE organization.id = ?`,
+          )
+          .get(targetOrganizationId),
+      ).toEqual({
+        checkout_disabled_at: null,
+        deletedAt: null,
+        stripe_status: "canceled",
+      });
+    } finally {
+      console.error = originalConsoleError;
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 
@@ -233,13 +448,63 @@ async function createFixture() {
   await applyMigration(database, "0013_track_organization_deletion_actor.sql");
   await applyMigration(database, "0020_add_two_factor_authentication.sql");
   await applyMigration(database, "0031_require_member_two_factor.sql");
+  await applyMigration(database, "0032_create_billing.sql");
   insertSession(database, "owner-user", targetOrganizationId);
   insertSession(database, "member-user", targetOrganizationId);
-  const bindings = { DB: toD1(database) } as Bindings;
+  const bindings = {
+    DB: toD1(database),
+    STRIPE_PRO_PRICE_ID: proPriceId,
+    STRIPE_SECRET_KEY: "sk_live_test",
+  } as Bindings;
   return {
     app: (userId: string, organizationRole: string) =>
       testApp(bindings, userId, organizationRole),
     database,
+  };
+}
+
+function insertPaidBilling(database: Database, organizationId: string) {
+  database
+    .query(
+      `INSERT INTO organization_billing
+       (organization_id, stripe_customer_id, stripe_subscription_id,
+        stripe_subscription_item_id, stripe_price_id, stripe_status,
+        seat_quantity, stripe_event_created, updated_at)
+       VALUES (?, 'cus_test', 'sub_test', 'si_test', ?, 'active', 2, 1, ?)`,
+    )
+    .run(organizationId, proPriceId, now());
+}
+
+function insertPendingCheckout(database: Database, sessionId: string) {
+  database
+    .query(
+      `INSERT INTO organization_billing
+       (organization_id, pending_checkout_session_id, pending_checkout_url,
+        pending_checkout_expires_at, updated_at)
+       VALUES (?, ?, 'https://checkout.stripe.test/pending', 2000000000, ?)`,
+    )
+    .run(targetOrganizationId, sessionId, now());
+}
+
+function canceledSubscription(
+  organizationId: string,
+  subscriptionId = "sub_test",
+) {
+  return {
+    cancel_at_period_end: false,
+    customer: "cus_test",
+    id: subscriptionId,
+    items: {
+      data: [
+        {
+          id: "si_test",
+          price: { id: proPriceId },
+          quantity: 2,
+        },
+      ],
+    },
+    metadata: { organization_id: organizationId },
+    status: "canceled",
   };
 }
 
@@ -319,7 +584,10 @@ function toD1(database: Database) {
           };
         },
         first: async () => database.query(query).get(...values),
-        run: async () => database.query(query).run(...values),
+        run: async () => {
+          const result = database.query(query).run(...values);
+          return { meta: { changes: result.changes } };
+        },
       };
       return statement;
     },

@@ -6,7 +6,7 @@ import LegalLayout from "../layouts/LegalLayout.astro";
   description="How Tearleads retains and deletes account, workspace, inbox, and connected financial information."
   eyebrow="Retention / 03"
   title="Data Retention Policy"
-  updated="August 23, 2026"
+  updated="August 26, 2026"
 >
   <section class="legalPromise" aria-label="Our retention approach">
     <p class="kicker"><span></span> Our approach</p>
@@ -67,7 +67,24 @@ import LegalLayout from "../layouts/LegalLayout.astro";
   </section>
 
   <section>
-    <h2>4. Inbound email</h2>
+    <h2>4. Plan-specific audit history</h2>
+    <p>
+      Organizations on the Free plan retain 30 days of audit-run history,
+      including the run's recorded answers, issues, and issue images. Older
+      audit runs become eligible for automatic permanent deletion from active
+      database and object storage. Form templates are not deleted by this
+      retention window.
+    </p>
+    <p>
+      Organizations with an active Pro subscription retain audit-run history
+      without a plan-imposed time limit. If a Pro subscription ends, the Free
+      retention window applies after the paid service period ends. Legal,
+      security, and recovery-copy exceptions described below may still apply.
+    </p>
+  </section>
+
+  <section>
+    <h2>5. Inbound email</h2>
     <p>
       Moving an inbound email to Trash records when it was deleted and who
       deleted it. The message and its attachments remain recoverable from Trash
@@ -81,7 +98,7 @@ import LegalLayout from "../layouts/LegalLayout.astro";
   </section>
 
   <section>
-    <h2>5. Plaid-connected financial information</h2>
+    <h2>6. Plaid-connected financial information</h2>
     <p>
       Disconnecting a financial institution revokes Tearleads’ ongoing Plaid
       access and erases the encrypted access credentials used to refresh that
@@ -99,7 +116,7 @@ import LegalLayout from "../layouts/LegalLayout.astro";
   </section>
 
   <section>
-    <h2>6. Security records and recovery copies</h2>
+    <h2>7. Security records and recovery copies</h2>
     <p>
       We may retain limited authentication, request, diagnostic, audit, and
       security records for as long as reasonably necessary to operate and secure
@@ -114,7 +131,7 @@ import LegalLayout from "../layouts/LegalLayout.astro";
   </section>
 
   <section>
-    <h2>7. Exceptions</h2>
+    <h2>8. Exceptions</h2>
     <p>
       We may retain information longer when required by law or lawful process,
       needed to establish or defend legal claims, necessary to investigate fraud
@@ -125,7 +142,7 @@ import LegalLayout from "../layouts/LegalLayout.astro";
   </section>
 
   <section>
-    <h2>8. Questions and requests</h2>
+    <h2>9. Questions and requests</h2>
     <p>
       Use the organization, inbox, and Finance controls in the Service where
       available. For other retention or deletion requests, email

@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/cloudflareEnv.sh"
 load_cloudflare_env
 validate_auth_env
 validate_plaid_env
+validate_stripe_env live
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "Dry-running API Worker deployment..."
@@ -34,6 +35,14 @@ for secret_name in \
   PLAID_CLIENT_ID \
   PLAID_SECRET \
   PLAID_TOKEN_ENCRYPTION_KEY; do
+  printf '%s' "${!secret_name}" | bunx wrangler secret put \
+    "$secret_name" \
+    --config "$REPO_ROOT/apps/api/wrangler.jsonc" \
+    >/dev/null
+done
+
+echo "Updating Stripe Worker secrets..."
+for secret_name in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
   printf '%s' "${!secret_name}" | bunx wrangler secret put \
     "$secret_name" \
     --config "$REPO_ROOT/apps/api/wrangler.jsonc" \

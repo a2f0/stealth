@@ -11,6 +11,11 @@ import {
   organization,
   twoFactor,
 } from "better-auth/plugins";
+import {
+  organizationInvitationLimit,
+  organizationSeatLimit,
+  syncOrganizationSeats,
+} from "./billing";
 import type { Bindings } from "./types";
 
 type WaitUntil = (promise: Promise<unknown>) => void;
@@ -188,6 +193,20 @@ function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
     cancelPendingInvitationsOnReInvite: true,
     disableOrganizationDeletion: true,
     invitationExpiresIn: 60 * 60 * 48,
+    invitationLimit: ({ organization }) =>
+      organizationInvitationLimit(
+        env.DB,
+        organization.id,
+        env.STRIPE_PRO_PRICE_ID,
+        env.STRIPE_PRO_LEGACY_PRICE_IDS,
+      ),
+    membershipLimit: (_user, organization) =>
+      organizationSeatLimit(
+        env.DB,
+        organization.id,
+        env.STRIPE_PRO_PRICE_ID,
+        env.STRIPE_PRO_LEGACY_PRICE_IDS,
+      ),
     organizationHooks: {
       afterCreateOrganization: async ({ organization, user }) => {
         await updateDefaultOrganization(env.DB, user.id, organization.id);
@@ -195,6 +214,13 @@ function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
       },
       afterAcceptInvitation: async ({ organization, user }) => {
         await updateDefaultOrganization(env.DB, user.id, organization.id);
+        queueSeatSync(env, waitUntil, organization.id);
+      },
+      afterAddMember: async ({ organization }) => {
+        queueSeatSync(env, waitUntil, organization.id);
+      },
+      afterRemoveMember: async ({ organization }) => {
+        queueSeatSync(env, waitUntil, organization.id);
       },
     },
     sendInvitationEmail: async (data) => {
@@ -206,6 +232,18 @@ function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
       maximumTeams: 50,
     },
   });
+}
+
+function queueSeatSync(
+  env: Bindings,
+  waitUntil: WaitUntil,
+  organizationId: string,
+) {
+  waitUntil(
+    syncOrganizationSeats(env, organizationId).catch((cause) => {
+      console.error("Could not synchronize Stripe seat quantity.", cause);
+    }),
+  );
 }
 
 function queueInvitationEmail(

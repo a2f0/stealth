@@ -3,7 +3,7 @@ export interface WorkspaceOrganization {
   name: string;
 }
 
-type OrganizationSettingsPage = "access" | "general" | "people";
+type OrganizationSettingsPage = "access" | "billing" | "general" | "people";
 
 export function isOrganizationPath(pathname: string) {
   return pathname === "/organization" || pathname.startsWith("/organization/");
@@ -18,6 +18,7 @@ export function organizationSettingsPage(
 ): OrganizationSettingsPage {
   if (pathname === "/organization/people") return "people";
   if (pathname === "/organization/access") return "access";
+  if (pathname === "/organization/billing") return "billing";
   return "general";
 }
 
