@@ -500,13 +500,30 @@ describe("audits", () => {
     );
     expect(starterResponse.status).toBe(200);
     const starterBody = (await starterResponse.json()) as TemplateListResponse;
-    expect(starterBody.templates).toHaveLength(1);
-    expect(starterBody.templates[0]).toMatchObject({
+    expect(starterBody.templates).toHaveLength(2);
+    const nfpaStarter = starterBody.templates.find(
+      ({ id }) => id === "nfpa70e_global",
+    );
+    expect(nfpaStarter).toMatchObject({
       id: "nfpa70e_global",
       name: "NFPA 70E readiness checklist",
       scope: "global",
     });
-    expect(starterBody.templates[0]?.definition.sections).toHaveLength(6);
+    expect(nfpaStarter?.definition.sections).toHaveLength(6);
+    const residentialStarter = starterBody.templates.find(
+      ({ id }) => id === "us_residential_core_global",
+    );
+    expect(residentialStarter).toMatchObject({
+      name: "U.S. residential construction — comprehensive baseline",
+      scope: "global",
+    });
+    expect(residentialStarter?.definition.sections.length).toBeGreaterThan(15);
+    expect(
+      residentialStarter?.definition.sections.reduce(
+        (count, section) => count + section.items.length,
+        0,
+      ),
+    ).toBeGreaterThanOrEqual(225);
 
     const created = await jsonRequest<TemplateResponse>(
       fixture,

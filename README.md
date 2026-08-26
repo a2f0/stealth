@@ -115,6 +115,14 @@ risk assessment, or qualified professional judgment. Consult the
 [OSHA electrical safety requirements](https://www.osha.gov/laws-regs/regulations/standardnumber/1910/1910.333)
 when adapting it to a workplace.
 
+The global U.S. residential construction baseline adds a jurisdiction-portable
+starting point for detached one- and two-family dwellings and townhouses. Its
+253 controls retain source, applicability, trade, phase, hazard, evidence, and
+risk metadata before being compiled into the current checklist format. It is a
+baseline rather than a code-compliance certification; see the
+[residential audit library](docs/residential-audit-library.md) for its source,
+licensing, validation, and jurisdiction-overlay rules.
+
 ## Finance and Plaid
 
 The organization-scoped Finance page at `/finance` uses

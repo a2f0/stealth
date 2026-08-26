@@ -14,6 +14,7 @@ import {
 import type { AuthVariables } from "./authMiddleware";
 import { freeFormTemplateLimit, organizationTemplateLimit } from "./billing";
 import { nfpa70eStarter } from "./nfpa70eStarter";
+import { residentialCoreStarter } from "./residentialAuditLibrary";
 import type { Bindings } from "./types";
 
 const audits = new Hono<{
@@ -127,7 +128,7 @@ const auditRunPageSize = 100;
 audits.get("/templates", async (context) => {
   const organizationId = context.get("organizationId");
   const userId = context.get("authSession").user.id;
-  await ensureStarterTemplate(context.env.DB, userId);
+  await ensureStarterTemplates(context.env.DB, userId);
   const result = await context.env.DB.prepare(
     `${templateSelect}
      WHERE family.scope = 'global' OR family.organization_id = ?
@@ -750,35 +751,40 @@ async function addTemplateVersion(
   ]);
 }
 
-async function ensureStarterTemplate(database: D1Database, userId: string) {
-  const id = "nfpa70e_global";
+async function ensureStarterTemplates(database: D1Database, userId: string) {
   const now = new Date().toISOString();
-  await database.batch([
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO audit_template_families
-         (id, scope, organization_id, current_version, created_by, created_at,
-          updated_at)
-         VALUES (?, 'global', NULL, 1, ?, ?, ?)`,
-      )
-      .bind(id, userId, now, now),
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO audit_template_versions
-         (id, template_id, version, name, description, definition, status,
-          created_by, created_at)
-         VALUES (?, ?, 1, ?, ?, ?, 'published', ?, ?)`,
-      )
-      .bind(
-        `${id}:v1`,
-        id,
-        nfpa70eStarter.name,
-        nfpa70eStarter.description,
-        JSON.stringify(nfpa70eStarter.definition),
-        userId,
-        now,
-      ),
-  ]);
+  const starters = [
+    { id: "nfpa70e_global", ...nfpa70eStarter },
+    residentialCoreStarter,
+  ];
+  await database.batch(
+    starters.flatMap((starter) => [
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO audit_template_families
+           (id, scope, organization_id, current_version, created_by, created_at,
+            updated_at)
+           VALUES (?, 'global', NULL, 1, ?, ?, ?)`,
+        )
+        .bind(starter.id, userId, now, now),
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO audit_template_versions
+           (id, template_id, version, name, description, definition, status,
+            created_by, created_at)
+           VALUES (?, ?, 1, ?, ?, ?, 'published', ?, ?)`,
+        )
+        .bind(
+          `${starter.id}:v1`,
+          starter.id,
+          starter.name,
+          starter.description,
+          JSON.stringify(starter.definition),
+          userId,
+          now,
+        ),
+    ]),
+  );
 }
 
 async function findTemplate(
