@@ -221,6 +221,32 @@ test("reset reaches the exact fetched upstream before installing hooks", () => {
   }
 });
 
+test("in-session review fallback loads policy from the fetched base", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  for (const skillPath of [
+    ".claude/skills/cross-agent-review/SKILL.md",
+    ".codex/skills/cross-agent-review/SKILL.md",
+  ]) {
+    const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
+    const reviewPolicy = content.indexOf(
+      'git show "$FETCHED_BASE:REVIEW.md" > "$REVIEW_POLICY_FILE"',
+    );
+    const agentsPolicy = content.indexOf(
+      'git show "$FETCHED_BASE:AGENTS.md" > "$REVIEW_POLICY_FILE"',
+    );
+    const fileReview = content.indexOf(
+      "Review each file against the trusted guidelines materialized in",
+    );
+
+    expect(reviewPolicy).toBeGreaterThan(-1);
+    expect(agentsPolicy).toBeGreaterThan(reviewPolicy);
+    expect(fileReview).toBeGreaterThan(agentsPolicy);
+    expect(content).toContain(
+      "never substitute a working-tree `REVIEW.md` or `AGENTS.md`",
+    );
+  }
+});
+
 test("open-pr validates branch names without feature-checkout code", () => {
   const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
   for (const skillPath of [

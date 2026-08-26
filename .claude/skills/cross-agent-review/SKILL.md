@@ -354,12 +354,22 @@ Require a clean worktree before fetching or snapshotting anything:
       ```bash
       BASE="$FETCHED_BASE"
       REVIEW_FILE_LIST=$(mktemp)
+      REVIEW_POLICY_FILE=$(mktemp)
       git diff --name-only -z "$BASE"...HEAD > "$REVIEW_FILE_LIST"
+      if git cat-file -e "$FETCHED_BASE:REVIEW.md" 2>/dev/null; then
+        git show "$FETCHED_BASE:REVIEW.md" > "$REVIEW_POLICY_FILE" || { rm -f "$REVIEW_FILE_LIST" "$REVIEW_POLICY_FILE"; echo "Error: could not read trusted REVIEW.md" >&2; exit 1; }
+      elif git cat-file -e "$FETCHED_BASE:AGENTS.md" 2>/dev/null; then
+        git show "$FETCHED_BASE:AGENTS.md" > "$REVIEW_POLICY_FILE" || { rm -f "$REVIEW_FILE_LIST" "$REVIEW_POLICY_FILE"; echo "Error: could not read trusted AGENTS.md" >&2; exit 1; }
+      else
+        : > "$REVIEW_POLICY_FILE"
+      fi
       ```
 
       Consume `$REVIEW_FILE_LIST` with a NUL-aware reader and keep each decoded
       pathname as one value. Never put this output in command substitution or
       split it on lines: Git permits tabs and newlines in tracked pathnames.
+      `$REVIEW_POLICY_FILE` likewise comes only from the fetched base commit;
+      never substitute a working-tree `REVIEW.md` or `AGENTS.md`.
 
    b. For each exact pathname decoded by that NUL-aware reader, get the per-file
       diff against the same `$BASE` (with `$FILE_PATH` passed as one quoted
@@ -374,14 +384,15 @@ Require a clean worktree before fetching or snapshotting anything:
    c. For added or modified files, read the file with the Read tool for full
       context. Deleted files do not need to be read.
 
-   d. Review each file against the project's guidelines (`REVIEW.md` if present,
-      otherwise `AGENTS.md` and `CLAUDE.md`):
+   d. Review each file against the trusted guidelines materialized in
+      `$REVIEW_POLICY_FILE`. If that file is empty, use the defaults below:
       - Flag security issues, type safety violations, and missing tests as high
         priority.
       - Use severity levels: Blocker, Major, Minor, Suggestion.
       - Be concise: one line per issue with a `file:line` reference.
 
-   e. Aggregate findings across all files into the final review output.
+   e. Aggregate findings across all files into the final review output, then
+      remove `$REVIEW_POLICY_FILE`.
 
 5. **Review gate and bounded repair**: read the findings and classify them.
    Every reviewer is prompted for **Blocker / Major / Minor / Suggestion**; if a
