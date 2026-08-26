@@ -4,6 +4,7 @@ import {
   createCheckoutSession,
   createPortalSession,
   getBillingStatus,
+  redirectToCurrentBillingSession,
 } from "./billingApi";
 
 export function OrganizationBilling({
@@ -16,6 +17,13 @@ export function OrganizationBilling({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const loadSequence = useRef(0);
+  const actionSequence = useRef(0);
+  const redirect = createBillingAction(
+    actionSequence,
+    setBusy,
+    setError,
+    setNotice,
+  );
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
     setStatus(undefined);
@@ -37,23 +45,7 @@ export function OrganizationBilling({
       }
     }
   }, [organizationId]);
-  useBillingReload(load, loadSequence);
-
-  async function redirect(action: "checkout" | "portal") {
-    setBusy(true);
-    setError(undefined);
-    setNotice(undefined);
-    try {
-      const result =
-        action === "checkout"
-          ? await createCheckoutSession()
-          : await createPortalSession();
-      window.location.assign(result.url);
-    } catch (cause) {
-      setError(messageFrom(cause));
-      setBusy(false);
-    }
-  }
+  useBillingReload(load, loadSequence, actionSequence);
 
   if (!status && !error) {
     return <SettingsLoading />;
@@ -128,16 +120,46 @@ export function OrganizationBilling({
   );
 }
 
+function createBillingAction(
+  actionSequence: { current: number },
+  setBusy: (value: boolean) => void,
+  setError: (value: string | undefined) => void,
+  setNotice: (value: string | undefined) => void,
+) {
+  return async (action: "checkout" | "portal") => {
+    const sequence = ++actionSequence.current;
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const request =
+        action === "checkout" ? createCheckoutSession : createPortalSession;
+      await redirectToCurrentBillingSession(
+        request,
+        () => sequence === actionSequence.current,
+        (url) => window.location.assign(url),
+      );
+    } catch (cause) {
+      if (sequence === actionSequence.current) {
+        setError(messageFrom(cause));
+        setBusy(false);
+      }
+    }
+  };
+}
+
 function useBillingReload(
   load: () => Promise<void>,
-  sequence: { current: number },
+  loadSequence: { current: number },
+  actionSequence: { current: number },
 ) {
   useEffect(() => {
     void load();
     return () => {
-      sequence.current += 1;
+      loadSequence.current += 1;
+      actionSequence.current += 1;
     };
-  }, [load, sequence]);
+  }, [actionSequence, load, loadSequence]);
 }
 
 function checkoutNotice(query: URLSearchParams) {

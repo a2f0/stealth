@@ -36,6 +36,17 @@ export async function createPortalSession() {
   return billingRedirect("portal");
 }
 
+export async function redirectToCurrentBillingSession(
+  request: () => Promise<{ url: string }>,
+  isCurrent: () => boolean,
+  navigate: (url: string) => void,
+) {
+  const result = await request();
+  if (!isCurrent()) return false;
+  navigate(result.url);
+  return true;
+}
+
 async function billingRedirect(endpoint: "checkout" | "portal") {
   const response = await fetch(`${apiUrl}/api/billing/${endpoint}`, {
     credentials: "include",
