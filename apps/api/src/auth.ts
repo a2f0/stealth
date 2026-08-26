@@ -198,9 +198,15 @@ function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
         env.DB,
         organization.id,
         env.STRIPE_PRO_PRICE_ID,
+        env.STRIPE_PRO_LEGACY_PRICE_IDS,
       ),
     membershipLimit: (_user, organization) =>
-      organizationSeatLimit(env.DB, organization.id, env.STRIPE_PRO_PRICE_ID),
+      organizationSeatLimit(
+        env.DB,
+        organization.id,
+        env.STRIPE_PRO_PRICE_ID,
+        env.STRIPE_PRO_LEGACY_PRICE_IDS,
+      ),
     organizationHooks: {
       afterCreateOrganization: async ({ organization, user }) => {
         await updateDefaultOrganization(env.DB, user.id, organization.id);

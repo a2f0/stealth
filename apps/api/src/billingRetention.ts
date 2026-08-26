@@ -1,4 +1,5 @@
 import {
+  configuredProPriceIds,
   freeRetentionDays,
   reconcilePendingCheckoutEntitlements,
 } from "./billing";
@@ -11,7 +12,10 @@ const retentionBatchesPerInvocation = 5;
 export async function purgeExpiredFreeAuditRuns(
   environment: Pick<
     Bindings,
-    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+    | "DB"
+    | "STRIPE_PRO_LEGACY_PRICE_IDS"
+    | "STRIPE_PRO_PRICE_ID"
+    | "STRIPE_SECRET_KEY"
   >,
   retainedAfter = new Date(
     Date.now() - freeRetentionDays * 24 * 60 * 60 * 1_000,
@@ -23,6 +27,12 @@ export async function purgeExpiredFreeAuditRuns(
       "Stripe Pro price configuration is required for retention cleanup.",
     );
   }
+  const allowedProPriceIds = JSON.stringify([
+    ...configuredProPriceIds(
+      proPriceId,
+      environment.STRIPE_PRO_LEGACY_PRICE_IDS,
+    ),
+  ]);
   await reconcilePendingCheckoutEntitlements(environment);
   let deleted = 0;
   for (let batch = 0; batch < retentionBatchesPerInvocation; batch += 1) {
@@ -47,10 +57,8 @@ export async function purgeExpiredFreeAuditRuns(
            AND NOT (
              COALESCE(billing.stripe_status, '') IN
                ('active', 'past_due', 'trialing')
-             AND (
-               billing.stripe_subscription_item_id IS NOT NULL
-               OR COALESCE(billing.stripe_price_id, '') = ?
-             )
+             AND COALESCE(billing.stripe_price_id, '') IN
+               (SELECT value FROM json_each(?))
            )
          ORDER BY COALESCE(audit.completed_at, audit.updated_at) ASC,
                   audit.id ASC
@@ -58,7 +66,7 @@ export async function purgeExpiredFreeAuditRuns(
        )
        RETURNING id`,
     )
-      .bind(retainedAfter, proPriceId, retentionBatchSize)
+      .bind(retainedAfter, allowedProPriceIds, retentionBatchSize)
       .all<{ id: string }>();
     deleted += result.results.length;
     if (result.results.length < retentionBatchSize) return deleted;

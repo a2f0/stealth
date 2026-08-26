@@ -13,6 +13,7 @@ export interface Bindings {
   PLAID_SECRET?: string;
   PLAID_TOKEN_ENCRYPTION_KEY?: string;
   STRIPE_PRO_PRICE_ID?: string;
+  STRIPE_PRO_LEGACY_PRICE_IDS?: string;
   STRIPE_PORTAL_CONFIGURATION_ID?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;

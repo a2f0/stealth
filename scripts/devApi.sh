@@ -39,5 +39,6 @@ done
 cd "$REPO_ROOT/apps/api"
 bunx wrangler dev \
   --env-file "$auth_env_file" \
+  --var "STRIPE_PRO_LEGACY_PRICE_IDS:${STRIPE_PRO_LEGACY_PRICE_IDS:-}" \
   --var "STRIPE_PRO_PRICE_ID:$STRIPE_PRO_PRICE_ID" \
   --var "STRIPE_PORTAL_CONFIGURATION_ID:${STRIPE_PORTAL_CONFIGURATION_ID:-}"

@@ -16,8 +16,11 @@ export function OrganizationBilling({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const load = useCallback(async () => {
-    if (!organizationId) return;
+    setStatus(undefined);
     setError(undefined);
+    setNotice(undefined);
+    setBusy(false);
+    if (!organizationId) return;
     const query = new URLSearchParams(window.location.search);
     const sessionId = query.get("session_id") ?? undefined;
     try {

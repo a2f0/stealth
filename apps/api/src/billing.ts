@@ -144,6 +144,7 @@ billing.get("/", async (context) => {
       organizationId,
       context.get("organizationRole"),
       context.env.STRIPE_PRO_PRICE_ID,
+      context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
     ),
   );
 });
@@ -157,16 +158,15 @@ billing.post("/checkout", async (context) => {
   }
   const organizationId = context.get("organizationId");
   const priceId = context.env.STRIPE_PRO_PRICE_ID;
-  if (!priceId) {
-    return context.json({ error: "Stripe billing is not configured." }, 503);
-  }
+  if (!priceId) return billingUnavailableResponse(context);
   const [billingRecord, memberCount] = await Promise.all([
     findBilling(context.env.DB, organizationId),
     countMembers(context.env.DB, organizationId),
   ]);
   if (billingRecord?.checkout_disabled_at)
     return checkoutDisabledResponse(context);
-  if (isPaidBilling(billingRecord, priceId)) return alreadyProResponse(context);
+  if (isPaidBillingForEnvironment(billingRecord, context.env))
+    return alreadyProResponse(context);
   const nowSeconds = Math.floor(Date.now() / 1_000);
   const pendingCheckout = activePendingCheckout(billingRecord, nowSeconds);
   if (pendingCheckout) return context.json({ url: pendingCheckout.url });
@@ -178,7 +178,8 @@ billing.post("/checkout", async (context) => {
     nowSeconds,
   );
   const record = checkoutClaim.record;
-  if (isPaidBilling(record, priceId)) return alreadyProResponse(context);
+  if (isPaidBillingForEnvironment(record, context.env))
+    return alreadyProResponse(context);
   if (record?.checkout_disabled_at) return checkoutDisabledResponse(context);
   const claimedPending = activePendingCheckout(record, nowSeconds);
   if (claimedPending) return context.json({ url: claimedPending.url });
@@ -357,8 +358,14 @@ export async function organizationSeatLimit(
   database: D1Database,
   organizationId: string,
   priceId: string | undefined,
+  legacyPriceIds?: string,
 ) {
-  return (await organizationHasPro(database, organizationId, priceId))
+  return (await organizationHasPro(
+    database,
+    organizationId,
+    priceId,
+    legacyPriceIds,
+  ))
     ? unlimitedSeatLimit
     : 1;
 }
@@ -367,8 +374,14 @@ export async function organizationInvitationLimit(
   database: D1Database,
   organizationId: string,
   priceId: string | undefined,
+  legacyPriceIds?: string,
 ) {
-  return (await organizationHasPro(database, organizationId, priceId))
+  return (await organizationHasPro(
+    database,
+    organizationId,
+    priceId,
+    legacyPriceIds,
+  ))
     ? unlimitedSeatLimit
     : 0;
 }
@@ -377,8 +390,14 @@ export async function organizationTemplateLimit(
   database: D1Database,
   organizationId: string,
   priceId: string | undefined,
+  legacyPriceIds?: string,
 ) {
-  return (await organizationHasPro(database, organizationId, priceId))
+  return (await organizationHasPro(
+    database,
+    organizationId,
+    priceId,
+    legacyPriceIds,
+  ))
     ? null
     : freeFormTemplateLimit;
 }
@@ -388,8 +407,12 @@ export async function organizationUserHasSeat(
   organizationId: string,
   userId: string,
   priceId: string | undefined,
+  legacyPriceIds?: string,
 ) {
-  if (await organizationHasPro(database, organizationId, priceId)) return true;
+  if (
+    await organizationHasPro(database, organizationId, priceId, legacyPriceIds)
+  )
+    return true;
   const row = await database
     .prepare(
       `SELECT userId
@@ -413,14 +436,21 @@ export async function organizationUserHasSeat(
 export async function syncOrganizationSeats(
   environment: Pick<
     Bindings,
-    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+    | "DB"
+    | "STRIPE_PRO_LEGACY_PRICE_IDS"
+    | "STRIPE_PRO_PRICE_ID"
+    | "STRIPE_SECRET_KEY"
   >,
   organizationId: string,
   verifyStripeQuantity = false,
 ) {
   const initialRecord = await findBilling(environment.DB, organizationId);
   if (
-    !isPaidBilling(initialRecord, environment.STRIPE_PRO_PRICE_ID) ||
+    !isPaidBilling(
+      initialRecord,
+      environment.STRIPE_PRO_PRICE_ID,
+      environment.STRIPE_PRO_LEGACY_PRICE_IDS,
+    ) ||
     !initialRecord?.stripe_subscription_item_id
   ) {
     return false;
@@ -443,7 +473,10 @@ export async function syncOrganizationSeats(
 async function syncOrganizationSeatsLocked(
   environment: Pick<
     Bindings,
-    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+    | "DB"
+    | "STRIPE_PRO_LEGACY_PRICE_IDS"
+    | "STRIPE_PRO_PRICE_ID"
+    | "STRIPE_SECRET_KEY"
   >,
   organizationId: string,
   lockId: string,
@@ -451,7 +484,11 @@ async function syncOrganizationSeatsLocked(
 ) {
   const record = await findBilling(environment.DB, organizationId);
   if (
-    !isPaidBilling(record, environment.STRIPE_PRO_PRICE_ID) ||
+    !isPaidBilling(
+      record,
+      environment.STRIPE_PRO_PRICE_ID,
+      environment.STRIPE_PRO_LEGACY_PRICE_IDS,
+    ) ||
     !record?.stripe_subscription_item_id ||
     subscriptionLockId(record) !== lockId
   ) {
@@ -711,10 +748,20 @@ export async function cancelOrganizationSubscription(
   >,
   organizationId: string,
 ) {
-  const record = await disableCheckoutForDeletion(
+  const deletion = await disableCheckoutForDeletion(
     environment.DB,
     organizationId,
   );
+  if (!deletion) {
+    if (!(await organizationExists(environment.DB, organizationId))) {
+      return { canceled: false, checkoutGuard: null };
+    }
+    throw new StripeApiError(
+      "Organization deletion is already in progress.",
+      409,
+    );
+  }
+  const { checkoutGuard, record } = deletion;
   try {
     const pendingSubscriptionId = await resolvePendingCheckoutForDeletion(
       environment,
@@ -740,13 +787,13 @@ export async function cancelOrganizationSubscription(
       canceled:
         subscriptionIds.size > 0 ||
         Boolean(record?.pending_checkout_session_id),
-      checkoutGuard: record?.checkout_disabled_at ?? null,
+      checkoutGuard,
     };
   } catch (cause) {
     await enableCheckoutAfterFailedDeletion(
       environment.DB,
       organizationId,
-      record?.checkout_disabled_at ?? null,
+      checkoutGuard,
     );
     throw cause;
   }
@@ -902,13 +949,14 @@ async function billingSummary(
   organizationId: string,
   organizationRole: string,
   priceId: string | undefined,
+  legacyPriceIds: string | undefined,
 ) {
   const [record, memberCount, formTemplateCount] = await Promise.all([
     findBilling(database, organizationId),
     countMembers(database, organizationId),
     countOrganizationTemplates(database, organizationId),
   ]);
-  const pro = isPaidBilling(record, priceId);
+  const pro = isPaidBilling(record, priceId, legacyPriceIds);
   return {
     billing: {
       cancelAtPeriodEnd: Boolean(record?.cancel_at_period_end),
@@ -1113,7 +1161,10 @@ async function checkoutSubscriptionAlreadyPersisted(
 async function prepareCheckoutSubscriptionReplacement(
   environment: Pick<
     Bindings,
-    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+    | "DB"
+    | "STRIPE_PRO_LEGACY_PRICE_IDS"
+    | "STRIPE_PRO_PRICE_ID"
+    | "STRIPE_SECRET_KEY"
   >,
   organizationId: string,
   checkoutSessionId: string,
@@ -1124,10 +1175,11 @@ async function prepareCheckoutSubscriptionReplacement(
   const matchesPending =
     existing?.pending_checkout_session_id === checkoutSessionId;
   const hasExpectedProEntitlement = Boolean(
-    environment.STRIPE_PRO_PRICE_ID &&
-      paidStatuses.has(subscription.status) &&
-      subscription.items.data.some(
-        (item) => item.price.id === environment.STRIPE_PRO_PRICE_ID,
+    paidStatuses.has(subscription.status) &&
+      findProSubscriptionItem(
+        subscription,
+        environment.STRIPE_PRO_PRICE_ID,
+        environment.STRIPE_PRO_LEGACY_PRICE_IDS,
       ),
   );
   if (!hasExpectedProEntitlement) {
@@ -1210,7 +1262,10 @@ async function expandedSubscription(
 }
 
 async function persistSubscription(
-  environment: Pick<Bindings, "DB" | "STRIPE_PRO_PRICE_ID">,
+  environment: Pick<
+    Bindings,
+    "DB" | "STRIPE_PRO_LEGACY_PRICE_IDS" | "STRIPE_PRO_PRICE_ID"
+  >,
   subscription: StripeSubscription,
   eventCreated: number,
   knownOrganizationId?: string,
@@ -1231,8 +1286,10 @@ async function persistSubscription(
   ) {
     return false;
   }
-  const item = subscription.items.data.find(
-    (candidate) => candidate.price.id === environment.STRIPE_PRO_PRICE_ID,
+  const item = findProSubscriptionItem(
+    subscription,
+    environment.STRIPE_PRO_PRICE_ID,
+    environment.STRIPE_PRO_LEGACY_PRICE_IDS,
   );
   const periodEnd = item?.current_period_end ?? subscription.current_period_end;
   const cancelAtPeriodEnd =
@@ -1310,20 +1367,10 @@ async function persistSubscription(
      ON CONFLICT (organization_id) DO UPDATE SET
        stripe_customer_id = excluded.stripe_customer_id,
        stripe_subscription_id = excluded.stripe_subscription_id,
-       stripe_subscription_item_id = COALESCE(
-         excluded.stripe_subscription_item_id,
-         organization_billing.stripe_subscription_item_id
-       ),
-       stripe_price_id = COALESCE(
-         excluded.stripe_price_id,
-         organization_billing.stripe_price_id
-       ),
+       stripe_subscription_item_id = excluded.stripe_subscription_item_id,
+       stripe_price_id = excluded.stripe_price_id,
        stripe_status = excluded.stripe_status,
-       seat_quantity = CASE
-         WHEN excluded.stripe_subscription_item_id IS NOT NULL
-           THEN excluded.seat_quantity
-         ELSE organization_billing.seat_quantity
-       END,
+       seat_quantity = excluded.seat_quantity,
        cancel_at_period_end = excluded.cancel_at_period_end,
        current_period_end = excluded.current_period_end,
        stripe_event_created = MAX(
@@ -1393,20 +1440,67 @@ async function organizationHasPro(
   database: D1Database,
   organizationId: string,
   priceId: string | undefined,
+  legacyPriceIds?: string,
 ) {
-  return isPaidBilling(await findBilling(database, organizationId), priceId);
+  return isPaidBilling(
+    await findBilling(database, organizationId),
+    priceId,
+    legacyPriceIds,
+  );
 }
 
 function isPaidBilling(
   record: BillingRow | null,
   configuredPriceId: string | undefined,
+  legacyPriceIds?: string,
 ) {
   return Boolean(
-    configuredPriceId &&
-      record?.stripe_status &&
+    record?.stripe_status &&
       paidStatuses.has(record.stripe_status) &&
-      (record.stripe_subscription_item_id ||
-        record.stripe_price_id === configuredPriceId),
+      record.stripe_price_id &&
+      configuredProPriceIds(configuredPriceId, legacyPriceIds).has(
+        record.stripe_price_id,
+      ),
+  );
+}
+
+function isPaidBillingForEnvironment(
+  record: BillingRow | null,
+  environment: Pick<
+    Bindings,
+    "STRIPE_PRO_LEGACY_PRICE_IDS" | "STRIPE_PRO_PRICE_ID"
+  >,
+) {
+  return isPaidBilling(
+    record,
+    environment.STRIPE_PRO_PRICE_ID,
+    environment.STRIPE_PRO_LEGACY_PRICE_IDS,
+  );
+}
+
+export function configuredProPriceIds(
+  currentPriceId: string | undefined,
+  legacyPriceIds?: string,
+) {
+  const candidates = [currentPriceId, ...(legacyPriceIds?.split(",") ?? [])];
+  return new Set(
+    candidates
+      .map((candidate) => candidate?.trim() ?? "")
+      .filter(
+        (candidate) =>
+          candidate.startsWith("price_") && candidate.length <= 255,
+      ),
+  );
+}
+
+function findProSubscriptionItem(
+  subscription: StripeSubscription,
+  currentPriceId: string | undefined,
+  legacyPriceIds?: string,
+) {
+  const allowedPriceIds = configuredProPriceIds(currentPriceId, legacyPriceIds);
+  return subscription.items.data.find((item) =>
+    allowedPriceIds.has(item.price.id),
   );
 }
 
@@ -1438,7 +1532,7 @@ async function disableCheckoutForDeletion(
 ) {
   const now = new Date().toISOString();
   const checkoutGuard = crypto.randomUUID();
-  await database
+  const record = await database
     .prepare(
       `INSERT INTO organization_billing
        (organization_id, checkout_disabled_at, updated_at)
@@ -1448,11 +1542,22 @@ async function disableCheckoutForDeletion(
          checkout_claim_id = NULL,
          checkout_claim_quantity = NULL,
          checkout_claim_expires_at = NULL,
-         updated_at = excluded.updated_at`,
+         updated_at = excluded.updated_at
+       WHERE organization_billing.checkout_disabled_at IS NULL
+       RETURNING stripe_customer_id, stripe_subscription_id,
+                 stripe_subscription_item_id, stripe_price_id, stripe_status,
+                 seat_quantity, cancel_at_period_end, current_period_end,
+                 stripe_event_created, checkout_claim_id,
+                 checkout_claim_quantity, checkout_claim_expires_at,
+                 checkout_disabled_at, pending_checkout_session_id,
+                 pending_checkout_url, pending_checkout_expires_at,
+                 last_reconciled_at, updated_at`,
     )
     .bind(checkoutGuard, now, organizationId)
-    .run();
-  return findBilling(database, organizationId);
+    .first<BillingRow>();
+  return record?.checkout_disabled_at === checkoutGuard
+    ? { checkoutGuard, record }
+    : null;
 }
 
 async function enableCheckoutAfterFailedDeletion(
@@ -2041,6 +2146,10 @@ function checkoutDisabledResponse(context: Context<BillingEnv>) {
     },
     409,
   );
+}
+
+function billingUnavailableResponse(context: Context<BillingEnv>) {
+  return context.json({ error: "Stripe billing is not configured." }, 503);
 }
 
 function checkoutInProgressResponse(context: Context<BillingEnv>) {

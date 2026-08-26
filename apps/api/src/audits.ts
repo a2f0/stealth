@@ -159,6 +159,7 @@ audits.post("/templates", async (context) => {
           context.env.DB,
           organizationId,
           context.env.STRIPE_PRO_PRICE_ID,
+          context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
         )
       : null;
   const results = await context.env.DB.batch([
@@ -247,6 +248,7 @@ audits.post("/templates/:id/copies", async (context) => {
       context.env.DB,
       context.get("organizationId"),
       context.env.STRIPE_PRO_PRICE_ID,
+      context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
     ),
   );
   if (!saved) {

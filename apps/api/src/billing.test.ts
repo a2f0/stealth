@@ -314,6 +314,67 @@ describe("billing", () => {
     }
   });
 
+  it("keeps concurrent organization deletions request-owned", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_subscription_id,
+          stripe_subscription_item_id, stripe_price_id, stripe_status,
+          updated_at)
+         VALUES (?, 'sub_delete_race', 'si_sub_delete_race', ?, 'active', ?)`,
+      )
+      .run(organizationId, proPriceId, new Date().toISOString());
+    let markCancellationStarted = () => {};
+    let releaseCancellation = () => {};
+    const cancellationStarted = new Promise<void>((resolve) => {
+      markCancellationStarted = resolve;
+    });
+    const cancellationReleased = new Promise<void>((resolve) => {
+      releaseCancellation = resolve;
+    });
+    let requestCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input) => {
+      requestCount += 1;
+      markCancellationStarted();
+      await cancellationReleased;
+      return Response.json(
+        subscriptionEvent(
+          "unused_delete_race",
+          100,
+          "canceled",
+          1,
+          "sub_delete_race",
+        ).data.object,
+      );
+    }) as typeof fetch;
+    try {
+      const winner = cancelOrganizationSubscription(
+        fixture.bindings,
+        organizationId,
+      );
+      await cancellationStarted;
+      await expect(
+        cancelOrganizationSubscription(fixture.bindings, organizationId),
+      ).rejects.toThrow("Organization deletion is already in progress.");
+      releaseCancellation();
+      const result = await winner;
+      expect(requestCount).toBe(1);
+      expect(
+        fixture.database
+          .query(
+            `SELECT checkout_disabled_at FROM organization_billing
+             WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({ checkout_disabled_at: result.checkoutGuard });
+    } finally {
+      releaseCancellation();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("uses signed, idempotent, ordered webhooks as the entitlement source", async () => {
     const fixture = await createFixture();
     const active = subscriptionEvent("evt_active", 100, "active", 3);
@@ -1046,6 +1107,7 @@ describe("billing", () => {
       Response.json(subscription.data.object)) as typeof fetch;
     try {
       expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      fixture.bindings.STRIPE_PRO_LEGACY_PRICE_IDS = proPriceId;
       fixture.bindings.STRIPE_PRO_PRICE_ID = "price_rotated";
       subscription = subscriptionEvent(
         "evt_after_price_rotation",
@@ -1080,6 +1142,44 @@ describe("billing", () => {
           await fixture.app.request("/", undefined, fixture.bindings)
         ).json(),
       ).toMatchObject({ plan: "pro" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("clears a Pro item after its price leaves the allowlist", async () => {
+    const fixture = await createFixture();
+    let subscription = subscriptionEvent("evt_allowed_price", 100, "active", 1);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input) =>
+      Response.json(subscription.data.object)) as typeof fetch;
+    try {
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      subscription = subscriptionEvent(
+        "evt_removed_price",
+        101,
+        "active",
+        1,
+        "sub_test",
+        "price_removed",
+      );
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_price_id, stripe_subscription_item_id
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        stripe_price_id: null,
+        stripe_subscription_item_id: null,
+      });
+      expect(
+        await (
+          await fixture.app.request("/", undefined, fixture.bindings)
+        ).json(),
+      ).toMatchObject({ plan: "free" });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1374,6 +1474,7 @@ async function createFixture(organizationRole = "owner") {
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.test",
     STORAGE: {} as R2Bucket,
+    STRIPE_PRO_LEGACY_PRICE_IDS: "",
     STRIPE_PRO_PRICE_ID: proPriceId,
     STRIPE_SECRET_KEY: "sk_live_test",
     STRIPE_WEBHOOK_SECRET: "whsec_test",

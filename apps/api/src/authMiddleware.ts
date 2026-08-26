@@ -143,6 +143,7 @@ async function filterTeamsRequiringAccess(
         membership.organizationId,
         session.user.id,
         context.env.STRIPE_PRO_PRICE_ID,
+        context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
       )
     ) {
       allowedOrganizationIds.add(membership.organizationId);
@@ -238,6 +239,7 @@ async function authorizeOrganization(
       membership.organizationId,
       session.user.id,
       context.env.STRIPE_PRO_PRICE_ID,
+      context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
     ))
   ) {
     return context.json(
@@ -383,6 +385,7 @@ export const requireAuthOrganizationSeat = createMiddleware<AuthEnv>(
         target.organizationId,
         session.user.id,
         context.env.STRIPE_PRO_PRICE_ID,
+        context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
       ))
     ) {
       return context.json(
