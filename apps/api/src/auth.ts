@@ -44,6 +44,15 @@ const userAdditionalFields = {
   },
 } as const;
 
+const sessionAdditionalFields = {
+  twoFactorVerified: {
+    defaultValue: false,
+    input: false,
+    required: true,
+    type: "boolean",
+  },
+} as const;
+
 export function createAuth(env: Bindings, waitUntil: WaitUntil) {
   return betterAuth({
     advanced: {
@@ -123,6 +132,9 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
       storage: "database",
     },
     secret: env.BETTER_AUTH_SECRET,
+    session: {
+      additionalFields: sessionAdditionalFields,
+    },
     trustedOrigins: [env.CORS_ORIGIN],
     user: {
       additionalFields: userAdditionalFields,
@@ -132,7 +144,7 @@ export function createAuth(env: Bindings, waitUntil: WaitUntil) {
 
 function authDatabaseHooks(env: Bindings) {
   return {
-    session: { create: { before: activateDefaultOrganization } },
+    session: { create: { before: prepareSession } },
     user: {
       create: {
         before: recordTermsAcceptance,
@@ -321,26 +333,46 @@ async function runStatement(
   ).run(...values);
 }
 
-async function activateDefaultOrganization(
-  session: Session,
+async function prepareSession(
+  session: Session & { twoFactorVerified?: boolean },
   context: GenericEndpointContext | null,
 ) {
   if (!context) return;
   const user = await context.context.adapter.findOne<{
     defaultOrganizationId: string | null;
+    twoFactorEnabled: boolean;
   }>({
     model: "user",
-    select: ["defaultOrganizationId"],
+    select: ["defaultOrganizationId", "twoFactorEnabled"],
     where: [{ field: "id", value: session.userId }],
   });
-  if (!user?.defaultOrganizationId) return;
+  const twoFactorVerified =
+    twoFactorVerificationPaths.has(context.path) ||
+    (twoFactorSignInPaths.has(context.path) &&
+      Boolean(user?.twoFactorEnabled)) ||
+    session.twoFactorVerified === true;
   return {
     data: {
       ...session,
-      activeOrganizationId: user.defaultOrganizationId,
+      ...(user?.defaultOrganizationId
+        ? { activeOrganizationId: user.defaultOrganizationId }
+        : {}),
+      twoFactorVerified,
     },
   };
 }
+
+const twoFactorVerificationPaths = new Set([
+  "/two-factor/verify-backup-code",
+  "/two-factor/verify-otp",
+  "/two-factor/verify-totp",
+]);
+
+const twoFactorSignInPaths = new Set([
+  "/sign-in/email",
+  "/sign-in/phone-number",
+  "/sign-in/username",
+]);
 
 function defaultOrganizationName(userName: string) {
   const name = userName.trim();
@@ -369,7 +401,8 @@ type Auth = ReturnType<typeof createAuth>;
 type BaseAuthSession = NonNullable<
   Awaited<ReturnType<Auth["api"]["getSession"]>>
 >;
-export type AuthSession = Omit<BaseAuthSession, "user"> & {
+export type AuthSession = Omit<BaseAuthSession, "session" | "user"> & {
+  session: BaseAuthSession["session"] & { twoFactorVerified: boolean };
   user: BaseAuthSession["user"] & {
     role: string;
     defaultOrganizationId?: string | null | undefined;

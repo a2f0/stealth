@@ -1,0 +1,5 @@
+ALTER TABLE "member"
+ADD COLUMN "twoFactorRequired" INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE "session"
+ADD COLUMN "twoFactorVerified" INTEGER NOT NULL DEFAULT 0;

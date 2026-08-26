@@ -7,6 +7,7 @@ import {
   type AuthVariables,
   requireAuth,
   requireOrganization,
+  requireOrganizationPluginAccess,
   requireRole,
 } from "./authMiddleware";
 import { businesses } from "./businesses";
@@ -31,6 +32,12 @@ app.use(
     exposeHeaders: ["Retry-After"],
     origin: (_origin, context) => context.env.CORS_ORIGIN,
   }),
+);
+
+app.use(
+  "/api/auth/organization/*",
+  requireAuth,
+  requireOrganizationPluginAccess,
 );
 
 app.all("/api/auth/*", (context) =>
@@ -109,6 +116,7 @@ app.route("/api/organization-groups", organizationGroups);
 app.use("/api/organization-settings", requireAuth);
 app.use("/api/organization-settings/*", requireAuth);
 app.use("/api/organization-settings/people", requireOrganization);
+app.use("/api/organization-settings/people/*", requireOrganization);
 app.use("/api/organization-settings/current", requireOrganization);
 app.route("/api/organization-settings", organizationSettings);
 

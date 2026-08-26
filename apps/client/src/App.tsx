@@ -21,6 +21,7 @@ import { getWorkspaceOrganizations } from "./organizationSettingsApi";
 import {
   createOrganizationSlug,
   isOrganizationPath,
+  organizationPathRequiresAccess,
   resolveActiveOrganizationId,
   type WorkspaceOrganization,
 } from "./organizationState";
@@ -211,8 +212,14 @@ function AuthenticatedWorkspace({
   if (pathname === "/admin" && !hasRole(session.user.role, "admin")) {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
-  if (pathname === "/finance" && access.isPending) return <LoadingScreen />;
-  if (pathname === "/finance" && !access.can("finance")) {
+  if (organizationPathRequiresAccess(pathname) && access.isPending) {
+    return <LoadingScreen />;
+  }
+  if (
+    pathname === "/finance" &&
+    !access.twoFactorRequirement &&
+    !access.can("finance")
+  ) {
     return <FeatureAccessDenied onNavigate={() => navigate("/")} />;
   }
   const library = (
@@ -229,6 +236,9 @@ function AuthenticatedWorkspace({
   );
   const addAccount = () => navigate(addAccountPath(currentLocation()));
   const hasWorkspace = workspace.organizations.length > 0;
+  const organizationRequirement = organizationPathRequiresAccess(pathname)
+    ? access.twoFactorRequirement
+    : undefined;
   return (
     <WorkspaceShell
       accountLoadError={accounts.loadError}
@@ -249,10 +259,16 @@ function AuthenticatedWorkspace({
       organizations={workspace.organizations}
       user={session.user}
     >
-      {hasWorkspace ||
-      ["/account/security", "/admin", "/inbox", "/invite"].includes(
-        pathname,
-      ) ? (
+      {organizationRequirement ? (
+        <OrganizationTwoFactorRequired
+          onSecurity={() => navigate("/account/security")}
+          onSignOut={accounts.signOutActiveAccount}
+          requirement={organizationRequirement}
+        />
+      ) : hasWorkspace ||
+        ["/account/security", "/admin", "/inbox", "/invite"].includes(
+          pathname,
+        ) ? (
         contentForPath(
           pathname,
           library,
@@ -262,12 +278,75 @@ function AuthenticatedWorkspace({
           access,
           hasRole(session.user.role, "admin"),
           Boolean(session.user.twoFactorEnabled),
-          onSessionChanged,
+          async () => {
+            await onSessionChanged();
+            await access.refresh();
+          },
         )
       ) : (
         <NoOrganization />
       )}
     </WorkspaceShell>
+  );
+}
+
+function OrganizationTwoFactorRequired({
+  onSecurity,
+  onSignOut,
+  requirement,
+}: {
+  onSecurity: () => void;
+  onSignOut: () => Promise<void>;
+  requirement: "setup" | "verification";
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const needsSetup = requirement === "setup";
+
+  async function signOut() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onSignOut();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not sign out.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Organization security</p>
+          <h1>Two-factor authentication required</h1>
+        </div>
+      </header>
+      <section className="content">
+        <div className="emptyState compactEmptyState">
+          <div className="emptyGlyph">◇</div>
+          <h3>{needsSetup ? "Protect your account" : "Verify your sign-in"}</h3>
+          <p>
+            {needsSetup
+              ? "This organization requires you to set up an authenticator before you can use its workspace."
+              : "This organization requires a sign-in verified with two-factor authentication. Sign out, then sign in again to continue."}
+          </p>
+          {error && <div className="errorBanner compactBanner">{error}</div>}
+          <button
+            className="primaryButton"
+            disabled={busy}
+            onClick={needsSetup ? onSecurity : () => void signOut()}
+            type="button"
+          >
+            {needsSetup
+              ? "Set up two-factor authentication"
+              : busy
+                ? "Signing out…"
+                : "Sign out to verify"}
+          </button>
+        </div>
+      </section>
+    </>
   );
 }
 

@@ -1786,6 +1786,7 @@ button:disabled {
 
 .organizationPeopleList > div {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -1850,6 +1851,30 @@ button:disabled {
 
 .memberRoleSelect:disabled {
   color: #85857c;
+}
+
+.organizationMemberControls,
+.memberTwoFactorToggle {
+  display: flex;
+  align-items: center;
+}
+
+.organizationMemberControls {
+  flex: none;
+  gap: 12px;
+}
+
+.memberTwoFactorToggle {
+  gap: 6px;
+  color: #5d5e55;
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.memberTwoFactorToggle input {
+  accent-color: #527928;
 }
 
 .organizationPeopleList button {

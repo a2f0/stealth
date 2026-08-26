@@ -6,6 +6,7 @@ import {
   canManageOrganization,
   createOrganizationSlug,
   editableOrganizationRoles,
+  organizationPathRequiresAccess,
   organizationRoleValue,
   organizationSettingsPage,
   resolveActiveOrganizationId,
@@ -49,6 +50,22 @@ describe("organization state", () => {
     expect(organizationSettingsPage("/organization/people")).toBe("people");
     expect(organizationSettingsPage("/organization/access")).toBe("access");
     expect(organizationSettingsPage("/organization/unknown")).toBe("general");
+  });
+
+  it("waits for access on every organization-dependent route", () => {
+    for (const path of [
+      "/",
+      "/audits",
+      "/businesses",
+      "/finance",
+      "/inbox",
+      "/organization",
+    ]) {
+      expect(organizationPathRequiresAccess(path)).toBeTrue();
+    }
+    for (const path of ["/account/security", "/admin", "/invite"]) {
+      expect(organizationPathRequiresAccess(path)).toBeFalse();
+    }
   });
 
   it("only lets organization managers invite members", () => {
