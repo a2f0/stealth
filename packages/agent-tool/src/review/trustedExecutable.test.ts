@@ -17,9 +17,15 @@ describe("resolveTrustedExecutable", () => {
     const root = mkdtempSync(path.join(tmpdir(), "agent-tool-repository-"));
     const trustedRoot = mkdtempSync(path.join(tmpdir(), "agent-tool-runtime-"));
     const shadowDirectory = path.join(root, "bin");
-    const trustedDirectory = path.join(trustedRoot, "bin");
+    const versionedRuntime = path.join(
+      trustedRoot,
+      "Cellar",
+      "reviewer",
+      "1.0.0",
+    );
+    const trustedDirectory = path.join(versionedRuntime, "bin");
     mkdirSync(shadowDirectory);
-    mkdirSync(trustedDirectory);
+    mkdirSync(trustedDirectory, { recursive: true });
     try {
       for (const name of ["codex", "claude"]) {
         const shadow = path.join(shadowDirectory, name);
@@ -36,6 +42,9 @@ describe("resolveTrustedExecutable", () => {
         );
         expect(runtime?.executable).toBe(realpathSync(trusted));
         expect(runtime?.readablePaths).not.toContain(shadow);
+        expect(runtime?.readablePaths).toContain(
+          realpathSync(versionedRuntime),
+        );
         expect(
           resolveTrustedExecutable(name, { PATH: shadowDirectory }, root),
         ).toBeNull();

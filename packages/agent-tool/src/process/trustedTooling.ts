@@ -56,6 +56,11 @@ export function buildTrustedToolEnvironment(
         ([key, value]) => TOOL_ENV_ALLOWLIST.has(key) && value !== undefined,
       ),
     ),
+    GCM_INTERACTIVE: "never",
+    GIT_ASKPASS: "/usr/bin/false",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
     PATH: trustedRuntimePath(runtimes),
   };
 }

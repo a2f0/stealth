@@ -28,11 +28,15 @@ test("trusted tool subprocesses inherit only required environment values", () =>
   );
 
   expect(environment).toMatchObject({
+    GCM_INTERACTIVE: "never",
     GH_TOKEN: "token",
+    GIT_ASKPASS: "/usr/bin/false",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
     HOME: "/trusted/home",
   });
   expect(Reflect.get(environment, "ATTACKER_VALUE")).toBeUndefined();
-  expect(Reflect.get(environment, "GIT_CONFIG_GLOBAL")).toBeUndefined();
   expect(Reflect.get(environment, "NODE_OPTIONS")).toBeUndefined();
   const trustedPath = String(Reflect.get(environment, "PATH"));
   expect(trustedPath.split(":")).toContain("/trusted/git/bin");
@@ -124,6 +128,23 @@ test("shipping skills bootstrap tools outside the feature checkout", () => {
     expect(pathExport).toBeGreaterThan(-1);
     expect(pathExport).toBeLessThan(bootstrap.indexOf("git rev-parse"));
     expect(pathExport).toBeLessThan(bootstrap.indexOf("gh repo view"));
+  }
+});
+
+test("cross-agent skills preserve validated reviewer executables", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  for (const skillPath of [
+    ".claude/skills/cross-agent-review/SKILL.md",
+    ".codex/skills/cross-agent-review/SKILL.md",
+  ]) {
+    const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
+    expect(content).toContain(
+      "CLAUDE_BIN=$(resolve_bootstrap_tool claude 2>/dev/null || true)",
+    );
+    expect(content).toContain(
+      "CODEX_BIN=$(resolve_bootstrap_tool codex 2>/dev/null || true)",
+    );
+    expect(content).toContain("$" + "{REVIEWER_PATH:+:$REVIEWER_PATH}");
   }
 });
 

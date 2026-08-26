@@ -109,7 +109,13 @@ GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
 GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
 BUN_BIN=$(resolve_bootstrap_tool bun) || exit 1
 TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
-PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+CLAUDE_BIN=$(resolve_bootstrap_tool claude 2>/dev/null || true)
+CODEX_BIN=$(resolve_bootstrap_tool codex 2>/dev/null || true)
+REVIEWER_PATH=""
+for reviewer_bin in "$CLAUDE_BIN" "$CODEX_BIN"; do
+  [ -z "$reviewer_bin" ] || REVIEWER_PATH="${REVIEWER_PATH:+$REVIEWER_PATH:}${reviewer_bin%/*}"
+done
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}${REVIEWER_PATH:+:$REVIEWER_PATH}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)

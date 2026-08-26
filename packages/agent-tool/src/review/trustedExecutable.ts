@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { accessSync, constants, realpathSync } from "node:fs";
 import path from "node:path";
 
@@ -15,6 +16,64 @@ const SYSTEM_EXECUTABLE_PATHS = [
 export interface TrustedExecutable {
   readonly executable: string;
   readonly readablePaths: string[];
+}
+
+function versionedRuntimeRoot(resolvedExecutable: string): string | undefined {
+  const parts = path.resolve(resolvedExecutable).split(path.sep);
+  const cellarIndex = parts.indexOf("Cellar");
+  if (cellarIndex > 0 && parts.length > cellarIndex + 2) {
+    return path.join(path.sep, ...parts.slice(1, cellarIndex + 3));
+  }
+
+  const installsIndex = parts.findIndex(
+    (part, index) => part === "installs" && parts[index - 1] === "mise",
+  );
+  if (installsIndex > 0 && parts.length > installsIndex + 2) {
+    return path.join(path.sep, ...parts.slice(1, installsIndex + 3));
+  }
+  return undefined;
+}
+
+function runtimeLibraryPaths(executable: string): string[] {
+  const readablePaths: string[] = [];
+  const visited = new Set<string>();
+  const pending = [executable];
+  while (pending.length > 0 && visited.size < 128) {
+    const current = pending.pop();
+    if (current === undefined || visited.has(current)) continue;
+    visited.add(current);
+
+    let output: string;
+    try {
+      output = execFileSync("/usr/bin/otool", ["-L", current], {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      continue;
+    }
+    for (const line of output.split("\n").slice(1)) {
+      const dependency = line.trim().split(" (")[0];
+      if (dependency === undefined || !path.isAbsolute(dependency)) continue;
+      try {
+        const resolved = realpathSync(dependency);
+        readablePaths.push(
+          dependency,
+          path.dirname(dependency),
+          resolved,
+          path.dirname(resolved),
+        );
+        const installationRoot = versionedRuntimeRoot(resolved);
+        if (installationRoot !== undefined)
+          readablePaths.push(installationRoot);
+        pending.push(resolved);
+      } catch {
+        // Libraries in the macOS dyld cache need no filesystem rule.
+      }
+    }
+  }
+  return readablePaths;
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -46,6 +105,7 @@ export function resolveTrustedExecutable(
       ) {
         continue;
       }
+      const installationRoot = versionedRuntimeRoot(resolved);
       return {
         executable: resolved,
         readablePaths: [
@@ -54,6 +114,8 @@ export function resolveTrustedExecutable(
             candidate,
             path.dirname(resolved),
             resolved,
+            ...(installationRoot === undefined ? [] : [installationRoot]),
+            ...runtimeLibraryPaths(resolved),
           ]),
         ],
       };

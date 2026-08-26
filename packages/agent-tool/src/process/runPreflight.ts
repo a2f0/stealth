@@ -36,6 +36,58 @@ const MUTABLE_DEPENDENCY_CACHE_NAMES = new Set([
 ]);
 const MAX_PREFLIGHT_BYTES = 64 * 1024 * 1024;
 const MAX_PREFLIGHT_FILES = 20_000;
+const DEFAULT_PREFLIGHT_TIMEOUT_MILLISECONDS = 10 * 60 * 1_000;
+const DEFAULT_MAX_PREFLIGHT_WRITABLE_BYTES = 512 * 1024 * 1024;
+const MAX_PREFLIGHT_SINGLE_FILE_BYTES = 128 * 1024 * 1024;
+const PREFLIGHT_STORAGE_LIMIT_MARKER = "storage-limit-exceeded";
+
+interface PreflightLimits {
+  readonly maxWritableBytes: number;
+  readonly timeoutMilliseconds: number;
+}
+
+const PREFLIGHT_SUPERVISOR = `
+limit_kib=$1
+file_blocks=$2
+writable_root=$3
+limit_marker=$4
+shift 4
+
+terminate_group() {
+  trap - TERM INT HUP
+  [ -z "$child" ] || kill -TERM "-$child" 2>/dev/null || true
+}
+
+check_storage() {
+  used_kib=$(/usr/bin/du -sk "$writable_root" | /usr/bin/awk '{print $1}') || return 1
+  if [ "$used_kib" -gt "$limit_kib" ]; then
+    /usr/bin/touch "$limit_marker"
+    terminate_group
+    return 2
+  fi
+}
+
+child=""
+trap terminate_group TERM INT HUP
+ulimit -f "$file_blocks" || exit 70
+set -m
+"$@" &
+child=$!
+while kill -0 "$child" 2>/dev/null; do
+  check_storage
+  storage_status=$?
+  if [ "$storage_status" -ne 0 ]; then
+    wait "$child" 2>/dev/null || true
+    exit 71
+  fi
+  /bin/sleep 0.25
+done
+wait "$child" 2>/dev/null
+status=$?
+check_storage
+[ "$?" -eq 0 ] || exit 71
+exit "$status"
+`;
 
 interface PreflightFile {
   readonly contents: Buffer;
@@ -109,12 +161,12 @@ export function buildPreflightSandboxProfile(
   ];
   const readableTrees = [
     "/System",
-    "/Library",
-    "/usr",
+    "/usr/bin",
+    "/usr/lib",
+    "/usr/libexec",
+    "/usr/share",
     "/bin",
     "/sbin",
-    "/opt/homebrew",
-    "/usr/local",
     "/private/etc/ssl",
     root,
     isolatedHome,
@@ -125,6 +177,14 @@ export function buildPreflightSandboxProfile(
     path.join(root, ".git"),
     ...readonlyPaths,
     ...protectedPaths,
+  ];
+  const deniedConfigurationReads = [
+    "/Library/Application Support",
+    "/Library/Preferences",
+    "/opt/homebrew/etc",
+    "/opt/homebrew/var",
+    "/usr/local/etc",
+    "/usr/local/var",
   ];
   return [
     "(version 1)",
@@ -137,6 +197,7 @@ export function buildPreflightSandboxProfile(
     // cannot reveal the contents of a credential file or directory.
     "(allow file-read-metadata)",
     `(allow file-read* ${pathRules("literal", traversalDirectories)} ${pathRules("subpath", readableTrees)})`,
+    `(deny file-read* ${pathRules("subpath", deniedConfigurationReads)})`,
     `(allow file-write* (subpath ${seatbeltString(root)}) (subpath ${seatbeltString(isolatedHome)}))`,
     `(deny file-write* ${pathRules("subpath", deniedWrites)})`,
     // Test tooling may use Unix sockets, but access stays inside the disposable
@@ -144,6 +205,23 @@ export function buildPreflightSandboxProfile(
     // deny.
     `(allow network-bind network-outbound (subpath ${seatbeltString(isolatedHome)}))`,
   ].join("\n");
+}
+
+function resolvePreflightLimits(
+  limits: Partial<PreflightLimits>,
+): PreflightLimits {
+  const resolved = {
+    maxWritableBytes:
+      limits.maxWritableBytes ?? DEFAULT_MAX_PREFLIGHT_WRITABLE_BYTES,
+    timeoutMilliseconds:
+      limits.timeoutMilliseconds ?? DEFAULT_PREFLIGHT_TIMEOUT_MILLISECONDS,
+  };
+  for (const [name, value] of Object.entries(resolved)) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`Preflight ${name} must be a positive safe integer.`);
+    }
+  }
+  return resolved;
 }
 
 function safeGitEnvironment(
@@ -451,7 +529,11 @@ export function buildPreflightEnvironment(
 function resolvePreflightRuntimes(
   repositoryRoot: string,
   environment: NodeJS.ProcessEnv,
-): [TrustedExecutable, TrustedExecutable] {
+): {
+  bun: TrustedExecutable;
+  git: TrustedExecutable;
+  runtimes: TrustedExecutable[];
+} {
   const bun = resolveTrustedExecutable("bun", environment, repositoryRoot);
   if (bun === null) {
     throw new Error(
@@ -464,7 +546,109 @@ function resolvePreflightRuntimes(
       "No trusted git executable was found outside the repository.",
     );
   }
-  return [bun, git];
+  const optionalRuntimes = ["gh", "node", "shellcheck", "terraform", "tflint"]
+    .map((name) => resolveTrustedExecutable(name, environment, repositoryRoot))
+    .filter((runtime): runtime is TrustedExecutable => runtime !== null);
+  const runtimes = [
+    ...new Map(
+      [bun, git, ...optionalRuntimes].map((runtime) => [
+        runtime.executable,
+        runtime,
+      ]),
+    ).values(),
+  ];
+  return { bun, git, runtimes };
+}
+
+function executePreflightScript(params: {
+  bun: TrustedExecutable;
+  checkoutRoot: string;
+  environment: NodeJS.ProcessEnv;
+  limits: PreflightLimits;
+  readonlyPaths: readonly string[];
+  repositoryRoot: string;
+  runtimes: readonly TrustedExecutable[];
+  script: string;
+  scriptArguments: readonly string[];
+  temporaryHome: string;
+  temporaryRoot: string;
+}): number {
+  const {
+    bun,
+    checkoutRoot,
+    environment,
+    limits,
+    readonlyPaths,
+    repositoryRoot,
+    runtimes,
+    script,
+    scriptArguments,
+    temporaryHome,
+    temporaryRoot,
+  } = params;
+  const storageLimitMarker = path.join(
+    temporaryRoot,
+    PREFLIGHT_STORAGE_LIMIT_MARKER,
+  );
+  const maximumFileBytes = Math.min(
+    limits.maxWritableBytes,
+    MAX_PREFLIGHT_SINGLE_FILE_BYTES,
+  );
+  const result = spawnSync(
+    "/bin/sh",
+    [
+      "-c",
+      PREFLIGHT_SUPERVISOR,
+      "preflight-supervisor",
+      String(Math.ceil(limits.maxWritableBytes / 1_024)),
+      String(Math.ceil(maximumFileBytes / 512)),
+      temporaryRoot,
+      storageLimitMarker,
+      "/usr/bin/sandbox-exec",
+      "-p",
+      buildPreflightSandboxProfile(
+        checkoutRoot,
+        temporaryHome,
+        runtimes,
+        readonlyPaths,
+        [repositoryRoot],
+      ),
+      bun.executable,
+      "--no-env-file",
+      "run",
+      script,
+      ...scriptArguments,
+    ],
+    {
+      cwd: checkoutRoot,
+      env: buildPreflightEnvironment(
+        environment,
+        checkoutRoot,
+        temporaryHome,
+        runtimes,
+      ),
+      killSignal: "SIGTERM",
+      stdio: "inherit",
+      timeout: limits.timeoutMilliseconds,
+    },
+  );
+  if (existsSync(storageLimitMarker)) {
+    throw new Error(
+      `Preflight exceeded its ${limits.maxWritableBytes}-byte writable storage limit.`,
+    );
+  }
+  if (result.error !== undefined) {
+    if ((result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+      throw new Error(
+        `Preflight exceeded its ${limits.timeoutMilliseconds}-millisecond timeout.`,
+      );
+    }
+    throw result.error;
+  }
+  if (result.signal !== null) {
+    throw new Error(`Preflight terminated by signal ${result.signal}.`);
+  }
+  return result.status ?? 1;
 }
 
 /** Run a branch-controlled script without credentials or external network. */
@@ -473,6 +657,7 @@ export function runPreflight(
   script: string | undefined,
   scriptArguments: readonly string[] = [],
   environment: NodeJS.ProcessEnv = process.env,
+  limits: Partial<PreflightLimits> = {},
 ) {
   if (script === undefined || !/^[a-z0-9:_-]+$/.test(script)) {
     throw new Error("runPreflight requires a package script name.");
@@ -482,8 +667,11 @@ export function runPreflight(
       "Credential-free preflight currently requires macOS Seatbelt; refusing to run unsandboxed.",
     );
   }
-  const [bun, git] = resolvePreflightRuntimes(repositoryRoot, environment);
-  const runtimes = [bun, git];
+  const { bun, git, runtimes } = resolvePreflightRuntimes(
+    repositoryRoot,
+    environment,
+  );
+  const resolvedLimits = resolvePreflightLimits(limits);
 
   const temporaryParent = resolveTemporaryParent(
     Reflect.get(environment, "TMPDIR"),
@@ -514,39 +702,19 @@ export function runPreflight(
       repositoryRoot,
       checkoutRoot,
     );
-    const result = spawnSync(
-      "/usr/bin/sandbox-exec",
-      [
-        "-p",
-        buildPreflightSandboxProfile(
-          checkoutRoot,
-          temporaryHome,
-          runtimes,
-          readonlyPaths,
-          [repositoryRoot],
-        ),
-        bun.executable,
-        "--no-env-file",
-        "run",
-        script,
-        ...scriptArguments,
-      ],
-      {
-        cwd: checkoutRoot,
-        env: buildPreflightEnvironment(
-          environment,
-          checkoutRoot,
-          temporaryHome,
-          runtimes,
-        ),
-        stdio: "inherit",
-      },
-    );
-    if (result.error !== undefined) throw result.error;
-    if (result.signal !== null) {
-      throw new Error(`Preflight terminated by signal ${result.signal}.`);
-    }
-    return result.status ?? 1;
+    return executePreflightScript({
+      bun,
+      checkoutRoot,
+      environment,
+      limits: resolvedLimits,
+      readonlyPaths,
+      repositoryRoot,
+      runtimes,
+      script,
+      scriptArguments,
+      temporaryHome,
+      temporaryRoot,
+    });
   } finally {
     rmSync(temporaryDirectory, { force: true, recursive: true });
   }

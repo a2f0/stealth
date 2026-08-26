@@ -123,6 +123,13 @@ test("preflight denies external network, Git writes, and dependency poisoning", 
   );
   expect(profile).toContain('(subpath "/private/tmp/preflight-home")');
   expect(profile).not.toContain('(subpath "/Users/example")');
+  expect(profile).not.toContain('(subpath "/Library")');
+  expect(profile).not.toContain('(subpath "/opt/homebrew")');
+  expect(profile).not.toContain('(subpath "/usr")');
+  expect(profile).not.toContain('(subpath "/usr/local")');
+  expect(profile).toContain(
+    '(deny file-read* (subpath "/Library/Application Support") (subpath "/Library/Preferences") (subpath "/opt/homebrew/etc") (subpath "/opt/homebrew/var") (subpath "/usr/local/etc") (subpath "/usr/local/var"))',
+  );
 });
 
 test("preflight rejects Git paths that are not round-trippable UTF-8", () => {
@@ -185,7 +192,11 @@ test.skipIf(
         `${JSON.stringify({
           name: "preflight-mutation-test",
           private: true,
-          scripts: { attack: "bun attack.ts" },
+          scripts: {
+            attack: "bun attack.ts",
+            fill: "bun fill.ts",
+            hang: "bun hang.ts",
+          },
         })}\n`,
       );
       writeFileSync(
@@ -245,6 +256,17 @@ test.skipIf(
           `});\n` +
           `if (externalConnected) throw new Error("External network was not denied");\n`,
       );
+      writeFileSync(
+        path.join(repositoryRoot, "hang.ts"),
+        "setInterval(() => {}, 1_000);\n",
+      );
+      writeFileSync(
+        path.join(repositoryRoot, "fill.ts"),
+        `import { writeFileSync } from "node:fs";\n` +
+          `for (let index = 0; index < 64; index += 1) {\n` +
+          `  writeFileSync(\`chunk-\${index}.bin\`, Buffer.alloc(16 * 1024));\n` +
+          `}\n`,
+      );
 
       const git = resolveTrustedExecutable("git", process.env, repositoryRoot);
       if (git === null)
@@ -281,6 +303,18 @@ test.skipIf(
       expect(readFileSync(sourceFile, "utf8")).toBe("original source\n");
       expect(readFileSync(rootSentinel, "utf8")).toBe("root dependency\n");
       expect(readFileSync(nestedSentinel, "utf8")).toBe("nested dependency\n");
+      expect(() =>
+        runPreflight(repositoryRoot, "hang", [], process.env, {
+          maxWritableBytes: 64 * 1024 * 1024,
+          timeoutMilliseconds: 500,
+        }),
+      ).toThrow("500-millisecond timeout");
+      expect(() =>
+        runPreflight(repositoryRoot, "fill", [], process.env, {
+          maxWritableBytes: 256 * 1024,
+          timeoutMilliseconds: 5_000,
+        }),
+      ).toThrow("writable storage limit");
     } finally {
       if (hostLoopbackServer.listening) hostLoopbackServer.close();
       rmSync(repositoryRoot, { force: true, recursive: true });

@@ -68,6 +68,16 @@ These actions **only review**. The fallback chain, the severity gate, and the
 bounded repair loop live in the `cross-agent-review` skill *around* these calls
 — invoking the actions directly gets you one raw review and no repair.
 
+## Credential-free preflight
+
+`runPreflight` snapshots tracked and non-ignored working files into a disposable
+checkout, strips credentials, blocks TCP and host configuration reads with
+macOS Seatbelt, and exposes only resolved versioned runtime/library paths plus
+read-only dependency trees. Each run is limited to ten minutes, 512 MiB of
+writable storage, and 128 MiB per file. The supervisor terminates the complete
+child process group on timeout or storage exhaustion before removing the
+temporary checkout.
+
 ## Open a PR
 
 Opens a pull request for the current branch with a **commitlint-conforming
