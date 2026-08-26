@@ -17,6 +17,19 @@ const organizationId = "org_user-1";
 const proPriceId = "price_pro_test";
 
 describe("billing", () => {
+  it("requires billing access to confirm a Checkout session", async () => {
+    const fixture = await createFixture("member");
+    expect(
+      (
+        await fixture.app.request(
+          "/?session_id=cs_completed",
+          undefined,
+          fixture.bindings,
+        )
+      ).status,
+    ).toBe(403);
+  });
+
   it("reports Free entitlements and creates per-seat Checkout", async () => {
     const fixture = await createFixture();
     const summary = await fixture.app.request("/", undefined, fixture.bindings);
@@ -327,29 +340,53 @@ describe("billing", () => {
       data: {
         object: {
           client_reference_id: organizationId,
+          id: "cs_checkout",
           subscription: "sub_checkout",
         },
       },
       id: "evt_checkout_completed",
       type: "checkout.session.completed",
     };
-    const old = subscriptionEvent(
-      "evt_old_subscription",
+    const oldSubscription = subscriptionEvent(
+      "unused_old_subscription_event",
       102,
-      "canceled",
+      "active",
       1,
       "sub_old",
     );
+    const oldCheckout = {
+      created: 102,
+      data: {
+        object: {
+          client_reference_id: organizationId,
+          id: "cs_old_checkout",
+          subscription: "sub_old",
+        },
+      },
+      id: "evt_old_checkout_completed",
+      type: "checkout.session.completed",
+    };
     let stripeSubscription = current.data.object;
+    const requests: Array<{ method: string; url: string }> = [];
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (_input, _init) =>
-      Response.json(stripeSubscription)) as typeof fetch;
+    globalThis.fetch = (async (input, init) => {
+      const request = { method: init?.method ?? "GET", url: String(input) };
+      requests.push(request);
+      if (request.method === "DELETE") {
+        const canceled = request.url.endsWith("/sub_current")
+          ? current.data.object
+          : oldSubscription.data.object;
+        return Response.json({ ...canceled, status: "canceled" });
+      }
+      return Response.json(stripeSubscription);
+    }) as typeof fetch;
     try {
       expect((await sendWebhook(fixture, current)).status).toBe(200);
+      reserveCheckout(fixture.database, "cs_checkout");
       stripeSubscription = checkoutSubscription.data.object;
       expect((await sendWebhook(fixture, checkout)).status).toBe(200);
-      stripeSubscription = old.data.object;
-      expect((await sendWebhook(fixture, old)).status).toBe(200);
+      stripeSubscription = oldSubscription.data.object;
+      expect((await sendWebhook(fixture, oldCheckout)).status).toBe(200);
       expect(
         fixture.database
           .query(
@@ -361,6 +398,28 @@ describe("billing", () => {
         stripe_status: "active",
         stripe_subscription_id: "sub_checkout",
       });
+      expect(requests).toEqual([
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/subscriptions/sub_current",
+        },
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/subscriptions/sub_checkout",
+        },
+        {
+          method: "DELETE",
+          url: "https://api.stripe.com/v1/subscriptions/sub_current",
+        },
+        {
+          method: "GET",
+          url: "https://api.stripe.com/v1/subscriptions/sub_old",
+        },
+        {
+          method: "DELETE",
+          url: "https://api.stripe.com/v1/subscriptions/sub_old",
+        },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -665,7 +724,7 @@ describe("billing", () => {
   });
 });
 
-async function createFixture() {
+async function createFixture(organizationRole = "owner") {
   const database = new Database(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
   await applyMigration(database, "0003_create_auth.sql");
@@ -692,7 +751,7 @@ async function createFixture() {
   const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>();
   app.use("*", async (context, next) => {
     context.set("organizationId", organizationId);
-    context.set("organizationRole", "owner");
+    context.set("organizationRole", organizationRole);
     context.set("authSession", {
       user: { email: "user-1@example.com", id: "user-1", role: "user" },
     } as AuthSession);
@@ -829,6 +888,18 @@ function insertAudit(
                'completed', 'user-1', ?, ?)`,
     )
     .run(id, target, createdAt, createdAt);
+}
+
+function reserveCheckout(database: Database, sessionId: string) {
+  database
+    .query(
+      `UPDATE organization_billing
+       SET pending_checkout_session_id = ?,
+           pending_checkout_url = 'https://checkout.stripe.test/pending',
+           pending_checkout_expires_at = 2000000000
+       WHERE organization_id = ?`,
+    )
+    .run(sessionId, organizationId);
 }
 
 function reconciledCount(database: Database) {

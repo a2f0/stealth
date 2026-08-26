@@ -15,6 +15,10 @@ export const freeFormTemplateLimit = 5;
 export const freeRetentionDays = 30;
 const unlimitedSeatLimit = Number.MAX_SAFE_INTEGER;
 const paidStatuses = new Set(["active", "past_due", "trialing"]);
+const terminalSubscriptionStatuses = new Set([
+  "canceled",
+  "incomplete_expired",
+]);
 const webhookClaimTimeoutMilliseconds = 5 * 60 * 1000;
 const checkoutDurationSeconds = 35 * 60;
 const subscriptionSyncClaimSeconds = 2 * 60;
@@ -89,6 +93,12 @@ billing.get("/", async (context) => {
   const organizationId = context.get("organizationId");
   const sessionId = context.req.query("session_id");
   if (sessionId) {
+    if (!canManageOrganization(context.get("organizationRole"))) {
+      return context.json(
+        { error: "Organization billing access is required." },
+        403,
+      );
+    }
     if (!sessionId.startsWith("cs_") || sessionId.length > 255) {
       return context.json({ error: "Checkout session is invalid." }, 400);
     }
@@ -474,7 +484,11 @@ export async function cancelOrganizationSubscription(
       subscriptionIds.size > 0 || Boolean(record?.pending_checkout_session_id)
     );
   } catch (cause) {
-    await enableCheckoutAfterFailedDeletion(environment.DB, organizationId);
+    await enableCheckoutAfterFailedDeletion(
+      environment.DB,
+      organizationId,
+      record?.checkout_disabled_at ?? null,
+    );
     throw cause;
   }
 }
@@ -488,10 +502,22 @@ async function cancelStripeSubscription(
   subscriptionId: string,
 ) {
   await withSubscriptionSyncLock(environment.DB, subscriptionId, async () => {
-    const subscription = await stripeDelete<StripeSubscription>(
-      environment,
-      `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
-    );
+    let subscription: StripeSubscription;
+    try {
+      subscription = await deleteStripeSubscription(
+        environment,
+        subscriptionId,
+      );
+    } catch (cause) {
+      if (!(cause instanceof StripeApiError) || cause.status !== 404)
+        throw cause;
+      await markStoredSubscriptionCanceled(
+        environment.DB,
+        organizationId,
+        subscriptionId,
+      );
+      return;
+    }
     await persistSubscription(
       environment,
       subscription,
@@ -499,6 +525,35 @@ async function cancelStripeSubscription(
       organizationId,
     );
   });
+}
+
+async function deleteStripeSubscription(
+  environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
+  subscriptionId: string,
+) {
+  const subscription = await stripeDelete<StripeSubscription>(
+    environment,
+    `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+  );
+  if (subscription.status !== "canceled") {
+    throw new StripeApiError("Stripe did not cancel the subscription.", 502);
+  }
+  return subscription;
+}
+
+async function markStoredSubscriptionCanceled(
+  database: D1Database,
+  organizationId: string,
+  subscriptionId: string,
+) {
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET stripe_status = 'canceled', updated_at = ?
+       WHERE organization_id = ? AND stripe_subscription_id = ?`,
+    )
+    .bind(new Date().toISOString(), organizationId, subscriptionId)
+    .run();
 }
 
 async function resolvePendingCheckoutForDeletion(
@@ -611,7 +666,7 @@ async function confirmCheckoutSession(
     subscriptionId,
     Math.floor(Date.now() / 1000),
     organizationId,
-    true,
+    sessionId,
   );
   if (!persisted) {
     throw new StripeApiError("Checkout did not create a subscription.", 409);
@@ -631,13 +686,13 @@ async function processStripeEvent(
       session.client_reference_id ?? session.metadata?.organization_id;
     if (!organizationId) return;
     const subscriptionId = optionalExpandableId(session.subscription);
-    if (subscriptionId) {
+    if (subscriptionId && session.id) {
       await refreshSubscription(
         environment,
         subscriptionId,
         event.created,
         organizationId,
-        true,
+        session.id,
       );
     }
     return;
@@ -671,7 +726,7 @@ async function refreshSubscription(
   subscriptionId: string,
   eventCreated: number,
   knownOrganizationId?: string,
-  allowSubscriptionReplacement = false,
+  checkoutSessionId?: string,
 ) {
   return withSubscriptionSyncLock(environment.DB, subscriptionId, async () => {
     const subscription = await expandedSubscription(
@@ -679,14 +734,101 @@ async function refreshSubscription(
       subscriptionId,
     );
     if (!subscription) return false;
-    return persistSubscription(
+    if (
+      checkoutSessionId &&
+      knownOrganizationId &&
+      !(await prepareCheckoutSubscriptionReplacement(
+        environment,
+        knownOrganizationId,
+        checkoutSessionId,
+        subscription,
+      ))
+    ) {
+      return false;
+    }
+    const persisted = await persistSubscription(
       environment,
       subscription,
       eventCreated,
       knownOrganizationId,
-      allowSubscriptionReplacement,
+      checkoutSessionId,
+    );
+    if (persisted || !checkoutSessionId || !knownOrganizationId) {
+      return persisted;
+    }
+    return resolveRejectedCheckoutPersistence(
+      environment,
+      knownOrganizationId,
+      subscription,
     );
   });
+}
+
+async function prepareCheckoutSubscriptionReplacement(
+  environment: Pick<
+    Bindings,
+    "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
+  >,
+  organizationId: string,
+  checkoutSessionId: string,
+  subscription: StripeSubscription,
+) {
+  const existing = await findBilling(environment.DB, organizationId);
+  const matchesCurrent = existing?.stripe_subscription_id === subscription.id;
+  const matchesPending =
+    existing?.pending_checkout_session_id === checkoutSessionId;
+  if (
+    existing?.checkout_disabled_at ||
+    (!matchesPending &&
+      (!matchesCurrent || Boolean(existing?.pending_checkout_session_id)))
+  ) {
+    if (!matchesCurrent) {
+      await cancelUntrackedSubscription(environment, subscription);
+    }
+    return false;
+  }
+  if (
+    existing.stripe_subscription_id &&
+    existing.stripe_subscription_id !== subscription.id &&
+    !terminalSubscriptionStatuses.has(existing.stripe_status ?? "")
+  ) {
+    await cancelStripeSubscription(
+      environment,
+      organizationId,
+      existing.stripe_subscription_id,
+    );
+  }
+  return true;
+}
+
+async function resolveRejectedCheckoutPersistence(
+  environment: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">,
+  organizationId: string,
+  subscription: StripeSubscription,
+) {
+  const current = await findBilling(environment.DB, organizationId);
+  if (
+    current?.stripe_subscription_id === subscription.id &&
+    !current.pending_checkout_session_id
+  ) {
+    return true;
+  }
+  if (current?.stripe_subscription_id !== subscription.id) {
+    await cancelUntrackedSubscription(environment, subscription);
+  }
+  return false;
+}
+
+async function cancelUntrackedSubscription(
+  environment: Pick<Bindings, "STRIPE_SECRET_KEY">,
+  subscription: StripeSubscription,
+) {
+  if (terminalSubscriptionStatuses.has(subscription.status)) return;
+  try {
+    await deleteStripeSubscription(environment, subscription.id);
+  } catch (cause) {
+    if (!(cause instanceof StripeApiError) || cause.status !== 404) throw cause;
+  }
 }
 
 async function expandedSubscription(
@@ -707,7 +849,7 @@ async function persistSubscription(
   subscription: StripeSubscription,
   eventCreated: number,
   knownOrganizationId?: string,
-  allowSubscriptionReplacement = false,
+  checkoutSessionId?: string,
 ) {
   const customerId = expandableId(subscription.customer);
   const organizationId =
@@ -731,6 +873,68 @@ async function persistSubscription(
   const cancelAtPeriodEnd =
     subscription.cancel_at_period_end === true ||
     subscription.cancel_at != null;
+  if (checkoutSessionId) {
+    const persisted = await environment.DB.prepare(
+      `UPDATE organization_billing
+       SET stripe_customer_id = ?, stripe_subscription_id = ?,
+           stripe_subscription_item_id = ?, stripe_price_id = ?,
+           stripe_status = ?, seat_quantity = ?, cancel_at_period_end = ?,
+           current_period_end = ?,
+           stripe_event_created = MAX(stripe_event_created, ?),
+           checkout_claim_id = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE checkout_claim_id
+           END,
+           checkout_claim_quantity = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE checkout_claim_quantity
+           END,
+           checkout_claim_expires_at = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE checkout_claim_expires_at
+           END,
+           pending_checkout_session_id = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE pending_checkout_session_id
+           END,
+           pending_checkout_url = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE pending_checkout_url
+           END,
+           pending_checkout_expires_at = CASE
+             WHEN pending_checkout_session_id = ? THEN NULL
+             ELSE pending_checkout_expires_at
+           END,
+           updated_at = ?
+       WHERE organization_id = ? AND checkout_disabled_at IS NULL
+         AND (pending_checkout_session_id = ?
+              OR (stripe_subscription_id = ?
+                  AND pending_checkout_session_id IS NULL))`,
+    )
+      .bind(
+        customerId,
+        subscription.id,
+        item?.id ?? null,
+        item?.price.id ?? null,
+        subscription.status,
+        Math.max(1, item?.quantity ?? 1),
+        cancelAtPeriodEnd ? 1 : 0,
+        periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
+        eventCreated,
+        checkoutSessionId,
+        checkoutSessionId,
+        checkoutSessionId,
+        checkoutSessionId,
+        checkoutSessionId,
+        checkoutSessionId,
+        new Date().toISOString(),
+        organizationId,
+        checkoutSessionId,
+        subscription.id,
+      )
+      .run();
+    return Number(persisted.meta.changes) === 1;
+  }
   const persisted = await environment.DB.prepare(
     `INSERT INTO organization_billing
      (organization_id, stripe_customer_id, stripe_subscription_id,
@@ -751,17 +955,10 @@ async function persistSubscription(
          organization_billing.stripe_event_created,
          excluded.stripe_event_created
        ),
-       checkout_claim_id = NULL,
-       checkout_claim_quantity = NULL,
-       checkout_claim_expires_at = NULL,
-       pending_checkout_session_id = NULL,
-       pending_checkout_url = NULL,
-       pending_checkout_expires_at = NULL,
        updated_at = excluded.updated_at
      WHERE organization_billing.stripe_subscription_id IS NULL
         OR organization_billing.stripe_subscription_id =
-           excluded.stripe_subscription_id
-        OR ? = 1`,
+           excluded.stripe_subscription_id`,
   )
     .bind(
       organizationId,
@@ -775,7 +972,6 @@ async function persistSubscription(
       periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
       eventCreated,
       new Date().toISOString(),
-      allowSubscriptionReplacement ? 1 : 0,
     )
     .run();
   return Number(persisted.meta.changes) === 1;
@@ -865,6 +1061,7 @@ async function disableCheckoutForDeletion(
   organizationId: string,
 ) {
   const now = new Date().toISOString();
+  const checkoutGuard = crypto.randomUUID();
   await database
     .prepare(
       `INSERT INTO organization_billing
@@ -877,7 +1074,7 @@ async function disableCheckoutForDeletion(
          checkout_claim_expires_at = NULL,
          updated_at = excluded.updated_at`,
     )
-    .bind(now, now, organizationId)
+    .bind(checkoutGuard, now, organizationId)
     .run();
   return findBilling(database, organizationId);
 }
@@ -885,14 +1082,15 @@ async function disableCheckoutForDeletion(
 async function enableCheckoutAfterFailedDeletion(
   database: D1Database,
   organizationId: string,
+  checkoutGuard: string | null,
 ) {
   await database
     .prepare(
       `UPDATE organization_billing
        SET checkout_disabled_at = NULL, updated_at = ?
-       WHERE organization_id = ?`,
+       WHERE organization_id = ? AND checkout_disabled_at IS ?`,
     )
-    .bind(new Date().toISOString(), organizationId)
+    .bind(new Date().toISOString(), organizationId, checkoutGuard)
     .run();
 }
 

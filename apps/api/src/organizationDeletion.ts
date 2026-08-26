@@ -73,22 +73,39 @@ export async function restoreOrganization(
   database: D1Database,
   organizationId: string,
 ): Promise<OrganizationRestoration | undefined> {
-  const [result] = await database.batch([
-    database
-      .prepare(
-        `UPDATE organization
-         SET deletedAt = NULL, deletedByUserId = NULL
-         WHERE id = ? AND deletedAt IS NOT NULL`,
-      )
-      .bind(organizationId),
-    database
-      .prepare(
-        `UPDATE organization_billing
-         SET checkout_disabled_at = NULL, updated_at = ?
-         WHERE organization_id = ?`,
-      )
-      .bind(new Date().toISOString(), organizationId),
-  ]);
-  if (!result || result.meta.changes < 1) return undefined;
+  const billing = await database
+    .prepare(
+      `SELECT checkout_disabled_at FROM organization_billing
+       WHERE organization_id = ?`,
+    )
+    .bind(organizationId)
+    .first<{ checkout_disabled_at: string | null }>();
+  const result = await database
+    .prepare(
+      `UPDATE organization
+       SET deletedAt = NULL, deletedByUserId = NULL
+       WHERE id = ? AND deletedAt IS NOT NULL`,
+    )
+    .bind(organizationId)
+    .run();
+  if (result.meta.changes < 1) return undefined;
+  await database
+    .prepare(
+      `UPDATE organization_billing
+       SET checkout_disabled_at = NULL, updated_at = ?
+       WHERE organization_id = ?
+         AND checkout_disabled_at IS ?
+         AND EXISTS (
+           SELECT 1 FROM organization
+           WHERE id = ? AND deletedAt IS NULL
+         )`,
+    )
+    .bind(
+      new Date().toISOString(),
+      organizationId,
+      billing?.checkout_disabled_at ?? null,
+      organizationId,
+    )
+    .run();
   return { organizationId };
 }

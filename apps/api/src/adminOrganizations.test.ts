@@ -307,6 +307,26 @@ describe("admin organizations", () => {
       { method: "POST" },
     );
     expect(repeated.status).toBe(409);
+    database
+      .query(
+        `UPDATE organization_billing
+         SET checkout_disabled_at = 'concurrent-deletion'
+         WHERE organization_id = 'org_member-user'`,
+      )
+      .run();
+    const concurrent = await testApp(database).request(
+      "/org_member-user/restore",
+      { method: "POST" },
+    );
+    expect(concurrent.status).toBe(409);
+    expect(
+      database
+        .query(
+          `SELECT checkout_disabled_at FROM organization_billing
+           WHERE organization_id = 'org_member-user'`,
+        )
+        .get(),
+    ).toEqual({ checkout_disabled_at: "concurrent-deletion" });
   });
 });
 
