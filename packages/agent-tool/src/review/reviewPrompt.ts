@@ -53,16 +53,37 @@ ${diff}
 - End with a verdict on its own line — \`VERDICT: X\` where X is ${REVIEW_VERDICTS.join(", ")} — naming the highest severity you found, or CLEAN when the diff needs no changes. Output with no verdict line is discarded and the review is retried with another agent.`;
 }
 
-type ReadAtRef = (rootDir: string, ref: string, filename: string) => string;
+type ReadAtRef = (
+  rootDir: string,
+  ref: string,
+  filename: string,
+) => string | undefined;
 
-function gitShow(rootDir: string, ref: string, filename: string): string {
+function gitShow(
+  rootDir: string,
+  ref: string,
+  filename: string,
+): string | undefined {
+  const listedPath = execFileSync(
+    toolExecutable("git"),
+    ["-C", rootDir, "ls-tree", "-z", "--name-only", ref, "--", filename],
+    {
+      env: toolEnvironment(),
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (listedPath.byteLength === 0) return undefined;
+  if (!listedPath.equals(Buffer.from(`${filename}\0`))) {
+    throw new Error(`Git returned an unexpected policy path for ${filename}.`);
+  }
+
   return execFileSync(
     toolExecutable("git"),
     ["-C", rootDir, "show", `${ref}:${filename}`],
     {
       encoding: "utf8",
       env: toolEnvironment(),
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     },
   );
 }
@@ -74,11 +95,8 @@ export function readReviewInstructions(
   readAtRef: ReadAtRef = gitShow,
 ): string {
   for (const candidate of REVIEW_INSTRUCTION_FILES) {
-    try {
-      return readAtRef(rootDir, baseRef, candidate);
-    } catch {
-      // The policy filename is optional; try the next trusted candidate.
-    }
+    const instructions = readAtRef(rootDir, baseRef, candidate);
+    if (instructions !== undefined) return instructions;
   }
   return "";
 }

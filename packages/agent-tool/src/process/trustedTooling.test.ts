@@ -157,6 +157,17 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
     expect(openPr).toContain(
       '*) echo "Error: could not inspect $FEATURE_REMOTE for $NEW_BRANCH" >&2; exit 1 ;;',
     );
+    expect(openPr).toContain(
+      'git -c core.hooksPath=/dev/null stash push --include-untracked -m "open-pr: move work to $NEW_BRANCH" || {',
+    );
+    expect(openPr).toContain(
+      "PREVIOUS_STASH_OID=$(git rev-parse --verify --quiet refs/stash || true)",
+    );
+    expect(openPr).toContain("restore_saved_work() {");
+    expect(openPr).toContain(
+      'git -c core.hooksPath=/dev/null stash apply --index "$STASH_OID" || {',
+    );
+    expect(openPr).toContain("restore_saved_work || exit 1");
 
     const reset = readFileSync(
       path.join(repositoryRoot, skillRoot, "reset/SKILL.md"),

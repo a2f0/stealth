@@ -198,55 +198,95 @@ fi
      If the ancestry check fails, stop rather than rebasing or resetting local
      default-branch commits.
    - If the tree is dirty, stash tracked, staged, and untracked work with a
-     unique message, then record the exact stash OID. Ignored files are not
-     carried:
+     unique message, then record and verify the exact new stash OID. Ignored
+     files are not carried. A failed stash must stop immediately; never resolve
+     `stash@{0}` after failure because it may name unrelated older work:
 
      ```bash
-     git -c core.hooksPath=/dev/null stash push --include-untracked -m "open-pr: move work to $NEW_BRANCH"
-     STASH_OID=$(git rev-parse "stash@{0}")
+     STASH_OID=""
+     if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+       PREVIOUS_STASH_OID=$(git rev-parse --verify --quiet refs/stash || true)
+       git -c core.hooksPath=/dev/null stash push --include-untracked -m "open-pr: move work to $NEW_BRANCH" || {
+         echo "Error: could not stash work; branch transition was not attempted" >&2
+         exit 1
+       }
+       STASH_OID=$(git rev-parse --verify --quiet refs/stash) || {
+         echo "Error: the newly created stash could not be resolved" >&2
+         exit 1
+       }
+       [ "$STASH_OID" != "$PREVIOUS_STASH_OID" ] || {
+         echo "Error: stash did not create a new saved-work object" >&2
+         exit 1
+       }
+     fi
      ```
 
-   - Fast-forward the local default branch and create the new branch:
+   - Define one guarded restore path. It applies the exact saved OID first, then
+     resolves and drops only that stash entry. Apply, resolution, and drop
+     failures all leave the saved entry intact and stop the transition:
 
      ```bash
-     git -c core.hooksPath=/dev/null merge --ff-only "$BASE_HEAD"
-     git -c core.hooksPath=/dev/null switch -c "$NEW_BRANCH"
-     BRANCH=$(git branch --show-current)
-     PUSH_REMOTE=$(resolve_push_remote "$BRANCH")
+     restore_saved_work() {
+       [ -n "$STASH_OID" ] || return 0
+       git -c core.hooksPath=/dev/null stash apply --index "$STASH_OID" || {
+         echo "Error: could not restore stash $STASH_OID; it was not dropped" >&2
+         git status --short >&2
+         return 1
+       }
+       STASH_REF=$(
+         git stash list --format='%gd %H' |
+           awk -v stash_oid="$STASH_OID" '$2 == stash_oid { print $1; exit }'
+       )
+       [ -n "$STASH_REF" ] || {
+         echo "Error: restored stash OID is no longer in the stash list" >&2
+         return 1
+       }
+       git -c core.hooksPath=/dev/null stash drop "$STASH_REF" || {
+         echo "Error: restored work, but could not drop $STASH_REF" >&2
+         return 1
+       }
+     }
+     ```
+
+   - Fast-forward the local default branch and create the new branch. Guard
+     both mutations; if either fails after stashing, restore the exact saved
+     work on the branch actually reached and stop:
+
+     ```bash
+     git -c core.hooksPath=/dev/null merge --ff-only "$BASE_HEAD" || {
+       restore_saved_work
+       exit 1
+     }
+     git -c core.hooksPath=/dev/null switch -c "$NEW_BRANCH" || {
+       restore_saved_work
+       exit 1
+     }
+     BRANCH=$(git branch --show-current) || {
+       restore_saved_work
+       exit 1
+     }
+     PUSH_REMOTE=$(resolve_push_remote "$BRANCH") || {
+       restore_saved_work
+       exit 1
+     }
      [ "$PUSH_REMOTE" = "$FEATURE_REMOTE" ] || {
        echo "Error: feature push remote changed during branch creation" >&2
+       restore_saved_work
        exit 1
      }
      ```
 
-     If work was stashed, restore its saved index/worktree state:
+     Once the branch transition is verified, restore the saved index/worktree
+     state. The helper drops the stash only after a successful apply:
 
      ```bash
-     git -c core.hooksPath=/dev/null stash apply --index "$STASH_OID"
-     ```
-
-     After a successful apply, resolve the recorded OID back to its current
-     stash reference before dropping it (`git stash drop` does not accept a raw
-     OID):
-
-     ```bash
-     STASH_REF=$(
-       git stash list --format='%gd %H' |
-         awk -v stash_oid="$STASH_OID" '$2 == stash_oid { print $1; exit }'
-     )
-     [ -n "$STASH_REF" ] || {
-       echo "Error: restored stash OID is no longer in the stash list" >&2
-       exit 1
-     }
-     git -c core.hooksPath=/dev/null stash drop "$STASH_REF"
+     restore_saved_work || exit 1
      ```
 
      Drop only the resolved entry, and only after a successful apply. If apply
      conflicts or fails, leave the stash intact, report the new branch plus
-     `git status`, and stop for resolution. If the merge or branch creation
-     fails after stashing, reapply that OID on the current branch and use the
-     same OID-to-reference lookup before dropping it. Never use a hard reset,
-     clean, forced branch creation, automatic rebase, or force push.
+     `git status`, and stop for resolution. Never use a hard reset, clean,
+     forced branch creation, automatic rebase, or force push.
 
 3. **Commit and push**: Run every branch-controlled package script through the
    trusted tool's credential-free, external-network-denied sandbox. Run the

@@ -93,7 +93,7 @@ describe("readReviewInstructions", () => {
       "trusted-base-sha",
       (rootDir, ref, filename) => {
         reads.push(`${rootDir}:${ref}:${filename}`);
-        if (filename === "REVIEW.md") throw new Error("missing");
+        if (filename === "REVIEW.md") return undefined;
         return "TRUSTED POLICY";
       },
     );
@@ -106,10 +106,14 @@ describe("readReviewInstructions", () => {
   });
 
   test("returns empty policy when the base contains neither file", () => {
-    expect(
+    expect(readReviewInstructions("/repo", "base", () => undefined)).toBe("");
+  });
+
+  test("propagates policy read failures", () => {
+    expect(() =>
       readReviewInstructions("/repo", "base", () => {
-        throw new Error("missing");
+        throw new Error("git show failed");
       }),
-    ).toBe("");
+    ).toThrow("git show failed");
   });
 });
