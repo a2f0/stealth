@@ -13,7 +13,9 @@ import {
 
 describe("materializeTrackedCheckout", () => {
   test("parses tracked blobs and rejects path traversal", () => {
-    expect(parseTrackedTreeEntry("100644 blob abc123 12\tsrc/a.ts")).toEqual({
+    expect(
+      parseTrackedTreeEntry(Buffer.from("100644 blob abc123 12\tsrc/a.ts")),
+    ).toEqual({
       mode: "100644",
       type: "blob",
       oid: "abc123",
@@ -21,7 +23,9 @@ describe("materializeTrackedCheckout", () => {
       filePath: "src/a.ts",
     });
     expect(
-      parseTrackedTreeEntry("100644 blob def456 10\tsrc/line\nbreak.ts"),
+      parseTrackedTreeEntry(
+        Buffer.from("100644 blob def456 10\tsrc/line\nbreak.ts"),
+      ),
     ).toEqual({
       filePath: "src/line\nbreak.ts",
       mode: "100644",
@@ -44,7 +48,7 @@ describe("materializeTrackedCheckout", () => {
     const reader: TrackedCheckoutReader = {
       listTree: (_repositoryRoot, treeish) => {
         listedTreeish = treeish;
-        return "120000 blob abc123 10\tlink\0";
+        return Buffer.from("120000 blob abc123 10\tlink\0");
       },
       readBlob: () => Buffer.from("../../.env"),
     };
@@ -65,7 +69,7 @@ describe("materializeTrackedCheckout", () => {
     const checkout = path.join(root, "checkout");
     const filePath = "src/line\nbreak.ts";
     const reader: TrackedCheckoutReader = {
-      listTree: () => `100644 blob abc123 11\t${filePath}\0`,
+      listTree: () => Buffer.from(`100644 blob abc123 11\t${filePath}\0`),
       readBlob: () => Buffer.from("export {};\n"),
     };
 
@@ -85,7 +89,9 @@ describe("materializeTrackedCheckout", () => {
     let blobReads = 0;
     const reader: TrackedCheckoutReader = {
       listTree: () =>
-        "100644 blob abc123 6\tone.txt\0" + "100644 blob def456 6\ttwo.txt\0",
+        Buffer.from(
+          "100644 blob abc123 6\tone.txt\0" + "100644 blob def456 6\ttwo.txt\0",
+        ),
       readBlob: () => {
         blobReads += 1;
         return Buffer.from("123456");
@@ -116,12 +122,58 @@ describe("materializeTrackedCheckout", () => {
   });
 
   test("counts submodule marker bytes during checkout preflight", () => {
-    const entry = parseTrackedTreeEntry("160000 commit abc123 -\tdependency");
+    const entry = parseTrackedTreeEntry(
+      Buffer.from("160000 commit abc123 -\tdependency"),
+    );
     expect(() =>
       assertTrackedCheckoutWithinLimits([entry], {
         maxBytes: 10,
         maxFiles: 1,
       }),
     ).toThrow("materialization limit");
+  });
+
+  test("rejects invalid UTF-8 and portable path collisions before writing", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-tool-path-bytes-"));
+    const checkout = path.join(root, "checkout");
+    let blobReads = 0;
+    const readBlob = () => {
+      blobReads += 1;
+      return Buffer.from("x");
+    };
+    const invalidReader: TrackedCheckoutReader = {
+      listTree: () =>
+        Buffer.concat([
+          Buffer.from("100644 blob abc123 1\tinvalid-"),
+          Buffer.from([0xff, 0]),
+        ]),
+      readBlob,
+    };
+    const collisionReader: TrackedCheckoutReader = {
+      listTree: () =>
+        Buffer.from(
+          "100644 blob abc123 1\tsrc/caf\u00e9.ts\0" +
+            "100644 blob def456 1\tsrc/cafe\u0301.ts\0",
+        ),
+      readBlob,
+    };
+
+    try {
+      expect(() =>
+        materializeTrackedCheckout("/unused", checkout, "HEAD", invalidReader),
+      ).toThrow("not valid UTF-8");
+      expect(() =>
+        materializeTrackedCheckout(
+          "/unused",
+          checkout,
+          "HEAD",
+          collisionReader,
+        ),
+      ).toThrow("colliding paths");
+      expect(blobReads).toBe(0);
+      expect(() => lstatSync(checkout)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

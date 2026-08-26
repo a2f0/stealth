@@ -16,6 +16,11 @@ import {
 import path from "node:path";
 
 import {
+  assertNoMaterializedPathCollisions,
+  decodeGitPath,
+  splitNulDelimitedGitOutput,
+} from "../git/gitPaths";
+import {
   resolveTrustedExecutable,
   type TrustedExecutable,
   trustedRuntimePath,
@@ -185,13 +190,19 @@ function preflightPaths(
     ],
     { env: environment, maxBuffer: MAX_PREFLIGHT_BYTES },
   );
-  const paths = output.toString("utf8").split("\0").filter(Boolean);
+  const paths = parsePreflightPaths(output);
   if (paths.length > MAX_PREFLIGHT_FILES) {
     throw new Error(
       `Preflight checkout contains ${paths.length} files; limit is ${MAX_PREFLIGHT_FILES}.`,
     );
   }
   return paths;
+}
+
+export function parsePreflightPaths(output: Buffer): string[] {
+  return splitNulDelimitedGitOutput(output, "Preflight path listing").map(
+    (pathBytes) => decodeGitPath(pathBytes, "Preflight path"),
+  );
 }
 
 function preflightDestination(checkoutRoot: string, filePath: string): string {
@@ -278,8 +289,13 @@ function materializePreflightCheckout(
 ): void {
   const files: PreflightFile[] = [];
   let totalBytes = 0;
-  for (const filePath of preflightPaths(repositoryRoot, git, environment)) {
+  const filePaths = preflightPaths(repositoryRoot, git, environment);
+  for (const filePath of filePaths) {
     preflightDestination(checkoutRoot, filePath);
+  }
+  assertNoMaterializedPathCollisions(filePaths, "Preflight checkout");
+
+  for (const filePath of filePaths) {
     const file = readPreflightFile(repositoryRoot, filePath);
     if (file === null) continue;
     totalBytes += file.contents.byteLength;

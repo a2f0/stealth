@@ -18,6 +18,7 @@ import {
 import {
   buildPreflightEnvironment,
   buildPreflightSandboxProfile,
+  parsePreflightPaths,
   runPreflight,
 } from "./runPreflight";
 
@@ -122,6 +123,17 @@ test("preflight denies external network, Git writes, and dependency poisoning", 
   );
   expect(profile).toContain('(subpath "/private/tmp/preflight-home")');
   expect(profile).not.toContain('(subpath "/Users/example")');
+});
+
+test("preflight rejects Git paths that are not round-trippable UTF-8", () => {
+  const output = Buffer.concat([
+    Buffer.from("valid.ts\0invalid-"),
+    Buffer.from([0xff, 0]),
+  ]);
+  expect(() => parsePreflightPaths(output)).toThrow("not valid UTF-8");
+  expect(() => parsePreflightPaths(Buffer.from("missing-terminator"))).toThrow(
+    "not NUL-terminated",
+  );
 });
 
 test.skipIf(

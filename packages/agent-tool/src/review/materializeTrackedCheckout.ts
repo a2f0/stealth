@@ -1,7 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-
+import {
+  assertNoMaterializedPathCollisions,
+  decodeGitPath,
+  splitNulDelimitedGitOutput,
+} from "../git/gitPaths";
 import { MAX_BUFFER_BYTES } from "../git/prContext";
 import { toolEnvironment, toolExecutable } from "../process/trustedTooling";
 
@@ -24,7 +28,7 @@ const DEFAULT_TRACKED_CHECKOUT_LIMITS: TrackedCheckoutLimits = {
 };
 
 export interface TrackedCheckoutReader {
-  readonly listTree: (repositoryRoot: string, treeish: string) => string;
+  readonly listTree: (repositoryRoot: string, treeish: string) => Buffer;
   readonly readBlob: (repositoryRoot: string, oid: string) => Buffer;
 }
 
@@ -34,7 +38,6 @@ const gitReader: TrackedCheckoutReader = {
       toolExecutable("git"),
       ["-C", repositoryRoot, "ls-tree", "-rzl", "--full-tree", "-r", treeish],
       {
-        encoding: "utf8",
         env: toolEnvironment(),
         maxBuffer: MAX_BUFFER_BYTES,
       },
@@ -52,17 +55,23 @@ const gitReader: TrackedCheckoutReader = {
   },
 };
 
-/** Parse one NUL-delimited `git ls-tree` record. */
-export function parseTrackedTreeEntry(record: string): TrackedTreeEntry {
-  const separator = record.indexOf("\t");
-  const header = separator < 0 ? record : record.slice(0, separator);
-  const filePath = separator < 0 ? "" : record.slice(separator + 1);
+/** Parse one byte-preserving NUL-delimited `git ls-tree` record. */
+export function parseTrackedTreeEntry(record: Buffer): TrackedTreeEntry {
+  const separator = record.indexOf(0x09);
+  const header =
+    separator < 0
+      ? record.toString("ascii")
+      : record.subarray(0, separator).toString("ascii");
+  const filePath =
+    separator < 0
+      ? ""
+      : decodeGitPath(record.subarray(separator + 1), "Tracked path");
   const match = /^([0-7]{6}) (blob|commit) ([0-9a-f]+) +([0-9-]+)$/.exec(
     header,
   );
   if (match === null) {
     throw new Error(
-      `Could not parse tracked tree entry: ${JSON.stringify(record)}`,
+      `Could not parse tracked tree entry header: ${JSON.stringify(header)}`,
     );
   }
   const type = (match[2] ?? "") as "blob" | "commit";
@@ -73,7 +82,7 @@ export function parseTrackedTreeEntry(record: string): TrackedTreeEntry {
       (size === null || !Number.isSafeInteger(size) || size < 0)) ||
     (type === "commit" && size !== null)
   ) {
-    throw new Error(`Invalid tracked object size: ${JSON.stringify(record)}`);
+    throw new Error(`Invalid tracked object size: ${JSON.stringify(header)}`);
   }
   return {
     mode: match[1] ?? "",
@@ -155,15 +164,18 @@ export function materializeTrackedCheckout(
   reader: TrackedCheckoutReader = gitReader,
   limits: TrackedCheckoutLimits = DEFAULT_TRACKED_CHECKOUT_LIMITS,
 ): void {
-  const entries = reader
-    .listTree(repositoryRoot, treeish)
-    .split("\0")
-    .filter(Boolean)
-    .map(parseTrackedTreeEntry);
+  const entries = splitNulDelimitedGitOutput(
+    reader.listTree(repositoryRoot, treeish),
+    "Tracked tree listing",
+  ).map(parseTrackedTreeEntry);
 
   for (const entry of entries) {
     trackedDestination(checkoutRoot, entry.filePath);
   }
+  assertNoMaterializedPathCollisions(
+    entries.map((entry) => entry.filePath),
+    "Tracked checkout",
+  );
   assertTrackedCheckoutWithinLimits(entries, limits);
   mkdirSync(checkoutRoot, { recursive: true });
 
