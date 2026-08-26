@@ -51,7 +51,7 @@ export const requireOrganization = createMiddleware<AuthEnv>(
       session.session.activeOrganizationId,
       session.user.defaultOrganizationId,
     );
-    return authorizeOrganization(context, next, candidates);
+    return authorizeOrganization(context, next, candidates, true);
   },
 );
 
@@ -92,7 +92,7 @@ export const requireOrganizationPluginAccess = createMiddleware<AuthEnv>(
           session.session.activeOrganizationId,
           session.user.defaultOrganizationId,
         );
-    return authorizeOrganization(context, next, candidates);
+    return authorizeOrganization(context, next, candidates, false);
   },
 );
 
@@ -163,6 +163,7 @@ async function authorizeOrganization(
   context: Context<AuthEnv>,
   next: Next,
   candidates: string[],
+  requireSeat: boolean,
 ) {
   const session = context.get("authSession");
   if (candidates.length === 0) {
@@ -220,6 +221,7 @@ async function authorizeOrganization(
     }
   }
   if (
+    requireSeat &&
     !(await organizationUserHasSeat(
       context.env.DB,
       membership.organizationId,

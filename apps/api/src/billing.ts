@@ -498,32 +498,40 @@ export async function reconcileSubscriptionSeats(
     "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
   >,
 ) {
-  const rows = await environment.DB.prepare(
-    `SELECT organization_id
-     FROM organization_billing
-     WHERE stripe_subscription_item_id IS NOT NULL
-       AND stripe_status IN ('active', 'past_due', 'trialing')
-     ORDER BY COALESCE(last_reconciled_at, '') ASC, organization_id ASC
-     LIMIT 25`,
-  ).all<{ organization_id: string }>();
   let firstFailure: unknown;
-  for (const row of rows.results) {
-    try {
-      await syncOrganizationSeats(environment, row.organization_id, true);
-    } catch (cause) {
-      firstFailure ??= cause;
-    } finally {
+  let afterOrganizationId = "";
+  while (true) {
+    const rows = await environment.DB.prepare(
+      `SELECT organization_id
+       FROM organization_billing
+       WHERE stripe_subscription_item_id IS NOT NULL
+         AND stripe_status IN ('active', 'past_due', 'trialing')
+         AND organization_id > ?
+       ORDER BY organization_id ASC
+       LIMIT 25`,
+    )
+      .bind(afterOrganizationId)
+      .all<{ organization_id: string }>();
+    if (rows.results.length === 0) break;
+    for (const row of rows.results) {
       try {
-        await environment.DB.prepare(
-          `UPDATE organization_billing SET last_reconciled_at = ?
-           WHERE organization_id = ?`,
-        )
-          .bind(new Date().toISOString(), row.organization_id)
-          .run();
+        await syncOrganizationSeats(environment, row.organization_id, true);
       } catch (cause) {
         firstFailure ??= cause;
+      } finally {
+        try {
+          await environment.DB.prepare(
+            `UPDATE organization_billing SET last_reconciled_at = ?
+             WHERE organization_id = ?`,
+          )
+            .bind(new Date().toISOString(), row.organization_id)
+            .run();
+        } catch (cause) {
+          firstFailure ??= cause;
+        }
       }
     }
+    afterOrganizationId = rows.results.at(-1)?.organization_id ?? "";
   }
   if (firstFailure !== undefined) throw firstFailure;
 }

@@ -722,8 +722,6 @@ describe("billing", () => {
     }) as typeof fetch;
     try {
       await reconcileSubscriptionSeats(fixture.bindings);
-      expect(reconciledCount(fixture.database)).toEqual({ count: 25 });
-      await reconcileSubscriptionSeats(fixture.bindings);
       expect(reconciledCount(fixture.database)).toEqual({ count: 30 });
     } finally {
       globalThis.fetch = originalFetch;

@@ -11,12 +11,32 @@ export default {
   fetch: app.fetch,
   scheduled: (_controller, environment, context) => {
     context.waitUntil(
-      Promise.all([
-        purgeDeletedObjects(environment),
-        purgePendingAuditIssueImages(environment),
-        purgeExpiredFreeAuditRuns(environment),
-        reconcileSubscriptionSeats(environment),
-      ]),
+      runScheduledMaintenance({
+        purgeDeletedObjects: () => purgeDeletedObjects(environment),
+        purgeExpiredFreeAuditRuns: () => purgeExpiredFreeAuditRuns(environment),
+        purgePendingAuditIssueImages: () =>
+          purgePendingAuditIssueImages(environment),
+        reconcileSubscriptionSeats: () =>
+          reconcileSubscriptionSeats(environment),
+      }),
     );
   },
 } satisfies ExportedHandler<Bindings>;
+
+interface ScheduledMaintenanceTasks {
+  purgeDeletedObjects: () => Promise<unknown>;
+  purgeExpiredFreeAuditRuns: () => Promise<unknown>;
+  purgePendingAuditIssueImages: () => Promise<unknown>;
+  reconcileSubscriptionSeats: () => Promise<unknown>;
+}
+
+export async function runScheduledMaintenance(
+  tasks: ScheduledMaintenanceTasks,
+) {
+  await tasks.purgeExpiredFreeAuditRuns();
+  await Promise.all([
+    tasks.purgeDeletedObjects(),
+    tasks.purgePendingAuditIssueImages(),
+    tasks.reconcileSubscriptionSeats(),
+  ]);
+}

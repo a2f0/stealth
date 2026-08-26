@@ -139,6 +139,23 @@ describe("organization middleware", () => {
       error: "Organization selectors do not match.",
     });
   });
+
+  it("lets a verified member leave without a Free-plan seat", async () => {
+    const bindings = {
+      DB: membershipDatabase(["active-org"], [], ["active-org"], "owner-id"),
+    } as Bindings;
+    const response = await combinedAuthOrganizationApp().request(
+      "/api/auth/organization/leave",
+      {
+        body: JSON.stringify({ organizationId: "active-org" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      bindings,
+    );
+
+    expect(response.status).toBe(200);
+  });
 });
 
 function authOrganizationApp() {
@@ -157,6 +174,30 @@ function authOrganizationApp() {
     await next();
   });
   app.use("*", requireAuthOrganizationSeat);
+  app.all("*", (context) => context.json({ ok: true }));
+  return app;
+}
+
+function combinedAuthOrganizationApp() {
+  const app = new Hono<{
+    Bindings: Bindings;
+    Variables: AuthVariables;
+  }>();
+  app.use("*", async (context, next) => {
+    context.set("authSession", {
+      session: {
+        activeOrganizationId: "active-org",
+        twoFactorVerified: true,
+      },
+      user: {
+        defaultOrganizationId: "active-org",
+        id: "user-id",
+        twoFactorEnabled: true,
+      },
+    } as unknown as AuthSession);
+    await next();
+  });
+  app.use("*", requireOrganizationPluginAccess, requireAuthOrganizationSeat);
   app.all("*", (context) => context.json({ ok: true }));
   return app;
 }
