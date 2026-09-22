@@ -208,22 +208,23 @@ function GroupEditor({
       </div>
       <div className="groupPanelFooter">
         <Button
+          busy={editor.action === "delete"}
           disabled={editor.busy}
           icon="trash"
           onClick={() => void editor.remove()}
           size="sm"
           variant="danger"
         >
-          Delete group
+          {editor.action === "delete" ? "Deleting…" : "Delete group"}
         </Button>
         <Button
-          busy={editor.busy}
-          disabled={!editor.name.trim()}
+          busy={editor.action === "save"}
+          disabled={editor.busy || !editor.name.trim()}
           size="sm"
           type="submit"
           variant="primary"
         >
-          {editor.busy ? "Saving…" : "Save group"}
+          {editor.action === "save" ? "Saving…" : "Save group"}
         </Button>
       </div>
     </form>
@@ -241,17 +242,19 @@ function useGroupEditor(
   const [memberIds, setMemberIds] = useState(
     () => new Set(group.memberUserIds),
   );
-  const [busy, setBusy] = useState(false);
+  // Which action is running, so only its button shows progress.
+  const [action, setAction] = useState<"delete" | "save">();
+  const busy = action !== undefined;
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const start = () => {
-    setBusy(true);
+  const start = (next: "delete" | "save") => {
+    setAction(next);
     setError(undefined);
     setNotice(undefined);
   };
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    start();
+    start("save");
     try {
       await updateOrganizationGroup(group.id, {
         capabilities: finance ? ["finance"] : [],
@@ -263,12 +266,12 @@ function useGroupEditor(
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
-      setBusy(false);
+      setAction(undefined);
     }
   };
   const remove = async () => {
     if (!window.confirm(`Delete the ${group.name} group?`)) return;
-    start();
+    start("delete");
     try {
       await deleteOrganizationGroup(group.id);
       await onChanged();
@@ -276,7 +279,7 @@ function useGroupEditor(
       setError(messageFrom(cause));
     } finally {
       // A failed reload can leave this panel mounted; keep it usable.
-      setBusy(false);
+      setAction(undefined);
     }
   };
   const toggleMember = (userId: string) =>
@@ -287,6 +290,7 @@ function useGroupEditor(
       return next;
     });
   return {
+    action,
     busy,
     error,
     finance,

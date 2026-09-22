@@ -124,6 +124,28 @@
   margin-inline: auto;
 }
 
+/* Stats move under the title by the list's own width, which the resizable
+ * sidebar decides, not the viewport's. */
+.auditRunCard .cardFlush {
+  container-type: inline-size;
+}
+
+@container (max-width: 40rem) {
+  .auditRunRow {
+    grid-template-areas:
+      "main arrow"
+      "stats stats";
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .auditRunStats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+}
+
 /* Template builder. */
 .auditVersionControls {
   display: flex;
@@ -307,20 +329,6 @@
 
   .auditTemplateStart {
     flex: 1 1 100%;
-  }
-
-  .auditRunRow {
-    grid-template-areas:
-      "main arrow"
-      "stats stats";
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--space-2) var(--space-3);
-  }
-
-  .auditRunStats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2) var(--space-4);
   }
 
   .auditVersionControls,

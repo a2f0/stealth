@@ -456,7 +456,7 @@ function OrganizationActionButton({
 function UserTable({ users }: { users: ListedUser[] }) {
   return (
     <div className="tableWrap">
-      <table className="table">
+      <table className="table adminUsersTable">
         <thead>
           <tr>
             <th scope="col">User</th>

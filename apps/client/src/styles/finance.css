@@ -163,7 +163,12 @@
   gap: var(--space-3);
 }
 
-@media (max-width: 720px) {
+/* Lists stack by their own width, which the sidebar decides, not the viewport's. */
+.financeListCard .cardFlush {
+  container-type: inline-size;
+}
+
+@container (max-width: 44rem) {
   .financeConnections {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -202,20 +207,6 @@
   .financeConnectionActions {
     grid-area: actions;
     margin-top: var(--space-3);
-  }
-
-  /* Two account tiles per row keep the balances scannable on phones. */
-  .financeAccountGrid {
-    --grid-min: 9.5rem;
-    --grid-gap: var(--space-3);
-  }
-
-  .financeAccount {
-    padding: var(--space-4);
-  }
-
-  .financeAccountBalance {
-    font-size: var(--text-xl);
   }
 
   .financeTransactions {
@@ -268,5 +259,21 @@
   .financeAnnotation {
     margin-top: var(--space-3);
     padding: var(--space-4);
+  }
+}
+
+@media (max-width: 720px) {
+  /* Two account tiles per row keep the balances scannable on phones. */
+  .financeAccountGrid {
+    --grid-min: 9.5rem;
+    --grid-gap: var(--space-3);
+  }
+
+  .financeAccount {
+    padding: var(--space-4);
+  }
+
+  .financeAccountBalance {
+    font-size: var(--text-xl);
   }
 }

@@ -16,14 +16,16 @@
 .adminIdentityName {
   color: var(--color-text);
   font-weight: 600;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
-/* Long emails and slugs wrap so the full value stays readable everywhere. */
+/* Values stay whole and readable. break-word (unlike anywhere) keeps each
+ * column's minimum width, so narrow screens scroll the table instead of
+ * crushing a column to a few characters. */
 .adminIdentityDetail,
 .adminSlug {
   color: var(--color-text-subtle);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .adminIdentityDetail {
@@ -66,4 +68,13 @@
 /* Owner and actor details wrap within a bounded column. */
 .adminOrganizationTable .adminIdentityDetail {
   max-width: 13rem;
+}
+
+/* Minimum widths keep columns legible; the wrapper scrolls on small screens. */
+.adminUsersTable {
+  min-width: 40rem;
+}
+
+.adminOrganizationTable {
+  min-width: 56rem;
 }

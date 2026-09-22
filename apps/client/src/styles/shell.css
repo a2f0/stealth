@@ -397,7 +397,11 @@ body.sidebarResizing {
     padding: 0;
   }
 
+  /* The panel scrolls, so the menu opens in flow below its trigger, where
+   * scrolling can always reach it. */
   .accountMenu {
+    position: static;
     width: 100%;
+    margin-top: var(--space-2);
   }
 }

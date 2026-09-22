@@ -91,10 +91,11 @@ rings switch to their inverse treatment.
   an `h2`, or an `h3` inside a `PageSection`; a lone footer action sits at
   the end.
 - `Button` and `ButtonLink` (`variant`, `size`, `icon`, `iconEnd`,
-  `iconOnly`, `block`, `busy`), plus `buttonClass()` for other elements.
+  `iconOnly`, `block`; `Button` also takes `busy`), plus `buttonClass()`
+  for other elements.
 - `Badge` (`tone`, `dot`), `Banner` (`tone`, `title`, `actions`,
   `announce`), `EmptyState` (`icon`, `title`, `actions`, `compact`,
   `plain`), and `LoadingState`.
-- `Field` wraps a control with its label, hint, and error.
+- `Field` wraps a control with its label, hint, and an `optional` marker.
 - `Icon` renders a name from `@tearleads/ui/icons`; `Avatar` and `Logo`
   render identity.

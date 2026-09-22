@@ -7,34 +7,24 @@ import { type IconName, icons } from "@tearleads/ui/icons";
 
 interface Props {
   class?: string | undefined;
-  /** Accessible name; omit for decorative icons. */
-  label?: string | undefined;
   name: IconName;
   size?: number | undefined;
-  strokeWidth?: number | undefined;
 }
 
-const {
-  class: className,
-  label,
-  name,
-  size = 18,
-  strokeWidth = 1.75,
-} = Astro.props;
+// The site's icons are decorative; labelled icons exist only in the client.
+const { class: className, name, size = 18 } = Astro.props;
 ---
 
 <svg
-  aria-hidden={label ? undefined : "true"}
-  aria-label={label}
+  aria-hidden="true"
   class:list={["icon", className]}
   fill="none"
   focusable="false"
   height={size}
-  role={label ? "img" : undefined}
   stroke="currentColor"
   stroke-linecap="round"
   stroke-linejoin="round"
-  stroke-width={strokeWidth}
+  stroke-width="1.75"
   viewBox="0 0 24 24"
   width={size}
   xmlns="http://www.w3.org/2000/svg"

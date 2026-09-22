@@ -407,7 +407,7 @@ function Connections({
       }
       title="Connections"
     >
-      <Card flush>
+      <Card className="financeListCard" flush>
         <ul className="rowList financeConnections">
           {connections.map((connection) => (
             <ConnectionRow
@@ -663,7 +663,7 @@ function TransactionContent({
     );
   }
   return (
-    <Card flush>
+    <Card className="financeListCard" flush>
       <ul className="rowList financeTransactions">
         {transactions.map((transaction) => (
           <TransactionRow

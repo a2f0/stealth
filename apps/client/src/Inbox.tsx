@@ -20,6 +20,7 @@ import {
   listInboundEmails,
   restoreInboundEmail,
 } from "./api";
+import { countLabel } from "./labels";
 
 export function Inbox() {
   return <InboxView model={useInboxModel()} />;
@@ -369,7 +370,7 @@ function MessageListItem({
       {email.attachmentCount > 0 && (
         <span className="inboxItemAttachments">
           <Icon name="attachment" size={14} />
-          {formatAttachmentCount(email.attachmentCount)}
+          {countLabel(email.attachmentCount, "file")}
         </span>
       )}
     </button>
@@ -571,10 +572,6 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatAttachmentCount(count: number) {
-  return `${count} ${count === 1 ? "file" : "files"}`;
 }
 
 function messageFrom(cause: unknown) {

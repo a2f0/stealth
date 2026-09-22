@@ -18,7 +18,7 @@ import {
   getBillingStatus,
   redirectToCurrentBillingSession,
 } from "./billingApi";
-import { formatLabel } from "./labels";
+import { countLabel, formatLabel } from "./labels";
 
 type BillingRedirect = "checkout" | "portal";
 
@@ -272,9 +272,7 @@ function PlanCard({
 }
 
 function currentUsage(status: BillingStatus) {
-  const forms = `${status.current.formTemplates} form${status.current.formTemplates === 1 ? "" : "s"}`;
-  const members = `${status.current.members} user${status.current.members === 1 ? "" : "s"}`;
-  return `${members} · ${forms}`;
+  return `${countLabel(status.current.members, "user")} · ${countLabel(status.current.formTemplates, "form")}`;
 }
 
 function statusTone(value: string): BadgeTone {
