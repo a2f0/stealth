@@ -10,8 +10,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/cloudflareEnv.sh"
 load_cloudflare_env
 
-export VITE_API_URL="${VITE_API_URL:-https://api.tearleads.com}"
-export VITE_WEBSITE_URL="${VITE_WEBSITE_URL:-https://tearleads.com}"
+export VITE_API_URL="${VITE_API_URL:-https://api.tearleads.de}"
+export VITE_WEBSITE_URL="${VITE_WEBSITE_URL:-https://tearleads.de}"
 
 echo "Building app with API URL $VITE_API_URL and website URL $VITE_WEBSITE_URL..."
 if [[ "${DRY_RUN:-0}" == "1" ]]; then

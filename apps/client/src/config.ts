@@ -3,5 +3,5 @@ export const apiUrl = (
 ).replace(/\/$/, "");
 
 export const websiteUrl = (
-  import.meta.env.VITE_WEBSITE_URL ?? "https://tearleads.com"
+  import.meta.env.VITE_WEBSITE_URL ?? "https://tearleads.de"
 ).replace(/\/$/, "");

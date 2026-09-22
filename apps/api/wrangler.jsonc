@@ -11,12 +11,12 @@
     "crons": ["17 * * * *"]
   },
   "vars": {
-    "AUTH_EMAIL_FROM": "security@auth.tearleads.com",
-    "BETTER_AUTH_URL": "https://api.tearleads.com",
-    "CORS_ORIGIN": "https://app.tearleads.com",
-    "INBOUND_EMAIL_DOMAIN": "inbox.tearleads.com",
+    "AUTH_EMAIL_FROM": "security@auth.tearleads.de",
+    "BETTER_AUTH_URL": "https://api.tearleads.de",
+    "CORS_ORIGIN": "https://app.tearleads.de",
+    "INBOUND_EMAIL_DOMAIN": "inbox.tearleads.de",
     "PLAID_ENV": "sandbox",
-    "PLAID_REDIRECT_URI": "https://app.tearleads.com/finance",
+    "PLAID_REDIRECT_URI": "https://app.tearleads.de/finance",
     "STRIPE_PORTAL_CONFIGURATION_ID": "bpc_1U8gHBB19gR8AJxmNFLm8BVk",
     "STRIPE_PRO_LEGACY_PRICE_IDS": "",
     "STRIPE_PRO_PRICE_ID": "price_1U8fg7B19gR8AJxmpcqsWGg8"
@@ -43,7 +43,7 @@
   "send_email": [
     {
       "name": "EMAIL",
-      "allowed_sender_addresses": ["security@auth.tearleads.com"]
+      "allowed_sender_addresses": ["security@auth.tearleads.de"]
     }
   ]
 }

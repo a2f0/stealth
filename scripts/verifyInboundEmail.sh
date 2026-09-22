@@ -10,9 +10,9 @@ source "$SCRIPT_DIR/cloudflareEnv.sh"
 load_cloudflare_email_env
 
 API_BASE="https://api.cloudflare.com/client/v4"
-ZONE_NAME="tearleads.com"
-INBOUND_DOMAIN="inbox.tearleads.com"
-INBOUND_ADDRESS="upload@inbox.tearleads.com"
+ZONE_NAME="tearleads.de"
+INBOUND_DOMAIN="inbox.tearleads.de"
+INBOUND_ADDRESS="upload@inbox.tearleads.de"
 WORKER_NAME="tearleads-api"
 
 cloudflare_get() {
@@ -27,21 +27,25 @@ if [[ -z "$zone_id" ]]; then
   exit 1
 fi
 
-dns_response="$(
-  curl -fsS --get "$API_BASE/zones/$zone_id/email/routing/dns" \
-    --data-urlencode "subdomain=$INBOUND_DOMAIN" \
+# The Email Routing DNS endpoint only describes the records a subdomain needs,
+# and public resolvers negatively cache a subdomain that was checked before it
+# existed, so read the zone's live MX records with the account token.
+load_cloudflare_env
+mx_response="$(
+  curl -fsS --get "$API_BASE/zones/$zone_id/dns_records" \
+    --data-urlencode "type=MX" \
+    --data-urlencode "name=$INBOUND_DOMAIN" \
     -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
 )"
+load_cloudflare_email_env
 
 if ! jq -e \
   '(.success == true) and
-   (((.result.errors // []) | length) == 0) and
-   (([((.result.records // .result.record) // [])[]? |
-      select(.type == "MX" and
-        (.content | test("mx\\.cloudflare\\.net\\.?$")))] |
+   (([.result[]? |
+      select(.content | test("mx\\.cloudflare\\.net\\.?$"))] |
      length) == 3)' \
-  >/dev/null <<<"$dns_response"; then
-  echo "ERROR: Email Routing MX records are not ready for $INBOUND_DOMAIN." >&2
+  >/dev/null <<<"$mx_response"; then
+  echo "ERROR: Email Routing MX records are not live for $INBOUND_DOMAIN." >&2
   exit 1
 fi
 

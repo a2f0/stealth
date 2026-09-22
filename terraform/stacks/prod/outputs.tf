@@ -1,5 +1,5 @@
 output "zone_id" {
-  description = "Cloudflare zone ID for tearleads.com."
+  description = "Cloudflare zone ID for tearleads.de."
   value       = data.cloudflare_zone.main.id
 }
 
@@ -16,6 +16,11 @@ output "d1_database_name" {
 output "r2_bucket_name" {
   description = "R2 bucket name bound to the API Worker."
   value       = cloudflare_r2_bucket.objects.name
+}
+
+output "inbound_email_subdomain" {
+  description = "Subdomain whose Email Routing MX records Terraform manages."
+  value       = var.inbound_email_subdomain
 }
 
 output "inbound_email_address" {

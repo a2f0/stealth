@@ -10,7 +10,7 @@ source "$SCRIPT_DIR/cloudflareEnv.sh"
 load_cloudflare_email_env
 
 API_BASE="https://api.cloudflare.com/client/v4"
-ZONE_NAME="tearleads.com"
+ZONE_NAME="tearleads.de"
 
 zone_response="$(
   curl -fsS "$API_BASE/zones?name=$ZONE_NAME" \

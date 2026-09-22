@@ -12,7 +12,7 @@ variable "cloudflare_account_id" {
 variable "domain" {
   description = "Cloudflare zone used by the product."
   type        = string
-  default     = "tearleads.com"
+  default     = "tearleads.de"
 }
 
 variable "d1_database_name" {
@@ -27,10 +27,16 @@ variable "r2_bucket_name" {
   default     = "stealth-objects"
 }
 
+variable "inbound_email_subdomain" {
+  description = "Subdomain that receives organization uploads through Email Routing."
+  type        = string
+  default     = "inbox.tearleads.de"
+}
+
 variable "inbound_email_address" {
   description = "Base email address routed to the API Worker's email handler."
   type        = string
-  default     = "upload@inbox.tearleads.com"
+  default     = "upload@inbox.tearleads.de"
 }
 
 variable "enable_custom_domains" {
@@ -42,19 +48,19 @@ variable "enable_custom_domains" {
 variable "website_hostname" {
   description = "Hostname for the Astro marketing website Worker."
   type        = string
-  default     = "tearleads.com"
+  default     = "tearleads.de"
 }
 
 variable "client_hostname" {
   description = "Hostname for the React client Worker."
   type        = string
-  default     = "app.tearleads.com"
+  default     = "app.tearleads.de"
 }
 
 variable "api_hostname" {
   description = "Hostname for the API Worker."
   type        = string
-  default     = "api.tearleads.com"
+  default     = "api.tearleads.de"
 }
 
 variable "website_worker_name" {
