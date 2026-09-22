@@ -1,3 +1,14 @@
+import {
+  Avatar,
+  Badge,
+  Banner,
+  Button,
+  Card,
+  cx,
+  Field,
+  Icon,
+  LoadingState,
+} from "@tearleads/ui/react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { authClient } from "./authClient";
 import {
@@ -31,60 +42,51 @@ export function OrganizationPeople({
     onAccessChanged,
   );
 
+  if (!state.data) {
+    return state.error ? (
+      <Banner
+        actions={
+          <Button onClick={() => void state.load()} size="sm">
+            Try again
+          </Button>
+        }
+        tone="danger"
+      >
+        {state.error}
+      </Banner>
+    ) : (
+      <LoadingState label="Loading people…" />
+    );
+  }
+
   return (
     <>
-      {state.error && <div className="errorBanner">{state.error}</div>}
-      {state.notice && (
-        <div aria-live="polite" className="successBanner pageBanner">
-          {state.notice}
-        </div>
+      {state.error && <Banner tone="danger">{state.error}</Banner>}
+      {state.notice && <Banner tone="success">{state.notice}</Banner>}
+      {canManage && (
+        <InviteMemberForm
+          key={organization.id}
+          memberRole={state.data.memberRole}
+          onSent={state.load}
+          organizationId={organization.id}
+        />
       )}
-      {state.data ? (
-        <div className="organizationSettingsGrid">
-          {canManage && (
-            <InviteMemberForm
-              key={organization.id}
-              memberRole={state.data.memberRole}
-              onSent={state.load}
-              organizationId={organization.id}
-            />
-          )}
-          <OrganizationMembers
-            busy={state.busy}
-            managerRole={state.data.memberRole}
-            members={state.data.members}
-            onRemove={(member) =>
-              removeOrganizationMember(
-                member,
-                organization,
-                state,
-                onAccessChanged,
-              )
-            }
-            onRoleChange={actions.updateMemberRole}
-            onTwoFactorRequiredChange={actions.updateTwoFactorRequirement}
-          />
-          {canManage && state.data.invitations.length > 0 && (
-            <PendingInvitations
-              busy={state.busy}
-              invitations={state.data.invitations}
-              onCancel={actions.cancelInvitation}
-            />
-          )}
-        </div>
-      ) : !state.error ? (
-        <div className="emptyState compactEmptyState">
-          <div className="emptyGlyph">◇</div>
-          <h3>Loading people…</h3>
-        </div>
-      ) : (
-        <button
-          className="primaryButton"
-          onClick={() => void state.load()}
-          type="button"
-        >
-          Try again
-        </button>
+      <OrganizationMembers
+        busy={state.busy}
+        managerRole={state.data.memberRole}
+        members={state.data.members}
+        onRemove={(member) =>
+          removeOrganizationMember(member, organization, state, onAccessChanged)
+        }
+        onRoleChange={actions.updateMemberRole}
+        onTwoFactorRequiredChange={actions.updateTwoFactorRequirement}
+      />
+      {canManage && state.data.invitations.length > 0 && (
+        <PendingInvitations
+          busy={state.busy}
+          invitations={state.data.invitations}
+          onCancel={actions.cancelInvitation}
+        />
       )}
     </>
   );
@@ -170,10 +172,10 @@ function organizationPeopleActions(
       });
       if (result.error) {
         throw new Error(
-          result.error.message ?? "Could not cancel this invitation.",
+          result.error.message ?? "Could not revoke this invitation.",
         );
       }
-      state.setNotice("Invitation canceled.");
+      state.setNotice("Invitation revoked.");
       await state.load();
     } catch (cause) {
       state.setError(messageFrom(cause));
@@ -284,68 +286,65 @@ function InviteMemberForm({
   }
 
   return (
-    <form className="settingsCard" onSubmit={(event) => void invite(event)}>
-      <div>
-        <h2>Invite a member</h2>
-        <p>They’ll receive a single-use invitation that expires in 48 hours.</p>
-      </div>
-      <label className="field">
-        <span>Email address</span>
-        <input
-          autoCapitalize="none"
-          autoComplete="email"
-          disabled={busy}
-          inputMode="email"
-          name="invite-email"
-          onChange={(event) => setEmail(event.target.value)}
-          required
-          spellCheck={false}
-          type="email"
-          value={email}
-        />
-      </label>
-      <label className="field">
-        <span>Organization role</span>
-        <select
-          disabled={busy}
-          name="invite-role"
-          onChange={(event) =>
-            setRole(event.target.value as OrganizationInvitationRole)
-          }
-          value={role}
+    <Card
+      description="They’ll receive a single-use invitation that expires in 48 hours."
+      footer={
+        <Button
+          busy={busy}
+          disabled={!email.trim()}
+          icon="mail"
+          type="submit"
+          variant="primary"
         >
-          {assignableRoles.map((assignableRole) => (
-            <option key={assignableRole} value={assignableRole}>
-              {formatRole(assignableRole)}
-            </option>
-          ))}
-        </select>
-        <small>{roleDescription(role)}</small>
-      </label>
-      {error && <div className="errorBanner compactBanner">{error}</div>}
-      {notice && <div className="successBanner compactBanner">{notice}</div>}
-      <button
-        className="primaryButton settingsSubmit"
-        disabled={busy || !email.trim()}
-        type="submit"
-      >
-        {busy ? "Sending…" : "Send invitation"}
-      </button>
-    </form>
+          {busy ? "Sending…" : "Send invitation"}
+        </Button>
+      }
+      onSubmit={(event) => void invite(event)}
+      title="Invite a member"
+    >
+      <div className="inviteFields">
+        <Field label="Email address">
+          <input
+            autoCapitalize="none"
+            autoComplete="email"
+            className="input"
+            disabled={busy}
+            inputMode="email"
+            name="invite-email"
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="name@company.com"
+            required
+            spellCheck={false}
+            type="email"
+            value={email}
+          />
+        </Field>
+        <Field hint={roleDescription(role)} label="Organization role">
+          <select
+            className="select"
+            disabled={busy}
+            name="invite-role"
+            onChange={(event) =>
+              setRole(event.target.value as OrganizationInvitationRole)
+            }
+            value={role}
+          >
+            {assignableRoles.map((assignableRole) => (
+              <option key={assignableRole} value={assignableRole}>
+                {formatRole(assignableRole)}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      {error && <Banner tone="danger">{error}</Banner>}
+      {notice && <Banner tone="success">{notice}</Banner>}
+    </Card>
   );
 }
 
-function OrganizationMembers({
-  busy,
-  managerRole,
-  members,
-  onRoleChange,
-  onRemove,
-  onTwoFactorRequiredChange,
-}: {
+interface MemberControlsProps {
   busy: boolean;
-  managerRole: string;
-  members: OrganizationMember[];
   onRoleChange: (
     member: OrganizationMember,
     role: OrganizationInvitationRole,
@@ -355,90 +354,144 @@ function OrganizationMembers({
     member: OrganizationMember,
     required: boolean,
   ) => Promise<void>;
+}
+
+function OrganizationMembers({
+  managerRole,
+  members,
+  ...controls
+}: MemberControlsProps & {
+  managerRole: string;
+  members: OrganizationMember[];
 }) {
   const memberRoles = members.map(({ role }) => role);
   const canManage = canManageOrganization(managerRole);
   return (
-    <section className="settingsCard organizationPeople">
-      <div>
-        <h2>Members</h2>
-        <p>{members.length} people have access to this organization.</p>
+    <Card
+      description={`${members.length} ${
+        members.length === 1 ? "person has" : "people have"
+      } access to this organization.`}
+      flush
+      title="Members"
+    >
+      <div className="memberListFrame">
+        <ul
+          className={cx(
+            "rowList memberList",
+            !canManage && "memberListReadOnly",
+          )}
+        >
+          {members.map((member) => (
+            <MemberRow
+              {...controls}
+              canManage={canManage}
+              key={member.id}
+              member={member}
+              roles={editableOrganizationRoles(
+                managerRole,
+                member.role,
+                memberRoles,
+              )}
+            />
+          ))}
+        </ul>
       </div>
-      <div className="organizationPeopleList">
-        {members.map((member) => {
-          const roles = editableOrganizationRoles(
-            managerRole,
-            member.role,
-            memberRoles,
-          );
-          const role = organizationRoleValue(member.role);
-          return (
-            <div key={member.id}>
-              <span>
-                <strong>{member.user.name}</strong>
-                <small>
-                  {member.user.email}
-                  {canManage &&
-                    ` · 2FA ${member.twoFactorEnabled ? "enabled" : "not set up"}`}
-                </small>
-              </span>
-              <div className="organizationMemberControls">
-                {canManage ? (
-                  <label className="memberTwoFactorToggle">
-                    <input
-                      aria-label={`Require two-factor authentication for ${member.user.name}`}
-                      checked={member.twoFactorRequired}
-                      disabled={busy}
-                      onChange={(event) =>
-                        void onTwoFactorRequiredChange(
-                          member,
-                          event.target.checked,
-                        )
-                      }
-                      type="checkbox"
-                    />
-                    <span>2FA required</span>
-                  </label>
-                ) : (
-                  member.twoFactorRequired && <b>2FA required</b>
-                )}
-                {roles.length > 0 ? (
-                  <select
-                    aria-label={`Role for ${member.user.name}`}
-                    className="memberRoleSelect"
-                    disabled={busy || roles.length === 1}
-                    onChange={(event) =>
-                      void onRoleChange(
-                        member,
-                        event.target.value as OrganizationInvitationRole,
-                      )
-                    }
-                    value={role}
-                  >
-                    {roles.map((assignableRole) => (
-                      <option key={assignableRole} value={assignableRole}>
-                        {formatRole(assignableRole)}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <b>{role}</b>
-                )}
-                {roles.length > 1 && (
-                  <button
-                    disabled={busy}
-                    onClick={() => void onRemove(member)}
-                    type="button"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
+    </Card>
+  );
+}
+
+function MemberRow({
+  busy,
+  canManage,
+  member,
+  onRemove,
+  onRoleChange,
+  onTwoFactorRequiredChange,
+  roles,
+}: MemberControlsProps & {
+  canManage: boolean;
+  member: OrganizationMember;
+  roles: OrganizationInvitationRole[];
+}) {
+  const role = organizationRoleValue(member.role);
+  return (
+    <li className="row memberRow">
+      <div className="memberIdentity">
+        <Avatar name={member.user.name} />
+        <div className="rowMain">
+          <span className="memberName">
+            <span className="rowTitle truncate">{member.user.name}</span>
+            {canManage && <TwoFactorStatus member={member} />}
+          </span>
+          <span className="rowMeta truncate">{member.user.email}</span>
+        </div>
       </div>
-    </section>
+      <div className="memberTwoFactor">
+        {canManage ? (
+          <label className="check">
+            <input
+              aria-label={`Require two-factor authentication for ${member.user.name}`}
+              checked={member.twoFactorRequired}
+              disabled={busy}
+              onChange={(event) =>
+                void onTwoFactorRequiredChange(member, event.target.checked)
+              }
+              type="checkbox"
+            />
+            <span>Require 2FA</span>
+          </label>
+        ) : (
+          member.twoFactorRequired && <Badge tone="info">2FA required</Badge>
+        )}
+      </div>
+      <div className="memberRole">
+        {roles.length > 1 ? (
+          <select
+            aria-label={`Role for ${member.user.name}`}
+            className="select inputSm memberRoleSelect"
+            disabled={busy}
+            onChange={(event) =>
+              void onRoleChange(
+                member,
+                event.target.value as OrganizationInvitationRole,
+              )
+            }
+            value={role}
+          >
+            {roles.map((assignableRole) => (
+              <option key={assignableRole} value={assignableRole}>
+                {formatRole(assignableRole)}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <Badge>{formatRole(role)}</Badge>
+        )}
+      </div>
+      <div className="memberActions">
+        {roles.length > 1 && (
+          <Button
+            disabled={busy}
+            onClick={() => void onRemove(member)}
+            size="sm"
+            variant="danger"
+          >
+            Remove
+          </Button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function TwoFactorStatus({ member }: { member: OrganizationMember }) {
+  if (member.twoFactorEnabled) {
+    return <Badge tone="success">2FA enabled</Badge>;
+  }
+  return (
+    <Badge tone={member.twoFactorRequired ? "warning" : "neutral"}>
+      2FA not set up
+    </Badge>
   );
 }
 
@@ -452,32 +505,38 @@ function PendingInvitations({
   onCancel: (invitationId: string) => Promise<void>;
 }) {
   return (
-    <section className="settingsCard organizationPeople">
-      <div>
-        <h2>Pending invitations</h2>
-        <p>Invitations that have not been accepted yet.</p>
-      </div>
-      <div className="organizationPeopleList">
+    <Card
+      description="Invitations that have not been accepted yet."
+      flush
+      title="Pending invitations"
+    >
+      <ul className="rowList">
         {invitations.map((invitation) => (
-          <div key={invitation.id}>
-            <span>
-              <strong>{invitation.email}</strong>
-              <small>
-                {formatRole(invitation.role)} · Expires{" "}
-                {formatDate(invitation.expiresAt)}
-              </small>
-            </span>
-            <button
+          <li className="row" key={invitation.id}>
+            <div className="memberIdentity">
+              <span aria-hidden="true" className="invitationMark">
+                <Icon name="mail" size={16} />
+              </span>
+              <div className="rowMain">
+                <span className="rowTitle truncate">{invitation.email}</span>
+                <span className="rowMeta">
+                  {formatRole(invitation.role)} · Expires{" "}
+                  {formatDate(invitation.expiresAt)}
+                </span>
+              </div>
+            </div>
+            <Button
               disabled={busy}
               onClick={() => void onCancel(invitation.id)}
-              type="button"
+              size="sm"
+              variant="danger"
             >
-              Cancel
-            </button>
-          </div>
+              Revoke
+            </Button>
+          </li>
         ))}
-      </div>
-    </section>
+      </ul>
+    </Card>
   );
 }
 

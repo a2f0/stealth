@@ -1,0 +1,389 @@
+/* Buttons. `.button` alone is the secondary (outlined) style. */
+.button {
+  --button-bg: var(--color-surface);
+  --button-bg-hover: var(--color-surface-sunken);
+  --button-border: var(--color-border-strong);
+  --button-border-hover: var(--color-text-subtle);
+  --button-fg: var(--color-text);
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--button-border);
+  border-radius: var(--radius-md);
+  color: var(--button-fg);
+  background: var(--button-bg);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease),
+    box-shadow var(--duration-fast) var(--ease);
+  user-select: none;
+}
+
+.button:hover:not(:disabled, [aria-disabled="true"]) {
+  border-color: var(--button-border-hover);
+  background: var(--button-bg-hover);
+}
+
+.button:disabled,
+.button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.button[aria-busy="true"] {
+  cursor: progress;
+}
+
+.button > .icon {
+  margin-inline: -0.125rem;
+}
+
+.buttonPrimary {
+  --button-bg: var(--color-ink);
+  --button-bg-hover: var(--color-ink-hover);
+  --button-border: var(--color-ink);
+  --button-border-hover: var(--color-ink-hover);
+  --button-fg: var(--color-text-inverse);
+}
+
+.buttonAccent {
+  --button-bg: var(--color-lime);
+  --button-bg-hover: var(--color-lime-hover);
+  --button-border: var(--color-lime);
+  --button-border-hover: var(--color-lime-hover);
+  --button-fg: var(--color-ink);
+}
+
+.buttonGhost {
+  --button-bg: transparent;
+  --button-bg-hover: var(--color-surface-sunken);
+  --button-border: transparent;
+  --button-border-hover: transparent;
+  --button-fg: var(--color-text-muted);
+}
+
+.buttonGhost:hover:not(:disabled, [aria-disabled="true"]) {
+  color: var(--color-text);
+}
+
+.buttonDanger {
+  --button-bg: var(--color-surface);
+  --button-bg-hover: var(--color-danger-bg);
+  --button-border: var(--color-danger-border);
+  --button-border-hover: var(--color-danger);
+  --button-fg: var(--color-danger-fg);
+}
+
+.buttonLink {
+  --button-bg: transparent;
+  --button-bg-hover: transparent;
+  --button-border: transparent;
+  --button-border-hover: transparent;
+  --button-fg: var(--color-text);
+
+  min-height: 0;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-strong);
+  text-decoration-thickness: 1px;
+}
+
+.buttonLink:hover:not(:disabled, [aria-disabled="true"]) {
+  color: var(--color-green-strong);
+  text-decoration-color: currentColor;
+}
+
+.onDark .button:not(.buttonPrimary, .buttonAccent, .buttonLink) {
+  --button-bg: var(--color-ink-raised);
+  --button-bg-hover: var(--color-ink-hover);
+  --button-border: var(--color-ink-line);
+  --button-border-hover: var(--color-ink-line-strong);
+  --button-fg: var(--color-text-inverse);
+}
+
+.onDark .buttonGhost {
+  --button-bg: transparent;
+  --button-border: transparent;
+  --button-border-hover: transparent;
+  --button-fg: var(--color-text-inverse-muted);
+}
+
+.onDark .buttonPrimary {
+  --button-bg: var(--color-text-inverse);
+  --button-bg-hover: var(--color-surface);
+  --button-border: var(--color-text-inverse);
+  --button-border-hover: var(--color-surface);
+  --button-fg: var(--color-ink);
+}
+
+.onDark .buttonLink {
+  --button-fg: var(--color-text-inverse);
+
+  text-decoration-color: var(--color-ink-line);
+}
+
+.onDark .buttonLink:hover:not(:disabled, [aria-disabled="true"]) {
+  color: var(--color-lime);
+}
+
+.buttonSm {
+  gap: var(--space-1-5);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.buttonLg {
+  min-height: var(--control-height-lg);
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+}
+
+.buttonBlock {
+  width: 100%;
+}
+
+.buttonIconOnly {
+  width: var(--control-height-md);
+  padding: 0;
+}
+
+.buttonIconOnly.buttonSm {
+  width: var(--control-height-sm);
+}
+
+/* Link buttons stay inline with text at every size. */
+.buttonLink.buttonSm,
+.buttonLink.buttonLg {
+  min-height: 0;
+  padding: 0;
+}
+
+/* Form fields. */
+.field {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1-5);
+  align-content: start;
+}
+
+.fieldLabel {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: var(--leading-snug);
+}
+
+.fieldOptional {
+  color: var(--color-text-subtle);
+  font-weight: 500;
+}
+
+.fieldHint {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.fieldError {
+  color: var(--color-danger-fg);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  background: var(--color-surface);
+  font-size: var(--text-md);
+  line-height: 1.4;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    box-shadow var(--duration-fast) var(--ease);
+}
+
+.textarea {
+  min-height: 5.5rem;
+  padding: var(--space-2-5) var(--space-3);
+  line-height: var(--leading-normal);
+  resize: vertical;
+}
+
+.select {
+  padding-right: var(--space-10);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235a5b53' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right var(--space-3) center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--color-text-subtle);
+  opacity: 1;
+}
+
+.input:hover:not(:disabled, :focus),
+.select:hover:not(:disabled, :focus),
+.textarea:hover:not(:disabled, :focus) {
+  border-color: var(--color-text-subtle);
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--color-ink);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.input[aria-invalid="true"],
+.select[aria-invalid="true"],
+.textarea[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled,
+.input:read-only {
+  color: var(--color-text-muted);
+  background-color: var(--color-surface-sunken);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  cursor: not-allowed;
+}
+
+.inputSm {
+  min-height: var(--control-height-sm);
+  padding-inline: var(--space-2-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.select.inputSm {
+  padding-right: var(--space-8);
+  background-position: right var(--space-2) center;
+  background-size: 14px;
+}
+
+.onDark .input,
+.onDark .select {
+  border-color: var(--color-ink-line);
+  color: var(--color-text-inverse);
+  background-color: var(--color-ink-raised);
+}
+
+.onDark .select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a6a79d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+.onDark .input:hover:not(:disabled, :focus),
+.onDark .select:hover:not(:disabled, :focus) {
+  border-color: var(--color-ink-line-strong);
+}
+
+.onDark .input:focus,
+.onDark .select:focus {
+  border-color: var(--color-lime);
+}
+
+.check {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-2-5);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.check input {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  margin: 0.125rem 0 0;
+  accent-color: var(--color-ink);
+  cursor: pointer;
+}
+
+.check:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.check a {
+  color: var(--color-text);
+  font-weight: 650;
+}
+
+.fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.fieldset > legend {
+  margin-bottom: var(--space-2);
+  padding: 0;
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.formGrid {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.formRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: var(--space-4);
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+@media (max-width: 720px) {
+  .input,
+  .select,
+  .textarea {
+    font-size: 1rem;
+  }
+}

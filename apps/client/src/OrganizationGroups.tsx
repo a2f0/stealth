@@ -1,3 +1,12 @@
+import {
+  Avatar,
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  LoadingState,
+} from "@tearleads/ui/react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   createOrganizationGroup,
@@ -39,37 +48,30 @@ export function OrganizationAccessSettings({
   }
 
   if (!data && loading) {
-    return (
-      <div className="emptyState compactEmptyState">
-        <div className="emptyGlyph">◇</div>
-        <h3>Loading access settings…</h3>
-      </div>
-    );
+    return <LoadingState label="Loading access settings…" />;
   }
   if (!data) {
     return (
-      <>
-        <div className="errorBanner">{error}</div>
-        <button
-          className="primaryButton"
-          onClick={() => void load()}
-          type="button"
-        >
-          Try again
-        </button>
-      </>
+      <Banner
+        actions={
+          <Button onClick={() => void load()} size="sm">
+            Try again
+          </Button>
+        }
+        tone="danger"
+      >
+        {error}
+      </Banner>
     );
   }
   return (
     <>
-      {error && <div className="errorBanner">{error}</div>}
-      <div className="organizationSettingsGrid">
-        <OrganizationGroups
-          groups={data.groups}
-          members={data.members}
-          onChanged={changed}
-        />
-      </div>
+      {error && <Banner tone="danger">{error}</Banner>}
+      <OrganizationGroups
+        groups={data.groups}
+        members={data.members}
+        onChanged={changed}
+      />
     </>
   );
 }
@@ -109,46 +111,54 @@ function OrganizationGroups({
   }
 
   return (
-    <section className="settingsCard organizationGroupsCard">
-      <div>
-        <h2>Groups</h2>
-        <p>Control feature access for sets of organization members.</p>
-      </div>
-      <form
-        className="organizationGroupCreate"
-        onSubmit={(event) => void create(event)}
-      >
-        <label className="field">
-          <span>New group name</span>
-          <input
-            disabled={busy}
-            maxLength={100}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Operations"
-            type="text"
-            value={name}
-          />
-        </label>
-        <button
-          className="primaryButton"
-          disabled={busy || !name.trim()}
-          type="submit"
-        >
-          Add group
-        </button>
+    <Card
+      description="Control feature access for sets of organization members."
+      flush
+      title="Groups"
+    >
+      <form className="groupCreate" onSubmit={(event) => void create(event)}>
+        <div className="groupCreateRow">
+          <Field label="New group name">
+            <input
+              className="input"
+              disabled={busy}
+              maxLength={100}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Operations"
+              type="text"
+              value={name}
+            />
+          </Field>
+          <Button
+            busy={busy}
+            disabled={!name.trim()}
+            icon="add"
+            type="submit"
+            variant="primary"
+          >
+            Add group
+          </Button>
+        </div>
+        {error && <Banner tone="danger">{error}</Banner>}
       </form>
-      {error && <div className="errorBanner compactBanner">{error}</div>}
-      <div className="organizationGroupList">
-        {groups.map((group) => (
-          <GroupEditor
-            group={group}
-            key={group.id}
-            members={members}
-            onChanged={onChanged}
-          />
-        ))}
+      <div className="groupList">
+        {groups.length === 0 ? (
+          <EmptyState compact icon="layers" title="No groups yet">
+            Create a group to give a set of members access to features like
+            Finance.
+          </EmptyState>
+        ) : (
+          groups.map((group) => (
+            <GroupEditor
+              group={group}
+              key={group.id}
+              members={members}
+              onChanged={onChanged}
+            />
+          ))
+        )}
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -163,60 +173,58 @@ function GroupEditor({
 }) {
   const editor = useGroupEditor(group, onChanged);
   return (
-    <form
-      className="organizationGroupEditor"
-      onSubmit={(event) => void editor.save(event)}
-    >
-      <div className="organizationGroupHeading">
-        <label className="field">
-          <span>Group name</span>
-          <input
-            disabled={editor.busy}
-            maxLength={100}
-            onChange={(event) => editor.setName(event.target.value)}
-            required
-            type="text"
-            value={editor.name}
-          />
-        </label>
-        <label className="organizationCapabilityToggle">
-          <input
-            checked={editor.finance}
-            disabled={editor.busy}
-            onChange={(event) => editor.setFinance(event.target.checked)}
-            type="checkbox"
-          />
-          Finance access
-        </label>
-      </div>
-      <GroupMemberPicker
-        disabled={editor.busy}
-        memberIds={editor.memberIds}
-        members={members}
-        onToggle={editor.toggleMember}
-      />
-      {editor.error && (
-        <div className="errorBanner compactBanner">{editor.error}</div>
-      )}
-      {editor.notice && (
-        <div className="successBanner compactBanner">{editor.notice}</div>
-      )}
-      <div className="organizationGroupActions">
-        <button
-          className="dangerButton"
+    <form className="groupPanel" onSubmit={(event) => void editor.save(event)}>
+      <div className="groupPanelBody">
+        <div className="groupPanelHeading">
+          <Field className="groupNameField" label="Group name">
+            <input
+              className="input"
+              disabled={editor.busy}
+              maxLength={100}
+              onChange={(event) => editor.setName(event.target.value)}
+              required
+              type="text"
+              value={editor.name}
+            />
+          </Field>
+          <label className="check groupCapability">
+            <input
+              checked={editor.finance}
+              disabled={editor.busy}
+              onChange={(event) => editor.setFinance(event.target.checked)}
+              type="checkbox"
+            />
+            Finance access
+          </label>
+        </div>
+        <GroupMemberPicker
           disabled={editor.busy}
+          memberIds={editor.memberIds}
+          members={members}
+          onToggle={editor.toggleMember}
+        />
+        {editor.error && <Banner tone="danger">{editor.error}</Banner>}
+        {editor.notice && <Banner tone="success">{editor.notice}</Banner>}
+      </div>
+      <div className="groupPanelFooter">
+        <Button
+          disabled={editor.busy}
+          icon="trash"
           onClick={() => void editor.remove()}
-          type="button"
+          size="sm"
+          variant="danger"
         >
           Delete group
-        </button>
-        <button
-          className="primaryButton"
-          disabled={editor.busy || !editor.name.trim()}
+        </Button>
+        <Button
+          busy={editor.busy}
+          disabled={!editor.name.trim()}
+          size="sm"
           type="submit"
+          variant="primary"
         >
           {editor.busy ? "Saving…" : "Save group"}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -302,22 +310,35 @@ function GroupMemberPicker({
   members: OrganizationMember[];
   onToggle: (userId: string) => void;
 }) {
+  const selected = members.filter(({ user }) => memberIds.has(user.id)).length;
   return (
-    <fieldset className="organizationGroupMembers" disabled={disabled}>
-      <legend>Members</legend>
-      {members.map((member) => (
-        <label key={member.id}>
-          <input
-            checked={memberIds.has(member.user.id)}
-            onChange={() => onToggle(member.user.id)}
-            type="checkbox"
-          />
-          <span>
-            <strong>{member.user.name}</strong>
-            <small>{member.user.email}</small>
-          </span>
-        </label>
-      ))}
+    <fieldset className="fieldset" disabled={disabled}>
+      <legend>
+        Members{" "}
+        <span className="groupMembersCount">
+          {selected} of {members.length} selected
+        </span>
+      </legend>
+      <div className="gridAuto groupMemberGrid">
+        {members.map((member) => (
+          <label className="check groupMemberOption" key={member.id}>
+            <input
+              checked={memberIds.has(member.user.id)}
+              onChange={() => onToggle(member.user.id)}
+              type="checkbox"
+            />
+            <Avatar name={member.user.name} size="sm" />
+            <span className="groupMemberText">
+              <span className="groupMemberName truncate">
+                {member.user.name}
+              </span>
+              <span className="groupMemberEmail truncate">
+                {member.user.email}
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
     </fieldset>
   );
 }

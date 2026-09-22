@@ -5,6 +5,8 @@ A small Bun monorepo for a Cloudflare-native product:
 - `apps/api` — Hono API on Cloudflare Workers, with D1 and R2 bindings.
 - `apps/client` — React and Vite application.
 - `apps/website` — static Astro marketing site.
+- `packages/ui` — the shared design system (tokens, component styles, React
+  primitives, icons, and pricing copy) used by the client and the website.
 - `terraform` — D1, R2, and `tearleads.de` Worker-domain infrastructure.
 
 The tooling follows the useful core of Tearleads (Bun, Turborepo, TypeScript,

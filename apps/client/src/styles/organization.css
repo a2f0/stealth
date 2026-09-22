@@ -1,0 +1,173 @@
+/*
+ * Organization settings (General, Billing) and the invitation page.
+ * Shared components come from @tearleads/ui; this file only lays them out.
+ */
+
+/* Forms and plan cards read best at the narrow settings width. */
+.organizationNarrowBody {
+  --page-width: var(--page-narrow);
+}
+
+/* Billing: current plan summary. */
+.billingSummary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+}
+
+.billingSummaryHeading {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.billingSummaryPlan {
+  font-size: var(--text-2xl);
+  font-weight: 650;
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+}
+
+.billingSummaryUsage {
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+}
+
+/* Billing: plan cards. */
+.billingPlans {
+  --grid-min: 15rem;
+}
+
+/* Each plan spans four shared rows so prices and features line up. */
+.billingPlan {
+  display: grid;
+  grid-row: span 4;
+  grid-template-rows: subgrid;
+  align-content: start;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.billingPlanHeading {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1-5);
+}
+
+.billingPlanName {
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: var(--tracking-tight);
+}
+
+.billingPlanDescription {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.billingPrice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+}
+
+.billingPriceAmount {
+  font-size: var(--text-3xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-none);
+}
+
+.billingPriceCadence {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+}
+
+.billingFeatures {
+  display: grid;
+  gap: var(--space-2-5);
+  margin: 0;
+  padding: var(--space-5) 0 0;
+  border-top: 1px solid var(--color-border-subtle);
+  list-style: none;
+}
+
+.billingFeature {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2-5);
+  color: var(--color-text);
+  font-size: var(--text-base);
+  line-height: var(--leading-snug);
+}
+
+.billingFeature > .icon {
+  margin-top: 0.0625rem;
+  color: var(--color-green);
+}
+
+.billingPlanAction {
+  align-self: end;
+}
+
+/* Invitation: a single centered column inside the workspace frame. */
+.acceptInvitePage {
+  display: grid;
+  justify-items: center;
+  padding: var(--space-16) var(--page-gutter) var(--space-20);
+}
+
+.acceptInvitePanel {
+  display: grid;
+  gap: var(--space-6);
+  width: min(100%, 30rem);
+}
+
+.acceptInviteHeader {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+
+.acceptInviteMark {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--color-lime-border);
+  border-radius: var(--radius-lg);
+  place-items: center;
+  color: var(--color-green-deep);
+  background: var(--color-lime-soft);
+}
+
+.acceptInviteTitle {
+  font-size: var(--text-3xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+}
+
+@media (max-width: 720px) {
+  .billingPlan {
+    padding: var(--space-5) var(--space-4);
+  }
+
+  .acceptInvitePage {
+    padding-top: var(--space-10);
+  }
+}
+
+/* Descendant overrides come last so the plain rules above never outrank them. */
+.organizationActionCard .cardHeader {
+  align-items: center;
+}
+
+.organizationActionCard .cardHeading {
+  flex: 1 1 20rem;
+}

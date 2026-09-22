@@ -1,3 +1,17 @@
+import {
+  Banner,
+  Button,
+  Card,
+  cx,
+  EmptyState,
+  Field,
+  Icon,
+  LoadingState,
+  Page,
+  PageBody,
+  PageHeader,
+  PageSection,
+} from "@tearleads/ui/react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   type Business,
@@ -38,22 +52,26 @@ export function Businesses() {
   }, []);
   useEffect(() => void load(), [load]);
 
+  const showError = (message: string) => {
+    setNotice(undefined);
+    setError(message);
+  };
+
   return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Workspace</p>
-          <h1>Businesses</h1>
-        </div>
-      </header>
-      <section className="content businessesContent">
-        {error && <div className="errorBanner pageBanner">{error}</div>}
-        {notice && <div className="successBanner pageBanner">{notice}</div>}
+    <Page>
+      <PageHeader
+        description="Keep the businesses belonging to this organization in one place."
+        eyebrow="Records"
+        title="Businesses"
+      />
+      <PageBody>
+        {error && <Banner tone="danger">{error}</Banner>}
+        {notice && <Banner tone="success">{notice}</Banner>}
         {loading && !data ? (
-          <BusinessEmptyState title="Loading businesses…" />
+          <LoadingState label="Loading businesses…" />
         ) : data ? (
-          <div className="businessesLayout">
-            {data.canManage && (
+          <>
+            {data.canManage ? (
               <BusinessCreateForm
                 onCreated={(business) => {
                   setData((current) =>
@@ -67,11 +85,10 @@ export function Businesses() {
                   setError(undefined);
                   setNotice("Business added.");
                 }}
-                onError={(message) => {
-                  setNotice(undefined);
-                  setError(message);
-                }}
+                onError={showError}
               />
+            ) : (
+              <ReadOnlyNotice />
             )}
             <BusinessList
               businesses={data.businesses}
@@ -90,10 +107,7 @@ export function Businesses() {
                 setError(undefined);
                 setNotice("Business deleted.");
               }}
-              onError={(message) => {
-                setNotice(undefined);
-                setError(message);
-              }}
+              onError={showError}
               onUpdated={(updatedBusiness) => {
                 setData((current) =>
                   current
@@ -111,12 +125,20 @@ export function Businesses() {
                 setNotice("Business updated.");
               }}
             />
-          </div>
+          </>
         ) : (
           <BusinessEmptyState title="Businesses could not be loaded." />
         )}
-      </section>
-    </>
+      </PageBody>
+    </Page>
+  );
+}
+
+function ReadOnlyNotice() {
+  return (
+    <Banner announce={false} icon="lock" tone="neutral">
+      Only organization owners and admins can add or change businesses.
+    </Banner>
   );
 }
 
@@ -145,28 +167,28 @@ function BusinessCreateForm({
   }
 
   return (
-    <form
-      className="settingsCard businessCreateCard"
+    <Card
+      footer={
+        <>
+          <span className="textSm textSubtle">
+            Only the business name is required.
+          </span>
+          <Button
+            busy={busy}
+            disabled={!form.name.trim()}
+            icon="add"
+            type="submit"
+            variant="primary"
+          >
+            {busy ? "Adding…" : "Add business"}
+          </Button>
+        </>
+      }
       onSubmit={(event) => void submit(event)}
+      title="Add a business"
     >
-      <div>
-        <h2>Add a business</h2>
-        <p>Keep the businesses belonging to this organization in one place.</p>
-      </div>
-      <BusinessFields
-        className="businessFields"
-        disabled={busy}
-        form={form}
-        onChange={setForm}
-      />
-      <button
-        className="primaryButton settingsSubmit"
-        disabled={busy || !form.name.trim()}
-        type="submit"
-      >
-        {busy ? "Adding…" : "Add business"}
-      </button>
-    </form>
+      <BusinessFields disabled={busy} form={form} onChange={setForm} />
+    </Card>
   );
 }
 
@@ -183,30 +205,35 @@ function BusinessList({
   onError: (message: string) => void;
   onUpdated: (business: Business) => void;
 }) {
-  if (businesses.length === 0) {
-    return <BusinessEmptyState title="No businesses yet." />;
-  }
+  const count = businesses.length;
   return (
-    <section className="businessListCard">
-      <div className="businessListHeading">
-        <div>
-          <h2>Organization businesses</h2>
-          <p>{businesses.length} total</p>
-        </div>
-      </div>
-      <div className="businessList">
-        {businesses.map((business) => (
-          <BusinessRow
-            business={business}
-            canManage={canManage}
-            key={business.id}
-            onDeleted={onDeleted}
-            onError={onError}
-            onUpdated={onUpdated}
-          />
-        ))}
-      </div>
-    </section>
+    <PageSection
+      actions={
+        <span className="sectionCount">
+          {count} {count === 1 ? "business" : "businesses"}
+        </span>
+      }
+      title="Organization businesses"
+    >
+      {count === 0 ? (
+        <BusinessEmptyState title="No businesses yet." />
+      ) : (
+        <Card flush>
+          <ul className="rowList">
+            {businesses.map((business) => (
+              <BusinessRow
+                business={business}
+                canManage={canManage}
+                key={business.id}
+                onDeleted={onDeleted}
+                onError={onError}
+                onUpdated={onUpdated}
+              />
+            ))}
+          </ul>
+        </Card>
+      )}
+    </PageSection>
   );
 }
 
@@ -253,42 +280,53 @@ function BusinessRow({
   }
 
   return (
-    <div className="businessRow">
-      <div>
-        <strong>{business.name}</strong>
-        <span>
-          {business.ein ? `EIN ${formatEin(business.ein)}` : "EIN not provided"}
-        </span>
-        {business.incorporationDate && (
-          <span>
-            Incorporated {formatBusinessDate(business.incorporationDate)}
-          </span>
-        )}
-        {business.streetAddress && <span>{business.streetAddress}</span>}
-        {(business.city || business.state || business.zip) && (
-          <span>{formatBusinessLocation(business)}</span>
-        )}
-      </div>
+    <li className="row">
+      <BusinessSummary business={business} />
       {canManage && (
-        <div className="businessRowActions">
-          <button
-            className="businessEditButton tableActionButton"
+        <div className="rowActions businessRowActions">
+          <Button
             disabled={busy}
+            icon="edit"
             onClick={() => setEditing(true)}
-            type="button"
+            size="sm"
           >
             Edit
-          </button>
-          <button
-            className="dangerButton tableActionButton"
-            disabled={busy}
+          </Button>
+          <Button
+            busy={busy}
+            icon="trash"
             onClick={() => void remove()}
-            type="button"
+            size="sm"
+            variant="danger"
           >
             {busy ? "Deleting…" : "Delete"}
-          </button>
+          </Button>
         </div>
       )}
+    </li>
+  );
+}
+
+function BusinessSummary({ business }: { business: Business }) {
+  const facts = [
+    business.ein ? `EIN ${formatEin(business.ein)}` : "EIN not provided",
+  ];
+  if (business.incorporationDate) {
+    facts.push(
+      `Incorporated ${formatBusinessDate(business.incorporationDate)}`,
+    );
+  }
+  const address = formatBusinessAddress(business);
+  return (
+    <div className="businessSummary">
+      <span aria-hidden="true" className="businessMark">
+        <Icon name="businesses" size={18} />
+      </span>
+      <div className="rowMain">
+        <span className="rowTitle">{business.name}</span>
+        <span className="rowMeta tabular">{facts.join(" · ")}</span>
+        {address && <span className="rowMeta">{address}</span>}
+      </div>
     </div>
   );
 }
@@ -322,44 +360,46 @@ function BusinessEditRow({
   }
 
   return (
-    <form
-      className="businessRow businessEditForm"
-      onSubmit={(event) => void save(event)}
-    >
-      <BusinessFields
-        className="businessEditFields"
-        disabled={busy}
-        form={form}
-        onChange={setForm}
-      />
-      <div className="businessRowActions">
-        <button
-          className="businessCancelButton tableActionButton"
+    <li className="row businessEditRow">
+      <form
+        aria-label={`Edit ${business.name}`}
+        className="formGrid businessEditForm"
+        onSubmit={(event) => void save(event)}
+      >
+        <p className="textSm textStrong">Edit business</p>
+        <BusinessFields
+          compact
           disabled={busy}
-          onClick={onCancel}
-          type="button"
-        >
-          Cancel
-        </button>
-        <button
-          className="primaryButton tableActionButton"
-          disabled={busy || !form.name.trim()}
-          type="submit"
-        >
-          {busy ? "Saving…" : "Save"}
-        </button>
-      </div>
-    </form>
+          form={form}
+          onChange={setForm}
+        />
+        <div className="formActions businessEditActions">
+          <Button disabled={busy} onClick={onCancel} size="sm" variant="ghost">
+            Cancel
+          </Button>
+          <Button
+            busy={busy}
+            disabled={!form.name.trim()}
+            icon="check"
+            size="sm"
+            type="submit"
+            variant="primary"
+          >
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </form>
+    </li>
   );
 }
 
 function BusinessFields({
-  className,
+  compact = false,
   disabled,
   form,
   onChange,
 }: {
-  className: string;
+  compact?: boolean;
   disabled: boolean;
   form: BusinessFormState;
   onChange: (form: BusinessFormState) => void;
@@ -367,12 +407,13 @@ function BusinessFields({
   const set = (field: keyof BusinessFormState, value: string) => {
     onChange({ ...form, [field]: value });
   };
+  const input = cx("input", compact && "inputSm");
   return (
-    <div className={className}>
-      <label className="field">
-        <span>Business name</span>
+    <div className="businessFields">
+      <Field className="businessFieldWide" label="Business name">
         <input
           autoComplete="organization"
+          className={input}
           disabled={disabled}
           maxLength={120}
           onChange={(event) => set("name", event.target.value)}
@@ -381,10 +422,10 @@ function BusinessFields({
           type="text"
           value={form.name}
         />
-      </label>
-      <label className="field">
-        <span>EIN (optional)</span>
+      </Field>
+      <Field className="businessFieldHalf" label="EIN" optional>
         <input
+          className={input}
           disabled={disabled}
           inputMode="numeric"
           maxLength={10}
@@ -394,11 +435,43 @@ function BusinessFields({
           type="text"
           value={form.ein}
         />
-      </label>
-      <label className="field">
-        <span>Street address (optional)</span>
+      </Field>
+      <Field className="businessFieldHalf" label="Incorporation date" optional>
+        <input
+          className={input}
+          disabled={disabled}
+          onChange={(event) => set("incorporationDate", event.target.value)}
+          type="date"
+          value={form.incorporationDate}
+        />
+      </Field>
+      <BusinessAddressFields
+        disabled={disabled}
+        form={form}
+        input={input}
+        set={set}
+      />
+    </div>
+  );
+}
+
+function BusinessAddressFields({
+  disabled,
+  form,
+  input,
+  set,
+}: {
+  disabled: boolean;
+  form: BusinessFormState;
+  input: string;
+  set: (field: keyof BusinessFormState, value: string) => void;
+}) {
+  return (
+    <>
+      <Field className="businessFieldWide" label="Street address" optional>
         <input
           autoComplete="street-address"
+          className={input}
           disabled={disabled}
           maxLength={240}
           onChange={(event) => set("streetAddress", event.target.value)}
@@ -406,59 +479,48 @@ function BusinessFields({
           type="text"
           value={form.streetAddress}
         />
-      </label>
-      <label className="field">
-        <span>Incorporation date (optional)</span>
+      </Field>
+      <Field className="businessFieldHalf" label="City" optional>
         <input
+          autoComplete="address-level2"
+          className={input}
           disabled={disabled}
-          onChange={(event) => set("incorporationDate", event.target.value)}
-          type="date"
-          value={form.incorporationDate}
+          maxLength={100}
+          onChange={(event) => set("city", event.target.value)}
+          placeholder="New York"
+          type="text"
+          value={form.city}
         />
-      </label>
-      <div className="businessLocationFields">
-        <label className="field">
-          <span>City (optional)</span>
-          <input
-            autoComplete="address-level2"
-            disabled={disabled}
-            maxLength={100}
-            onChange={(event) => set("city", event.target.value)}
-            placeholder="New York"
-            type="text"
-            value={form.city}
-          />
-        </label>
-        <label className="field">
-          <span>State (optional)</span>
-          <input
-            autoCapitalize="characters"
-            autoComplete="address-level1"
-            disabled={disabled}
-            maxLength={2}
-            onChange={(event) => set("state", event.target.value)}
-            pattern="[A-Za-z]{2}"
-            placeholder="NY"
-            type="text"
-            value={form.state}
-          />
-        </label>
-        <label className="field">
-          <span>ZIP (optional)</span>
-          <input
-            autoComplete="postal-code"
-            disabled={disabled}
-            inputMode="numeric"
-            maxLength={10}
-            onChange={(event) => set("zip", event.target.value)}
-            pattern="[0-9]{5}(-[0-9]{4})?"
-            placeholder="10001"
-            type="text"
-            value={form.zip}
-          />
-        </label>
-      </div>
-    </div>
+      </Field>
+      <Field className="businessFieldQuarter" label="State" optional>
+        <input
+          autoCapitalize="characters"
+          autoComplete="address-level1"
+          className={input}
+          disabled={disabled}
+          maxLength={2}
+          onChange={(event) => set("state", event.target.value)}
+          pattern="[A-Za-z]{2}"
+          placeholder="NY"
+          type="text"
+          value={form.state}
+        />
+      </Field>
+      <Field className="businessFieldQuarter" label="ZIP" optional>
+        <input
+          autoComplete="postal-code"
+          className={input}
+          disabled={disabled}
+          inputMode="numeric"
+          maxLength={10}
+          onChange={(event) => set("zip", event.target.value)}
+          pattern="[0-9]{5}(-[0-9]{4})?"
+          placeholder="10001"
+          type="text"
+          value={form.zip}
+        />
+      </Field>
+    </>
   );
 }
 
@@ -498,18 +560,17 @@ function businessInput(form: BusinessFormState): BusinessInput {
   };
 }
 
-function formatBusinessLocation(business: Business) {
+function formatBusinessAddress(business: Business) {
   const region = [business.state, business.zip].filter(Boolean).join(" ");
-  return [business.city, region].filter(Boolean).join(", ");
+  const location = [business.city, region].filter(Boolean).join(", ");
+  return [business.streetAddress, location].filter(Boolean).join(", ");
 }
 
 function BusinessEmptyState({ title }: { title: string }) {
   return (
-    <div className="emptyState compactEmptyState businessEmptyState">
-      <div className="emptyGlyph">▦</div>
-      <h3>{title}</h3>
-      <p>Business details will appear here.</p>
-    </div>
+    <EmptyState icon="businesses" title={title}>
+      Business details will appear here.
+    </EmptyState>
   );
 }
 

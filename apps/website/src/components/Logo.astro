@@ -1,0 +1,19 @@
+---
+/* The brand lockup, matching the client's React <Logo>. */
+import { productName } from "@tearleads/ui/brand";
+
+interface Props {
+  class?: string | undefined;
+}
+
+const { class: className } = Astro.props;
+---
+
+<a
+  aria-label={`${productName} home`}
+  class:list={["brand", "siteBrand", className]}
+  href="/"
+>
+  <span aria-hidden="true" class="brandMark">T</span>
+  <span>{productName}</span>
+</a>

@@ -1,0 +1,260 @@
+/* Organization inbox: folder toolbar and the two-pane list/detail reader. */
+.inboxToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-6);
+}
+
+.inboxAddress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.inboxAddressLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+/* Long addresses wrap instead of truncating, and one click selects them. */
+.inboxAddressValue {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.inboxLayout {
+  display: grid;
+  grid-template-columns: clamp(15rem, 36%, 22rem) minmax(0, 1fr);
+  min-height: 34rem;
+  overflow: hidden;
+}
+
+.inboxList {
+  align-content: start;
+  max-height: 46rem;
+  overflow-y: auto;
+}
+
+.inboxItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-5);
+}
+
+.inboxItemHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.inboxItemDate {
+  flex: none;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.inboxItemAttachments {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.inboxNoSubject {
+  color: var(--color-text-subtle);
+  font-weight: 500;
+}
+
+/* A 0 minimum track keeps long attachment names from widening the pane. */
+.inboxDetail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-6);
+  min-width: 0;
+  padding: var(--space-6) var(--space-6) var(--space-8);
+  border-left: 1px solid var(--color-border);
+}
+
+.inboxDetailEmpty {
+  align-content: center;
+}
+
+.inboxMessageHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  padding-bottom: var(--space-6);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.inboxMessageTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+}
+
+.inboxSubject {
+  flex: 1 1 18rem;
+  min-width: 0;
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.inboxMessageAction {
+  flex: none;
+}
+
+.inboxMeta {
+  grid-template-columns: minmax(4.5rem, max-content) minmax(0, 1fr);
+  gap: var(--space-1-5) var(--space-5);
+  font-size: var(--text-sm);
+}
+
+.inboxBody {
+  max-width: 46rem;
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inboxAttachments {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.inboxAttachmentsTitle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  font-weight: 650;
+}
+
+.inboxAttachmentList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.inboxAttachment {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  background: var(--color-surface-sunken);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transition:
+    background-color var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease);
+}
+
+.inboxAttachmentName {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.inboxAttachmentSize {
+  flex: none;
+  color: var(--color-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .inboxFolders {
+    width: 100%;
+  }
+
+  .inboxLayout {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .inboxList {
+    max-height: 20rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .inboxItem {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .inboxDetail {
+    gap: var(--space-5);
+    padding: var(--space-5) var(--space-4) var(--space-6);
+    border-left: 0;
+  }
+
+  .inboxMessageHeader {
+    padding-bottom: var(--space-5);
+  }
+
+  .inboxSubject {
+    font-size: var(--text-xl);
+  }
+
+  .inboxAttachments {
+    padding-top: var(--space-5);
+  }
+}
+
+/* State and descendant selectors come last (noDescendingSpecificity). */
+.inboxAddressLabel > .icon,
+.inboxAttachment > .icon {
+  color: var(--color-text-subtle);
+}
+
+.inboxItem[aria-pressed="true"] {
+  background: var(--color-surface-sunken);
+  box-shadow: inset 3px 0 0 var(--color-ink);
+}
+
+.inboxAttachment:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
+}
+
+/* Keep From/To/Received in two columns on phones, where .keyValue stacks. */
+.inboxMeta dd + dt {
+  margin-top: 0;
+}
+
+/* The list pane scrolls, which clips rings drawn outside each row. */
+.inboxItem:focus-visible {
+  outline-offset: -2px;
+}

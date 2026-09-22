@@ -1,4 +1,22 @@
 import {
+  Avatar,
+  Badge,
+  type BadgeTone,
+  Banner,
+  Button,
+  ButtonLink,
+  Card,
+  cx,
+  EmptyState,
+  Field,
+  Icon,
+  LoadingState,
+  Page,
+  PageBody,
+  PageHeader,
+  PageSection,
+} from "@tearleads/ui/react";
+import {
   type Dispatch,
   type FormEvent,
   type SetStateAction,
@@ -116,6 +134,8 @@ function financeActions(
   };
 }
 
+const setupNoticeId = "finance-setup-notice";
+
 function FinanceView({
   busy,
   data,
@@ -149,28 +169,21 @@ function FinanceView({
     data?.transactions,
     selectedAccount?.id,
   );
+  const unconfigured = data?.configured === false;
 
   return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Connected accounts</p>
-          <h1>Finance</h1>
-        </div>
-        <button
-          className="primaryButton"
-          disabled={busy || data?.configured === false}
-          onClick={() => void onConnect()}
-          type="button"
-        >
-          {busy ? "Working…" : "+ Connect bank"}
-        </button>
-      </header>
-      <section className="content financeContent">
-        {error && <div className="errorBanner">{error}</div>}
-        {notice && <div className="successBanner pageBanner">{notice}</div>}
-        {data?.configured === false && <FinanceSetupNotice />}
-        <FinanceDataNotice />
+    <Page>
+      <FinanceHeader
+        busy={busy}
+        onConnect={onConnect}
+        unconfigured={unconfigured}
+      />
+      <PageBody>
+        <FinanceNotices
+          error={error}
+          notice={notice}
+          unconfigured={unconfigured}
+        />
         <Connections
           busy={busy}
           connections={data?.connections}
@@ -201,24 +214,98 @@ function FinanceView({
           selectedTransactionId={selectedTransactionId}
           transactions={transactions}
         />
-      </section>
-    </>
+      </PageBody>
+    </Page>
+  );
+}
+
+function FinanceHeader({
+  busy,
+  onConnect,
+  unconfigured,
+}: {
+  busy: boolean;
+  onConnect: () => Promise<void>;
+  unconfigured: boolean;
+}) {
+  return (
+    <PageHeader
+      actions={
+        <Button
+          aria-describedby={unconfigured ? setupNoticeId : undefined}
+          busy={busy}
+          disabled={unconfigured}
+          icon="add"
+          onClick={() => void onConnect()}
+          variant="primary"
+        >
+          {busy ? "Working…" : "Connect bank"}
+        </Button>
+      }
+      description="Balances and transactions from your connected institutions, ready for your team to review and annotate."
+      eyebrow="Connected accounts"
+      title="Finance"
+    />
+  );
+}
+
+function FinanceNotices({
+  error,
+  notice,
+  unconfigured,
+}: {
+  error: string | undefined;
+  notice: string | undefined;
+  unconfigured: boolean;
+}) {
+  return (
+    <div className="stack stackMd">
+      {error && <Banner tone="danger">{error}</Banner>}
+      {notice && <Banner tone="success">{notice}</Banner>}
+      {unconfigured && <FinanceSetupNotice />}
+      <FinanceDataNotice />
+    </div>
   );
 }
 
 function FinanceDataNotice() {
   return (
-    <aside className="financeDataNotice">
-      <strong>Before you add an account</strong>
+    <Banner
+      announce={false}
+      icon="lock"
+      title="Before you add an account"
+      tone="neutral"
+    >
       <p>
         Plaid securely connects your institution. Tearleads imports up to 24
         months of account balances and transaction details so authorized
         organization members can review and annotate them. We do not receive
         your bank credentials, never sell customer information, and let you
         disconnect later.{" "}
-        <a href={`${websiteUrl}/privacy`}>Privacy details ↗</a>
+        <ButtonLink
+          href={`${websiteUrl}/privacy`}
+          iconEnd="external"
+          variant="link"
+        >
+          Privacy details
+        </ButtonLink>
       </p>
-    </aside>
+    </Banner>
+  );
+}
+
+function FinanceSetupNotice() {
+  return (
+    <div id={setupNoticeId}>
+      <Banner
+        announce={false}
+        icon="key"
+        title="Plaid setup is incomplete"
+        tone="warning"
+      >
+        Add the Plaid credentials and token-encryption key before connecting.
+      </Banner>
+    </div>
   );
 }
 
@@ -295,85 +382,129 @@ function useOAuthResume(
   }, [complete, resumed, setBusy, setError]);
 }
 
-function Connections({
-  busy,
-  connections,
-  onConnect,
-  onDeleteData,
-  onDisconnect,
-  onSync,
-}: {
+interface ConnectionHandlers {
   busy: boolean;
-  connections: FinanceConnection[] | undefined;
   onConnect: () => Promise<void>;
   onDeleteData: (connection: FinanceConnection) => Promise<void>;
   onDisconnect: (connection: FinanceConnection) => Promise<void>;
   onSync: (id: string) => Promise<void>;
+}
+
+function Connections({
+  connections,
+  ...handlers
+}: ConnectionHandlers & {
+  connections: FinanceConnection[] | undefined;
 }) {
   if (!connections?.length) return null;
   return (
-    <section className="financeConnections">
-      <div className="sectionHeading">
-        <h2>Connections</h2>
-        <span>{connections.length} institutions</span>
+    <PageSection
+      actions={
+        <span className="sectionCount">
+          {countLabel(connections.length, "institution")}
+        </span>
+      }
+      title="Connections"
+    >
+      <Card flush>
+        <ul className="rowList financeConnections">
+          {connections.map((connection) => (
+            <ConnectionRow
+              connection={connection}
+              key={connection.id}
+              {...handlers}
+            />
+          ))}
+        </ul>
+      </Card>
+    </PageSection>
+  );
+}
+
+function ConnectionRow({
+  connection,
+  ...handlers
+}: ConnectionHandlers & { connection: FinanceConnection }) {
+  const name = connection.institutionName ?? "Financial institution";
+  return (
+    <li className="row financeConnection">
+      <Avatar className="financeInstitutionMark" name={name} size="lg" />
+      <div className="rowMain financeConnectionMain">
+        <span className="rowTitle financeConnectionName">{name}</span>
+        <span className="rowMeta financeConnectionMeta">
+          {countLabel(connection.accountCount, "account")} ·{" "}
+          {syncTime(connection)}
+          {connection.status === "error" && connection.errorCode && (
+            <>
+              {" · "}
+              <span className="mono">{connection.errorCode}</span>
+            </>
+          )}
+        </span>
       </div>
-      <div className="financeConnectionList">
-        {connections.map((connection) => (
-          <article key={connection.id}>
-            <span className="financeInstitutionMark">$</span>
-            <div>
-              <strong>
-                {connection.institutionName ?? "Financial institution"}
-              </strong>
-              <small>
-                {connection.accountCount} accounts · {syncTime(connection)}
-              </small>
-            </div>
-            <span className={`financeConnectionStatus ${connection.status}`}>
-              {connection.status}
-            </span>
-            <div className="financeConnectionActions">
-              {connection.status === "disconnected" ? (
-                <>
-                  <button
-                    disabled={busy}
-                    onClick={() => void onConnect()}
-                    type="button"
-                  >
-                    Reconnect
-                  </button>
-                  <button
-                    className="danger"
-                    disabled={busy}
-                    onClick={() => void onDeleteData(connection)}
-                    type="button"
-                  >
-                    Delete data
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    disabled={busy}
-                    onClick={() => void onSync(connection.id)}
-                    type="button"
-                  >
-                    Sync now
-                  </button>
-                  <button
-                    disabled={busy}
-                    onClick={() => void onDisconnect(connection)}
-                    type="button"
-                  >
-                    Disconnect
-                  </button>
-                </>
-              )}
-            </div>
-          </article>
-        ))}
+      <Badge
+        className="financeConnectionStatus"
+        dot
+        tone={connectionTone(connection.status)}
+      >
+        {sentenceCase(connection.status)}
+      </Badge>
+      <ConnectionActions connection={connection} {...handlers} />
+    </li>
+  );
+}
+
+function ConnectionActions({
+  busy,
+  connection,
+  onConnect,
+  onDeleteData,
+  onDisconnect,
+  onSync,
+}: ConnectionHandlers & { connection: FinanceConnection }) {
+  if (connection.status === "disconnected") {
+    return (
+      <div className="rowActions financeConnectionActions">
+        <Button
+          disabled={busy}
+          icon="refresh"
+          onClick={() => void onConnect()}
+          size="sm"
+        >
+          Reconnect
+        </Button>
+        <Button
+          disabled={busy}
+          icon="trash"
+          onClick={() => void onDeleteData(connection)}
+          size="sm"
+          variant="danger"
+        >
+          Delete data
+        </Button>
       </div>
-    </section>
+    );
+  }
+  return (
+    <div className="rowActions financeConnectionActions">
+      <Button
+        disabled={busy}
+        icon="refresh"
+        onClick={() => void onSync(connection.id)}
+        size="sm"
+      >
+        Sync now
+      </Button>
+      <Button
+        disabled={busy}
+        icon="unlink"
+        onClick={() => void onDisconnect(connection)}
+        size="sm"
+        variant="ghost"
+      >
+        Disconnect
+      </Button>
+    </div>
   );
 }
 
@@ -388,145 +519,236 @@ function AccountGrid({
 }) {
   if (!accounts?.length) return null;
   return (
-    <section className="financeAccounts">
-      <div className="sectionHeading">
-        <h2>Accounts</h2>
-        <span>{accounts.length} accounts</span>
-      </div>
-      <div className="financeAccountGrid">
+    <PageSection
+      actions={
+        <span className="sectionCount">
+          {countLabel(accounts.length, "account")}
+        </span>
+      }
+      description="Select an account to filter its transactions."
+      title="Accounts"
+    >
+      <div className="gridAuto financeAccountGrid">
         {accounts.map((account) => (
-          <button
-            aria-pressed={selectedAccountId === account.id}
-            className={`financeAccountCard${
-              selectedAccountId === account.id ? " selected" : ""
-            }`}
+          <AccountCard
+            account={account}
             key={account.id}
-            onClick={() => onSelect(account.id)}
-            type="button"
-          >
-            <span>{account.institutionName ?? account.type}</span>
-            <h3>{account.name}</h3>
-            <strong>
-              {formatMoney(account.currentBalance, account.currencyCode)}
-            </strong>
-            <small>
-              {account.subtype ?? account.type}
-              {account.mask ? ` · •••• ${account.mask}` : ""}
-            </small>
-          </button>
+            onSelect={onSelect}
+            selected={selectedAccountId === account.id}
+          />
         ))}
       </div>
-    </section>
+    </PageSection>
   );
 }
 
-function TransactionHistory({
-  accountName,
-  busy,
-  onAnnotate,
-  onClearFilter,
-  onSelectAnnotation,
-  selectedTransactionId,
-  transactions,
+function AccountCard({
+  account,
+  onSelect,
+  selected,
 }: {
-  accountName: string | undefined;
+  account: FinanceAccount;
+  onSelect: (accountId: string) => void;
+  selected: boolean;
+}) {
+  return (
+    <button
+      aria-pressed={selected}
+      className={cx(
+        "card cardInteractive financeAccount",
+        selected && "cardSelected",
+      )}
+      onClick={() => onSelect(account.id)}
+      type="button"
+    >
+      <span className="financeAccountHeader">
+        <span className="financeAccountInstitution">
+          {account.institutionName ?? account.type}
+        </span>
+        {selected && (
+          <span className="financeAccountCheck">
+            <Icon name="check" size={14} strokeWidth={2.5} />
+          </span>
+        )}
+      </span>
+      <span className="financeAccountName">{account.name}</span>
+      <span className="financeAccountBalance">
+        {formatMoney(account.currentBalance, account.currencyCode)}
+      </span>
+      <span className="financeAccountMeta">
+        {sentenceCase(account.subtype ?? account.type)}
+        {account.mask ? ` · ••••\u00a0${account.mask}` : ""}
+      </span>
+    </button>
+  );
+}
+
+interface AnnotationHandlers {
   busy: boolean;
   onAnnotate: (
     transaction: FinanceTransaction,
     input: FinanceTransactionAnnotationInput,
   ) => Promise<void>;
-  onClearFilter: () => void;
   onSelectAnnotation: (transactionId: string) => void;
   selectedTransactionId: string | undefined;
+}
+
+function TransactionHistory({
+  accountName,
+  onClearFilter,
+  transactions,
+  ...handlers
+}: AnnotationHandlers & {
+  accountName: string | undefined;
+  onClearFilter: () => void;
   transactions: FinanceTransaction[] | undefined;
 }) {
-  const selectedTransaction = transactions?.find(
-    (transaction) => transaction.id === selectedTransactionId,
-  );
   return (
-    <section className="financeTransactions">
-      <div className="sectionHeading">
-        <h2>Transactions</h2>
-        <div className="financeTransactionSummary">
-          <span>
-            {transactions?.length ?? 0}
-            {accountName ? ` for ${accountName}` : " recent"}
-          </span>
-          {accountName && (
-            <button onClick={onClearFilter} type="button">
-              All accounts
-            </button>
-          )}
-        </div>
+    <PageSection
+      actions={
+        (accountName || Boolean(transactions?.length)) && (
+          <div className="cluster">
+            <span className="sectionCount">
+              {transactions?.length ?? 0}
+              {accountName ? ` for ${accountName}` : " recent"}
+            </span>
+            {accountName && (
+              <Button
+                icon="close"
+                onClick={onClearFilter}
+                size="sm"
+                variant="ghost"
+              >
+                All accounts
+              </Button>
+            )}
+          </div>
+        )
+      }
+      title="Transactions"
+    >
+      <TransactionContent
+        accountName={accountName}
+        transactions={transactions}
+        {...handlers}
+      />
+    </PageSection>
+  );
+}
+
+function TransactionContent({
+  accountName,
+  transactions,
+  ...handlers
+}: AnnotationHandlers & {
+  accountName: string | undefined;
+  transactions: FinanceTransaction[] | undefined;
+}) {
+  if (!transactions) return <LoadingState label="Loading finances…" />;
+  if (!transactions.length) {
+    return (
+      <EmptyState
+        icon={accountName ? "search" : "finance"}
+        title={
+          accountName
+            ? `No transactions for ${accountName}`
+            : "No transactions imported yet"
+        }
+      >
+        {accountName
+          ? "Choose another account or show all accounts."
+          : "Connect an account or sync an existing connection."}
+      </EmptyState>
+    );
+  }
+  return (
+    <Card flush>
+      <ul className="rowList financeTransactions">
+        {transactions.map((transaction) => (
+          <TransactionRow
+            key={transaction.id}
+            transaction={transaction}
+            {...handlers}
+          />
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function TransactionRow({
+  busy,
+  onAnnotate,
+  onSelectAnnotation,
+  selectedTransactionId,
+  transaction,
+}: AnnotationHandlers & { transaction: FinanceTransaction }) {
+  const expanded = selectedTransactionId === transaction.id;
+  const formId = `annotation-${transaction.id}`;
+  return (
+    <li className="row financeTransaction">
+      <time
+        className="financeTransactionDate"
+        dateTime={transaction.transactionDate}
+      >
+        {formatDate(transaction.transactionDate)}
+      </time>
+      <div className="rowMain financeTransactionMain">
+        <span className="rowTitle financeTransactionName">
+          {transaction.merchantName ?? transaction.name}
+        </span>
+        <span className="rowMeta financeTransactionMeta">
+          {transaction.accountName} · {category(transaction)}
+        </span>
       </div>
-      {selectedTransaction && (
+      <div className="cluster financeTransactionStatus">
+        {transaction.pending && <Badge tone="warning">Pending</Badge>}
+        {transaction.annotation.reviewed && (
+          <Badge tone="success">Reviewed</Badge>
+        )}
+      </div>
+      <span
+        className={cx(
+          "financeAmount",
+          transaction.amount < 0 && "financeAmountCredit",
+        )}
+      >
+        {formatMoney(-transaction.amount, transaction.currencyCode)}
+      </span>
+      <Button
+        aria-controls={expanded ? formId : undefined}
+        aria-expanded={expanded}
+        className="financeTransactionAction"
+        icon="edit"
+        onClick={() => onSelectAnnotation(transaction.id)}
+        size="sm"
+        variant="ghost"
+      >
+        {hasAnnotation(transaction) ? "Edit note" : "Annotate"}
+      </Button>
+      {expanded && (
         <TransactionAnnotationForm
           busy={busy}
-          key={selectedTransaction.id}
-          onClose={() => onSelectAnnotation(selectedTransaction.id)}
-          onSave={(input) => onAnnotate(selectedTransaction, input)}
-          transaction={selectedTransaction}
+          id={formId}
+          key={transaction.id}
+          onClose={() => onSelectAnnotation(transaction.id)}
+          onSave={(input) => onAnnotate(transaction, input)}
+          transaction={transaction}
         />
       )}
-      {transactions?.length ? (
-        <div className="financeTransactionTable">
-          {transactions.map((transaction) => (
-            <article key={transaction.id}>
-              <time dateTime={transaction.transactionDate}>
-                {formatDate(transaction.transactionDate)}
-              </time>
-              <div>
-                <strong>{transaction.merchantName ?? transaction.name}</strong>
-                <div className="financeTransactionMeta">
-                  <small>
-                    {transaction.accountName} · {category(transaction)}
-                    {transaction.annotation.reviewed ? " · reviewed" : ""}
-                  </small>
-                  <button
-                    aria-expanded={selectedTransactionId === transaction.id}
-                    className="financeAnnotationTrigger"
-                    onClick={() => onSelectAnnotation(transaction.id)}
-                    type="button"
-                  >
-                    {hasAnnotation(transaction) ? "Edit note" : "Annotate"}
-                  </button>
-                </div>
-              </div>
-              {transaction.pending && <span>Pending</span>}
-              <b className={transaction.amount < 0 ? "credit" : "debit"}>
-                {formatMoney(-transaction.amount, transaction.currencyCode)}
-              </b>
-            </article>
-          ))}
-        </div>
-      ) : transactions ? (
-        <div className="emptyState compactEmptyState financeEmptyState">
-          <div className="emptyGlyph">$</div>
-          <h3>
-            {accountName
-              ? `No transactions for ${accountName}.`
-              : "No transactions imported yet."}
-          </h3>
-          <p>
-            {accountName
-              ? "Choose another account or show all accounts."
-              : "Connect an account or sync an existing connection."}
-          </p>
-        </div>
-      ) : (
-        <p className="auditLoading">Loading finances…</p>
-      )}
-    </section>
+    </li>
   );
 }
 
 function TransactionAnnotationForm({
   busy,
+  id,
   onClose,
   onSave,
   transaction,
 }: {
   busy: boolean;
+  id: string;
   onClose: () => void;
   onSave: (input: FinanceTransactionAnnotationInput) => Promise<void>;
   transaction: FinanceTransaction;
@@ -561,49 +783,52 @@ function TransactionAnnotationForm({
 
   return (
     <form
-      className="financeAnnotationForm"
+      aria-label={`Annotation for ${transaction.merchantName ?? transaction.name}`}
+      className="financeAnnotation"
+      id={id}
       onSubmit={(event) => void submit(event)}
     >
-      <div className="financeAnnotationHeading">
-        <div>
-          <span>Transaction annotation</span>
-          <strong>{transaction.merchantName ?? transaction.name}</strong>
-        </div>
-        <button onClick={onClose} type="button">
+      <div className="financeAnnotationHeader">
+        <p className="eyebrow">Transaction annotation</p>
+        <Button icon="close" onClick={onClose} size="sm" variant="ghost">
           Close
-        </button>
+        </Button>
       </div>
-      <div className="financeAnnotationFields">
-        <label>
-          Category override
-          <input
-            maxLength={100}
-            onChange={(event) => setCategoryOverride(event.target.value)}
-            placeholder={transaction.categoryPrimary ?? "Uncategorized"}
-            value={categoryOverride}
+      <div className="formGrid">
+        <div className="formRow">
+          <Field label="Category override">
+            <input
+              className="input"
+              maxLength={100}
+              onChange={(event) => setCategoryOverride(event.target.value)}
+              placeholder={sentenceCase(
+                transaction.categoryPrimary ?? "Uncategorized",
+              )}
+              value={categoryOverride}
+            />
+          </Field>
+          <Field label="Labels">
+            <input
+              className="input"
+              onChange={(event) => setLabels(event.target.value)}
+              placeholder="tax, travel, follow up"
+              value={labels}
+            />
+          </Field>
+        </div>
+        <Field label="Note">
+          <textarea
+            className="textarea"
+            maxLength={2000}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Add context to this transaction…"
+            rows={3}
+            value={note}
           />
-        </label>
-        <label>
-          Labels
-          <input
-            onChange={(event) => setLabels(event.target.value)}
-            placeholder="tax, travel, follow up"
-            value={labels}
-          />
-        </label>
+        </Field>
       </div>
-      <label>
-        Note
-        <textarea
-          maxLength={2000}
-          onChange={(event) => setNote(event.target.value)}
-          placeholder="Add context to this transaction…"
-          rows={3}
-          value={note}
-        />
-      </label>
       <div className="financeAnnotationFooter">
-        <label className="financeReviewedField">
+        <label className="check">
           <input
             checked={reviewed}
             onChange={(event) => setReviewed(event.target.checked)}
@@ -611,26 +836,11 @@ function TransactionAnnotationForm({
           />
           Reviewed
         </label>
-        <button
-          className="primaryButton"
-          disabled={busy || saving}
-          type="submit"
-        >
+        <Button busy={saving} disabled={busy} type="submit" variant="primary">
           {saving ? "Saving…" : "Save annotation"}
-        </button>
+        </Button>
       </div>
     </form>
-  );
-}
-
-function FinanceSetupNotice() {
-  return (
-    <div className="financeSetupNotice">
-      <strong>Plaid setup is incomplete.</strong>
-      <p>
-        Add the Plaid credentials and token-encryption key before connecting.
-      </p>
-    </div>
   );
 }
 
@@ -686,13 +896,27 @@ function syncTime(connection: FinanceConnection) {
 }
 
 function category(transaction: FinanceTransaction) {
-  return (
+  return sentenceCase(
     transaction.annotation.categoryOverride ??
-    transaction.categoryPrimary ??
-    "Uncategorized"
-  )
-    .toLowerCase()
-    .replaceAll("_", " ");
+      transaction.categoryPrimary ??
+      "Uncategorized",
+  );
+}
+
+/** Formats raw values such as "FOOD_AND_DRINK" as "Food and drink". */
+function sentenceCase(value: string) {
+  const words = value.toLowerCase().replaceAll("_", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function countLabel(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function connectionTone(status: string): BadgeTone {
+  if (status === "active") return "success";
+  if (status === "error") return "danger";
+  return "neutral";
 }
 
 function hasAnnotation(transaction: FinanceTransaction) {

@@ -1,0 +1,94 @@
+/* Businesses: create form, business rows, and inline editing. */
+
+/* One grid for the create form and the inline editor: name, EIN, and
+ * incorporation date on the first line; the address on the second. */
+.businessFields {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.businessFieldWide {
+  grid-column: span 4;
+}
+
+.businessFieldHalf {
+  grid-column: span 2;
+}
+
+.businessFieldQuarter {
+  grid-column: span 1;
+}
+
+.businessSummary {
+  display: flex;
+  flex: 1 1 18rem;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.businessMark {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  place-items: center;
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+}
+
+.businessEditRow {
+  background: var(--color-surface-sunken);
+}
+
+.businessEditForm {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.businessEditActions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 1100px) {
+  .businessFields {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .businessFields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .businessFieldWide,
+  .businessFieldHalf {
+    grid-column: 1 / -1;
+  }
+
+  .businessRowActions {
+    padding-left: calc(2.25rem + var(--space-3));
+  }
+}
+
+/* The inline editor sits inside a row, so it tightens the field rhythm. */
+.businessEditForm .businessFields {
+  gap: var(--space-3);
+}
+
+/* The card does not clip its children, so the tinted editor row follows the
+ * card's inner corners itself. */
+.businessEditRow:first-child {
+  border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0;
+}
+
+.businessEditRow:last-child {
+  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
+}
+
+.businessEditRow:only-child {
+  border-radius: calc(var(--radius-lg) - 1px);
+}

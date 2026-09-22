@@ -26,7 +26,6 @@ export function useOrganizationAccess(
 ) {
   const requestSequence = useRef(0);
   const [state, setState] = useState<AccessState>();
-  const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string>();
   const [requirementState, setRequirementState] = useState<RequirementState>();
   const refresh = useCallback(async () => {
@@ -35,15 +34,13 @@ export function useOrganizationAccess(
       setState(undefined);
       setLoadError(undefined);
       setRequirementState(undefined);
-      setLoading(false);
       return;
     }
-    setLoading(true);
     setLoadError(undefined);
-    setRequirementState(undefined);
     try {
       const result = await getOrganizationAccess();
       if (requestId !== requestSequence.current) return;
+      setRequirementState(undefined);
       setState({
         capabilities: result.capabilities,
         memberRole: result.memberRole,
@@ -69,8 +66,6 @@ export function useOrganizationAccess(
         ownerCount: 0,
         userId,
       });
-    } finally {
-      if (requestId === requestSequence.current) setLoading(false);
     }
   }, [organizationId, userId]);
   useEffect(() => {
@@ -92,7 +87,9 @@ export function useOrganizationAccess(
   return {
     can: (capability: OrganizationCapability) =>
       current?.capabilities.includes(capability) ?? false,
-    isPending: Boolean(userId && organizationId && (!current || loading)),
+    // Pending only until this user and organization first resolve; later
+    // refreshes keep the current screen instead of blanking the workspace.
+    isPending: Boolean(userId && organizationId && !current),
     loadError,
     memberRole: current?.memberRole || undefined,
     ownerCount: current?.ownerCount ?? 0,

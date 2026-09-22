@@ -1,0 +1,675 @@
+/* Landing page sections. */
+.band {
+  padding-block: var(--space-24);
+}
+
+.bandSunken {
+  border-block: 1px solid var(--color-border-subtle);
+  background: var(--color-paper-muted);
+}
+
+.bandInk {
+  background: var(--color-ink);
+}
+
+.bandIntro {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+  max-width: 44rem;
+  margin-bottom: var(--space-12);
+}
+
+@media (min-width: 721px) {
+  .titleBreak {
+    display: block;
+  }
+}
+
+.bandIntroCenter {
+  justify-items: center;
+  margin-inline: auto;
+  text-align: center;
+}
+
+/* Hero. */
+.hero {
+  padding-block: var(--space-16) var(--space-4);
+}
+
+.heroInner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr);
+  align-items: center;
+  gap: var(--space-16);
+}
+
+.heroCopy {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-6);
+}
+
+.heroTitle .serifAccent {
+  display: block;
+  color: var(--color-green);
+}
+
+.heroLead {
+  max-width: 34rem;
+}
+
+.heroActions {
+  --cluster-gap: var(--space-3);
+
+  margin-top: var(--space-2);
+}
+
+.heroNote {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+}
+
+/* Product preview: a miniature of the client's audit screen. */
+.auditPreview {
+  overflow: hidden;
+  padding: var(--space-10) 0 0 var(--space-10);
+  border: 1px solid var(--color-lime-border);
+  border-radius: var(--radius-2xl);
+  background: var(--color-lime-soft);
+}
+
+.previewFrame {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: var(--radius-xl) 0 0;
+  background: var(--color-paper);
+  box-shadow: var(--shadow-lg);
+}
+
+.previewRail {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: var(--space-1);
+  padding: var(--space-4) 0;
+  background: var(--color-ink);
+}
+
+.previewRail .brandMark {
+  margin-bottom: var(--space-4);
+}
+
+.previewRailItem {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-md);
+  place-items: center;
+  color: var(--color-text-inverse-muted);
+}
+
+.previewRailItem[data-active="true"] {
+  color: var(--color-lime);
+  background: var(--color-ink-hover);
+}
+
+.previewMain {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-5) var(--space-6) var(--space-6) var(--space-5);
+}
+
+.previewHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.previewTitle {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+}
+
+.previewSection {
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--color-surface-sunken);
+}
+
+.previewSectionTitle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  font-weight: 650;
+}
+
+.previewSectionTitle .mono {
+  font-size: var(--text-xs);
+}
+
+.previewRow {
+  padding: var(--space-3) var(--space-4);
+}
+
+.previewRow .rowMain {
+  flex-basis: 12rem;
+}
+
+.previewPrompt {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  line-height: var(--leading-snug);
+}
+
+.previewIssue {
+  display: grid;
+  gap: var(--space-2-5);
+  padding: var(--space-4);
+  border-left: 3px solid var(--color-danger-border);
+}
+
+.previewIssueTitle {
+  font-size: var(--text-base);
+  font-weight: 650;
+  line-height: var(--leading-snug);
+}
+
+.previewPhotos {
+  --cluster-gap: var(--space-1-5);
+}
+
+.previewPhoto {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  place-items: center;
+  color: var(--color-text-subtle);
+  background: var(--color-surface-sunken);
+}
+
+.previewPhotos .textXs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: var(--space-1);
+}
+
+/* Product features. */
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.featureCard {
+  display: grid;
+  align-content: start;
+  gap: var(--space-6);
+  padding: var(--space-6);
+}
+
+.featureWide {
+  grid-column: span 2;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  align-items: center;
+}
+
+.featureText {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+
+.featureHead {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+}
+
+.featureIcon {
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid var(--color-lime-border);
+  border-radius: var(--radius-md);
+  place-items: center;
+  color: var(--color-green-deep);
+  background: var(--color-lime-soft);
+}
+
+.cardAccent .featureIcon {
+  background: var(--color-surface);
+}
+
+.featureTitle {
+  color: var(--color-text);
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: var(--tracking-tight);
+}
+
+.featureVisual .row {
+  flex-wrap: nowrap;
+  padding: var(--space-3) var(--space-4);
+}
+
+.featureVisual .rowMain {
+  flex-basis: 9rem;
+}
+
+/* How it works. */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  border: 1px solid var(--color-ink-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-ink-raised);
+}
+
+.stepHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.stepNumber {
+  color: var(--color-lime);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.stepIcon {
+  color: var(--color-text-inverse-muted);
+}
+
+.stepTitle {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+}
+
+.stepText {
+  color: var(--color-text-inverse-muted);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+
+.startingPoints {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: var(--space-4) var(--space-8);
+  margin-top: var(--space-12);
+  padding-top: var(--space-8);
+  border-top: 1px solid var(--color-ink-line);
+}
+
+.startingPointsTitle {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.startingPointsList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4) var(--space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.startingPointsList li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  color: var(--color-text-inverse);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+
+.startingPointsList .icon {
+  margin-top: var(--space-0-5);
+  color: var(--color-lime);
+}
+
+.finePrint {
+  grid-column: 2;
+  color: var(--color-text-inverse-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+/* Principles. */
+.principles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.principle {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border-strong);
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+
+.principleNumber {
+  margin-bottom: var(--space-4);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.principleTitle {
+  color: var(--color-text);
+  font-size: var(--text-lg);
+  font-weight: 650;
+}
+
+.principleLink {
+  justify-self: start;
+  margin-top: var(--space-2);
+  font-size: var(--text-base);
+}
+
+/* Pricing. */
+.pricingGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  max-width: 50rem;
+  margin-inline: auto;
+}
+
+/* Cards share row tracks so prices, lists, and buttons line up. */
+.priceCard {
+  display: grid;
+  grid-row: span 4;
+  grid-template-rows: subgrid;
+  gap: var(--space-6);
+  padding: var(--space-8);
+}
+
+.priceCardHead {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+}
+
+.priceName {
+  font-size: var(--text-xl);
+  font-weight: 650;
+}
+
+.priceDescription {
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+}
+
+.price {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.priceAmount {
+  font-size: var(--text-4xl);
+  font-weight: 500;
+  letter-spacing: var(--tracking-display);
+  line-height: 1;
+}
+
+.priceCadence {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+}
+
+.priceFeatures {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2-5);
+  margin: 0;
+  padding: var(--space-6) 0 0;
+  border-top: 1px solid var(--color-border);
+  list-style: none;
+}
+
+.cardAccent .priceFeatures {
+  border-top-color: var(--color-lime-border);
+}
+
+.priceFeatures li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2-5);
+  color: var(--color-text);
+  font-size: var(--text-base);
+}
+
+.priceFeatures .icon {
+  margin-top: var(--space-0-5);
+  color: var(--color-green);
+}
+
+.pricingNote {
+  max-width: 34rem;
+  margin: var(--space-8) auto 0;
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+/* Closing call to action. */
+.closingPanel {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-5);
+  padding: var(--space-20) var(--space-8);
+  border-radius: var(--radius-2xl);
+  background: var(--color-lime);
+  text-align: center;
+}
+
+.closingPanel .eyebrow {
+  color: var(--color-green-deep);
+}
+
+.closingPanel .eyebrowDot::before {
+  background: var(--color-ink);
+  box-shadow: none;
+}
+
+.closingLead {
+  max-width: 30rem;
+  color: var(--color-ink-line);
+}
+
+.closingActions {
+  --cluster-gap: var(--space-3);
+
+  justify-content: center;
+  margin-top: var(--space-3);
+}
+
+/* Responsive. */
+@media (max-width: 1080px) {
+  .heroInner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-12);
+  }
+
+  .heroCopy {
+    max-width: 44rem;
+  }
+}
+
+@media (max-width: 960px) {
+  .featureGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .featureWide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .featureWide:last-child {
+    grid-column: auto;
+  }
+
+  /* Beside the short Businesses card, the finance sample only adds height. */
+  .featureWide:last-child .featureVisual {
+    display: none;
+  }
+
+  .steps,
+  .principles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .step {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--space-5);
+  }
+
+  .stepHead {
+    grid-row: span 2;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: var(--space-3);
+    margin-bottom: 0;
+    padding-top: var(--space-1);
+  }
+
+  .principles {
+    gap: var(--space-6);
+  }
+
+  .principleNumber {
+    margin-bottom: var(--space-1);
+  }
+
+  .startingPoints {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .finePrint {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .band {
+    padding-block: var(--space-16);
+  }
+
+  .hero {
+    padding-block: var(--space-10) var(--space-16);
+  }
+
+  .bandIntro {
+    margin-bottom: var(--space-8);
+  }
+
+  .auditPreview {
+    padding: var(--space-5) 0 0 var(--space-5);
+  }
+
+  .previewFrame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .previewRail {
+    display: none;
+  }
+
+  .previewMain {
+    padding: var(--space-4) var(--space-4) var(--space-5);
+  }
+
+  .featureGrid,
+  .pricingGrid,
+  .startingPointsList {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .featureWide {
+    grid-column: auto;
+  }
+
+  .featureWide:last-child .featureVisual {
+    display: block;
+  }
+
+  .featureCard {
+    gap: var(--space-5);
+    padding: var(--space-5);
+  }
+
+  .featureHead {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .step {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--space-5);
+  }
+
+  .stepHead {
+    grid-row: auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-2);
+    padding-top: 0;
+  }
+
+  .priceCard {
+    padding: var(--space-6);
+  }
+
+  .closingPanel {
+    padding: var(--space-16) var(--space-5);
+  }
+}

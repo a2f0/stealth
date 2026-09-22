@@ -1,0 +1,72 @@
+/* Platform administration: user and organization tables. */
+
+.adminIdentity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.adminIdentityText {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.adminIdentityName {
+  color: var(--color-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.adminIdentityDetail,
+.adminSlug {
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adminIdentityDetail {
+  font-size: var(--text-sm);
+}
+
+.adminSlug {
+  max-width: 13rem;
+  font-size: var(--text-xs);
+}
+
+.adminOrganization {
+  min-width: 11rem;
+}
+
+.adminOrganizationName {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.adminStatus {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.adminDate {
+  white-space: nowrap;
+}
+
+.adminActions {
+  text-align: right;
+}
+
+.adminNumeric {
+  text-align: right;
+}
+
+/* The organization table has seven columns, so long owner and actor emails
+ * truncate (full value on hover) to keep it inside the page on desktop;
+ * phones scroll inside the table wrapper. */
+.adminOrganizationTable .adminIdentityDetail {
+  max-width: 13rem;
+}

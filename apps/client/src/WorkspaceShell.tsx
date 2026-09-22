@@ -1,7 +1,11 @@
+import { Icon, type IconName, Logo } from "@tearleads/ui/react";
 import {
   type CSSProperties,
   type MouseEvent,
   type ReactNode,
+  type RefObject,
+  useEffect,
+  useRef,
   useState,
 } from "react";
 import { AccountControl } from "./AccountControl";
@@ -18,18 +22,20 @@ export interface WorkspaceUser {
   twoFactorEnabled?: boolean | null | undefined;
 }
 
+type WorkspacePage =
+  | "admin"
+  | "account"
+  | "audits"
+  | "businesses"
+  | "finance"
+  | "inbox"
+  | "library"
+  | "organization";
+
 interface WorkspaceShellProps {
   accountLoadError: string | undefined;
   accounts: AccountSession[];
-  activePage:
-    | "admin"
-    | "account"
-    | "audits"
-    | "businesses"
-    | "finance"
-    | "inbox"
-    | "library"
-    | "organization";
+  activePage: WorkspacePage;
   activeOrganizationId: string | undefined;
   activeSessionToken: string;
   canAccessFinance: boolean;
@@ -47,15 +53,43 @@ interface WorkspaceShellProps {
   user: WorkspaceUser;
 }
 
+interface NavigationItem {
+  href: string;
+  icon: IconName;
+  label: string;
+  page: WorkspacePage;
+}
+
 export function WorkspaceShell({
+  children,
+  contentKey,
+  ...sidebar
+}: WorkspaceShellProps) {
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const shellStyle = {
+    "--sidebar-width": `${sidebarWidth}px`,
+  } as CSSProperties;
+  return (
+    <div className="shell" style={shellStyle}>
+      <Sidebar {...sidebar} />
+      <SidebarResizeHandle
+        onWidthChange={setSidebarWidth}
+        width={sidebarWidth}
+      />
+      <main className="shellMain" key={contentKey}>
+        {children}
+      </main>
+    </div>
+  );
+}
+
+function Sidebar({
   accountLoadError,
   accounts,
   activePage,
   activeOrganizationId,
   activeSessionToken,
   canAccessFinance,
-  children,
-  contentKey,
   onAccountChange,
   onAccountSecurity,
   onAddAccount,
@@ -66,120 +100,174 @@ export function WorkspaceShell({
   onSignOut,
   organizations,
   user,
-}: WorkspaceShellProps) {
-  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
-  const shellStyle = {
-    "--sidebar-width": `${sidebarWidth}px`,
-  } as CSSProperties;
+}: Omit<WorkspaceShellProps, "children" | "contentKey">) {
+  const [open, setOpen] = useState(false);
+  const sidebar = useRef<HTMLElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  useNavigationDismissal(open, sidebar, toggle, () => setOpen(false));
+  const navigate = (pathname: string) => {
+    setOpen(false);
+    onNavigate(pathname);
+  };
+  const groups = navigationFor(canAccessFinance, hasRole(user.role, "admin"));
   return (
-    <div className="shell" style={shellStyle}>
-      <aside className="sidebar">
-        <a
-          aria-label="Tearleads home"
-          className="brand"
-          href="/"
-          onClick={(event) => handleNavigation(event, "/", onNavigate)}
-        >
-          <span className="brandMark">T</span>
-          <span>Tearleads</span>
-        </a>
-        <OrganizationSwitcher
-          activeOrganizationId={activeOrganizationId}
-          onOrganizationChange={onOrganizationChange}
-          onOrganizationCreate={onOrganizationCreate}
-          organizations={organizations}
-        />
-        <nav aria-label="Workspace">
+    <aside className="sidebar onDark" data-open={open} ref={sidebar}>
+      <div className="sidebarInner">
+        <div className="sidebarTop">
           <a
-            className={activePage === "library" ? "navItem active" : "navItem"}
+            aria-label="Tearleads home"
+            className="sidebarBrand"
             href="/"
-            onClick={(event) => handleNavigation(event, "/", onNavigate)}
+            onClick={(event) => handleNavigation(event, "/", navigate)}
           >
-            <span className="navIcon">⌁</span> Library
+            <Logo />
           </a>
-          <a
-            className={activePage === "audits" ? "navItem active" : "navItem"}
-            href="/audits"
-            onClick={(event) => handleNavigation(event, "/audits", onNavigate)}
+          <button
+            aria-controls="workspace-navigation"
+            aria-expanded={open}
+            aria-label={open ? "Close navigation" : "Open navigation"}
+            className="button buttonGhost buttonIconOnly sidebarToggle"
+            onClick={() => setOpen(!open)}
+            ref={toggle}
+            type="button"
           >
-            <span className="navIcon">✓</span> Audits
-          </a>
-          {canAccessFinance && (
-            <a
-              className={
-                activePage === "finance" ? "navItem active" : "navItem"
-              }
-              href="/finance"
-              onClick={(event) =>
-                handleNavigation(event, "/finance", onNavigate)
-              }
-            >
-              <span className="navIcon">$</span> Finance
-            </a>
-          )}
-          <a
-            className={
-              activePage === "businesses" ? "navItem active" : "navItem"
-            }
-            href="/businesses"
-            onClick={(event) =>
-              handleNavigation(event, "/businesses", onNavigate)
-            }
-          >
-            <span className="navIcon">▦</span> Businesses
-          </a>
-          <a
-            className={
-              activePage === "organization" ? "navItem active" : "navItem"
-            }
-            href="/organization"
-            onClick={(event) =>
-              handleNavigation(event, "/organization", onNavigate)
-            }
-          >
-            <span className="navIcon">◇</span> Organization
-          </a>
-          <a
-            className={activePage === "inbox" ? "navItem active" : "navItem"}
-            href="/inbox"
-            onClick={(event) => handleNavigation(event, "/inbox", onNavigate)}
-          >
-            <span className="navIcon">✉</span> Inbox
-          </a>
-          {hasRole(user.role, "admin") && (
-            <a
-              className={activePage === "admin" ? "navItem active" : "navItem"}
-              href="/admin"
-              onClick={(event) => handleNavigation(event, "/admin", onNavigate)}
-            >
-              <span className="navIcon">◎</span> Users
-            </a>
-          )}
-        </nav>
-        <div className="sidebarFoot">
-          <span className="statusDot" /> Cloudflare connected
+            <Icon name={open ? "close" : "menu"} size={20} />
+          </button>
         </div>
-        <AccountControl
-          accounts={accounts}
-          activeSessionToken={activeSessionToken}
-          loadError={accountLoadError}
-          onAddAccount={onAddAccount}
-          onSecurity={onAccountSecurity}
-          onRefreshAccounts={onRefreshAccounts}
-          onSignOut={onSignOut}
-          onSwitchAccount={onAccountChange}
-          user={user}
-        />
-      </aside>
-
-      <SidebarResizeHandle
-        onWidthChange={setSidebarWidth}
-        width={sidebarWidth}
-      />
-
-      <main key={contentKey}>{children}</main>
-    </div>
+        <div className="sidebarPanel" id="workspace-navigation">
+          <OrganizationSwitcher
+            activeOrganizationId={activeOrganizationId}
+            onOrganizationChange={onOrganizationChange}
+            onOrganizationCreate={onOrganizationCreate}
+            organizations={organizations}
+          />
+          <nav aria-label="Workspace" className="sidebarNav">
+            {groups.map((group) => (
+              <div className="navGroup" key={group.label ?? "main"}>
+                {group.label && <p className="navGroupLabel">{group.label}</p>}
+                {group.items.map((item) => (
+                  <a
+                    aria-current={activePage === item.page ? "page" : undefined}
+                    className="navItem"
+                    href={item.href}
+                    key={item.href}
+                    onClick={(event) =>
+                      handleNavigation(event, item.href, navigate)
+                    }
+                  >
+                    <Icon name={item.icon} size={18} />
+                    {item.label}
+                  </a>
+                ))}
+              </div>
+            ))}
+          </nav>
+          <div className="sidebarFooter">
+            <AccountControl
+              accounts={accounts}
+              activeSessionToken={activeSessionToken}
+              loadError={accountLoadError}
+              onAddAccount={onAddAccount}
+              onRefreshAccounts={onRefreshAccounts}
+              onSecurity={() => {
+                setOpen(false);
+                onAccountSecurity();
+              }}
+              onSignOut={onSignOut}
+              onSwitchAccount={onAccountChange}
+              user={user}
+            />
+          </div>
+        </div>
+      </div>
+    </aside>
   );
+}
+
+/**
+ * The phone navigation panel closes on Escape (unless a menu inside it owns
+ * the key) and when focus moves into the page, so it never covers the
+ * focused control.
+ */
+function useNavigationDismissal(
+  open: boolean,
+  sidebar: RefObject<HTMLElement | null>,
+  toggle: RefObject<HTMLButtonElement | null>,
+  close: () => void,
+) {
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[role="menu"]')
+      ) {
+        return;
+      }
+      close();
+      toggle.current?.focus();
+    };
+    const closeWhenFocusLeaves = (event: FocusEvent) => {
+      if (
+        event.target instanceof Node &&
+        !sidebar.current?.contains(event.target)
+      ) {
+        close();
+      }
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("focusin", closeWhenFocusLeaves);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("focusin", closeWhenFocusLeaves);
+    };
+  }, [close, open, sidebar, toggle]);
+}
+
+function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
+  const workspace: NavigationItem[] = [
+    { href: "/", icon: "library", label: "Library", page: "library" },
+    { href: "/audits", icon: "audits", label: "Audits", page: "audits" },
+    { href: "/inbox", icon: "inbox", label: "Inbox", page: "inbox" },
+  ];
+  const records: NavigationItem[] = [
+    {
+      href: "/businesses",
+      icon: "businesses",
+      label: "Businesses",
+      page: "businesses",
+    },
+  ];
+  if (canAccessFinance) {
+    records.push({
+      href: "/finance",
+      icon: "finance",
+      label: "Finance",
+      page: "finance",
+    });
+  }
+  const manage: NavigationItem[] = [
+    {
+      href: "/organization",
+      icon: "organization",
+      label: "Organization",
+      page: "organization",
+    },
+  ];
+  if (isAdmin) {
+    manage.push({
+      href: "/admin",
+      icon: "shield",
+      label: "Users",
+      page: "admin",
+    });
+  }
+  return [
+    { items: workspace, label: undefined },
+    { items: records, label: "Records" },
+    { items: manage, label: "Manage" },
+  ];
 }
 
 function OrganizationSwitcher({
@@ -198,14 +286,15 @@ function OrganizationSwitcher({
   if (organizations.length === 0 || !activeOrganizationId) {
     return (
       <div className="organizationSwitcher">
-        <span>Organization</span>
+        <span className="organizationSwitcherLabel">Organization</span>
         <button
-          className="organizationCreateButton"
+          className="button buttonSm buttonBlock organizationCreateButton"
           disabled={busy}
           onClick={() => void select("create")}
           type="button"
         >
-          {busy ? "Creating…" : "Create organization…"}
+          <Icon name="add" size={16} />
+          {busy ? "Creating…" : "Create organization"}
         </button>
         {error && <small role="alert">{error}</small>}
       </div>
@@ -241,10 +330,11 @@ function OrganizationSwitcher({
 
   return (
     <div className="organizationSwitcher">
-      <label>
-        <span>Organization</span>
+      <label className="field">
+        <span className="organizationSwitcherLabel">Organization</span>
         <select
           aria-label="Active organization"
+          className="select inputSm"
           disabled={busy}
           onChange={(event) => void select(event.target.value)}
           value={activeOrganizationId}

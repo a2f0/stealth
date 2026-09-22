@@ -1,0 +1,473 @@
+/*
+ * Audit run: the field checklist, its progress summary, and the issues
+ * raised while auditing. Shared components come from @tearleads/ui.
+ */
+
+/* Header. */
+.runBack {
+  margin-left: calc(var(--space-2-5) * -1);
+}
+
+.runStatus {
+  font-family: var(--font-sans);
+  text-transform: none;
+}
+
+.runActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Progress summary. */
+.runProgressLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-5) var(--space-8);
+}
+
+.runProgressMain {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2-5);
+}
+
+.runProgressHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+}
+
+.runProgressValue {
+  color: var(--color-text);
+  font-size: var(--text-lg);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+}
+
+.runProgressPercent {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.runProgressTrack {
+  height: var(--space-2);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--color-paper-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+}
+
+.runProgressFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-green);
+  transition: width var(--duration) var(--ease);
+}
+
+.runProgressNote {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.runProgressDone {
+  color: var(--color-success-fg);
+  font-weight: 600;
+}
+
+.runProgressHint {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.runStats {
+  display: grid;
+  grid-auto-columns: minmax(6.5rem, auto);
+  grid-auto-flow: column;
+  align-self: stretch;
+}
+
+.runStats > div {
+  display: grid;
+  align-content: center;
+  gap: var(--space-0-5);
+  padding-inline: var(--space-6);
+  border-left: 1px solid var(--color-border-subtle);
+}
+
+.runStats > div:last-child {
+  padding-right: 0;
+}
+
+.runStats dt {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.runStats dd {
+  color: var(--color-text);
+  font-size: var(--text-2xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+}
+
+.runStatDanger dd {
+  color: var(--color-danger-fg);
+}
+
+/* Checklist sections. */
+.runSections {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.runSection {
+  overflow: hidden;
+}
+
+.runSectionTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.runSectionNumber {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  min-width: var(--space-8);
+  height: var(--space-6);
+  padding-inline: var(--space-1-5);
+  border-radius: var(--radius-sm);
+  color: var(--color-lime);
+  background: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.runSectionCount {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.runSectionDone {
+  color: var(--color-success-fg);
+  font-weight: 600;
+}
+
+/* Questions. */
+.runQuestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem);
+  align-items: center;
+  gap: var(--space-3) var(--space-8);
+  transition: background-color var(--duration-fast) var(--ease);
+}
+
+.runQuestionWritten {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.runQuestionFailed {
+  background: color-mix(in srgb, var(--color-danger-bg) 55%, transparent);
+  box-shadow: inset var(--space-0-5) 0 0 var(--color-danger);
+}
+
+.runQuestionBody {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.runQuestionNumber {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: var(--space-6);
+  height: var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0;
+}
+
+.runQuestionCopy {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-0-5);
+  padding-top: var(--space-0-5);
+}
+
+.runQuestionPrompt {
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.runRequired {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.runAnswer {
+  width: calc(100% - var(--space-6) - var(--space-3));
+  margin-left: calc(var(--space-6) + var(--space-3));
+}
+
+/* Pass / Fail / N/A. */
+.runChoices > button {
+  min-height: var(--space-8);
+}
+
+.runChoices > button[aria-pressed="false"]:hover {
+  background: var(--color-surface-hover);
+}
+
+/* Issues. */
+.runIssueSubmit {
+  margin-left: auto;
+}
+
+.runImagePicker {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.runImagePickerControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.runFilePicker {
+  position: relative;
+  justify-self: start;
+  cursor: pointer;
+}
+
+.runFilePicker:has(:focus-visible) {
+  outline: var(--space-0-5) solid var(--focus-color);
+  outline-offset: var(--space-0-5);
+}
+
+.runFilePicker:has(:disabled) {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.runAttach {
+  margin-left: calc(var(--space-2-5) * -1);
+}
+
+.runThumbs {
+  display: grid;
+  grid-template-columns: repeat(
+      auto-fill,
+      minmax(min(100%, var(--space-24)), var(--space-32))
+    );
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runThumb {
+  display: grid;
+  position: relative;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.runThumbLink {
+  display: block;
+  border-radius: var(--radius-md);
+}
+
+.runThumbImage {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+  object-fit: cover;
+}
+
+.runThumbPlaceholder {
+  display: grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+}
+
+.runThumbName {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runThumbRemove {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  box-shadow: var(--shadow-sm);
+}
+
+.runIssue {
+  align-items: flex-start;
+}
+
+.runIssueMain {
+  gap: var(--space-2);
+}
+
+.runIssueTitle {
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.runIssueDescription {
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.runIssueImages {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.runIssueActions {
+  flex: none;
+}
+
+.runAssignee {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.runAssigneeSelect {
+  width: 12rem;
+}
+
+/* The phone action bar repeats the save result; wider screens show the banners. */
+.runActionsFeedback {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  /* Leave room for the fixed action bar when focus scrolls a control into view. */
+  html:has(.runActions) {
+    scroll-padding-bottom: calc(var(--space-32) + env(safe-area-inset-bottom));
+  }
+
+  /* Keep saving within thumb reach while working through a long checklist. */
+  .runActions {
+    display: grid;
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: var(--z-sticky);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: var(--space-3) var(--page-gutter)
+      calc(var(--space-3) + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+
+  .runActionsFeedback {
+    display: block;
+    grid-column: 1 / -1;
+    color: var(--color-success-fg);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    line-height: var(--leading-snug);
+  }
+
+  .runActionsFeedbackDanger {
+    color: var(--color-danger-fg);
+  }
+
+  .runBody {
+    padding-bottom: var(--space-32);
+  }
+
+  .runProgressLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runStats {
+    grid-auto-columns: minmax(0, 1fr);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .runStats > div:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .runQuestion {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runAnswer {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .runChoices > button {
+    min-height: var(--space-10);
+    font-size: var(--text-base);
+  }
+
+  .runIssueSubmit {
+    width: 100%;
+  }
+
+  .runIssueActions {
+    width: 100%;
+  }
+
+  .runAssignee {
+    flex: 1;
+  }
+
+  .runAssigneeSelect {
+    width: 100%;
+  }
+}
