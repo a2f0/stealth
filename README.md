@@ -132,8 +132,19 @@ The organization-scoped Finance page at `/finance` uses
 and [Transactions Sync](https://plaid.com/docs/api/products/transactions/) to
 import up to 24 months of account and transaction history. Syncing is manual in
 this first release; Plaid webhooks can be added later for automatic updates.
-Users can add organization-scoped notes, category overrides, labels, and a
-reviewed flag to imported transactions.
+Users can add organization-scoped notes, labels, and a reviewed flag to
+imported transactions.
+
+Each organization keeps its own list of expense categories at
+`/finance/categories` (with a one-click common set), and each transaction can
+have at most one category, chosen inline in the transaction list. Deleting a
+category leaves its transactions uncategorized. `/finance/reports` totals
+expenses by category over a period: posted outflows count as spending, refunds
+assigned to a category reduce it, and unassigned transfers and loan or card
+payments are reported separately so money moved between the organization's own
+accounts is not double-counted. Totals are grouped by currency. Earlier
+free-text category overrides were converted into categories by migration
+`0034`.
 
 Disconnecting an institution calls Plaid's `/item/remove`, erases the stored
 access token, and retains the imported history and annotations. A later Link

@@ -1,5 +1,15 @@
-import { type Context, Hono } from "hono";
-import type { AuthVariables } from "./authMiddleware";
+import { Hono } from "hono";
+import {
+  addDefaultCategories,
+  assignTransactionCategory,
+  createCategory,
+  deleteCategory,
+  listCategories,
+  listExpenseCategories,
+  renameCategory,
+} from "./financeCategories";
+import type { FinanceContext, FinanceEnv } from "./financeContext";
+import { expenseReport } from "./financeReports";
 import { type PlaidItemRow, syncPlaidItem } from "./financeSync";
 import { PlaidApiError, type PlaidRequest, plaidRequest } from "./plaid";
 import { decryptToken, encryptToken } from "./plaidCrypto";
@@ -33,7 +43,7 @@ interface TransactionRow {
   account_id: string;
   account_name: string;
   amount: number;
-  annotation_category_override: string | null;
+  annotation_expense_category_id: string | null;
   annotation_labels: string | null;
   annotation_note: string | null;
   annotation_reviewed: number | null;
@@ -67,14 +77,12 @@ interface FinanceInput {
 }
 
 interface AnnotationInput {
-  categoryOverride?: unknown;
   labels?: unknown;
   note?: unknown;
   reviewed?: unknown;
 }
 
 interface Annotation {
-  categoryOverride: string | null;
   labels: string[];
   note: string;
   reviewed: boolean;
@@ -83,12 +91,6 @@ interface Annotation {
 interface LinkTokenRequest extends Record<string, unknown> {
   redirect_uri?: string;
 }
-
-type FinanceEnv = {
-  Bindings: Bindings;
-  Variables: AuthVariables;
-};
-type FinanceContext = Context<FinanceEnv>;
 
 export function createFinanceRouter(requestPlaid: PlaidRequest = plaidRequest) {
   const finance = new Hono<FinanceEnv>();
@@ -108,6 +110,13 @@ export function createFinanceRouter(requestPlaid: PlaidRequest = plaidRequest) {
   );
   finance.delete("/connections/:id/data", deleteConnectionData);
   finance.patch("/transactions/:id/annotation", updateTransactionAnnotation);
+  finance.put("/transactions/:id/category", assignTransactionCategory);
+  finance.get("/categories", listCategories);
+  finance.post("/categories", createCategory);
+  finance.post("/categories/defaults", addDefaultCategories);
+  finance.patch("/categories/:id", renameCategory);
+  finance.delete("/categories/:id", deleteCategory);
+  finance.get("/reports/expenses", expenseReport);
   finance.onError((error, context) => {
     if (error instanceof PlaidApiError) {
       const status = error.status === 503 ? 503 : 502;
@@ -121,13 +130,15 @@ export function createFinanceRouter(requestPlaid: PlaidRequest = plaidRequest) {
 
 async function financeListing(context: FinanceContext) {
   const organizationId = context.get("organizationId");
-  const [connections, accounts, transactions] = await Promise.all([
+  const [connections, accounts, transactions, categories] = await Promise.all([
     listConnections(context.env.DB, organizationId),
     listAccounts(context.env.DB, organizationId),
     listTransactions(context.env.DB, organizationId),
+    listExpenseCategories(context.env.DB, organizationId),
   ]);
   return context.json({
     accounts: accounts.map(toAccount),
+    categories,
     configured: isConfigured(context.env),
     connections: connections.map(toConnection),
     transactions: transactions.map(toTransaction),
@@ -322,12 +333,11 @@ async function updateTransactionAnnotation(context: FinanceContext) {
   const userId = context.get("authSession").user.id;
   await context.env.DB.prepare(
     `INSERT INTO finance_transaction_annotations
-       (transaction_id, organization_id, note, category_override, labels,
+       (transaction_id, organization_id, note, labels,
         reviewed, created_by, updated_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(transaction_id) DO UPDATE SET
          note = excluded.note,
-         category_override = excluded.category_override,
          labels = excluded.labels,
          reviewed = excluded.reviewed,
          updated_by = excluded.updated_by,
@@ -337,7 +347,6 @@ async function updateTransactionAnnotation(context: FinanceContext) {
       transactionId,
       organizationId,
       annotation.note,
-      annotation.categoryOverride,
       JSON.stringify(annotation.labels),
       annotation.reviewed ? 1 : 0,
       userId,
@@ -422,7 +431,7 @@ async function listTransactions(database: D1Database, organizationId: string) {
               txn.payment_channel, txn.pending,
               account.id AS account_id, account.name AS account_name,
               annotation.note AS annotation_note,
-              annotation.category_override AS annotation_category_override,
+              annotation.expense_category_id AS annotation_expense_category_id,
               annotation.labels AS annotation_labels,
               annotation.reviewed AS annotation_reviewed
        FROM plaid_transactions AS txn
@@ -498,7 +507,6 @@ function toTransaction(row: TransactionRow) {
     accountName: row.account_name,
     amount: row.amount,
     annotation: {
-      categoryOverride: row.annotation_category_override,
       labels: parseLabels(row.annotation_labels),
       note: row.annotation_note ?? "",
       reviewed: Boolean(row.annotation_reviewed),
@@ -507,6 +515,7 @@ function toTransaction(row: TransactionRow) {
     categoryDetailed: row.category_detailed,
     categoryPrimary: row.category_primary,
     currencyCode: row.currency_code,
+    expenseCategoryId: row.annotation_expense_category_id,
     id: row.id,
     merchantName: row.merchant_name,
     name: row.name,
@@ -547,11 +556,6 @@ function normalizeAnnotation(input: AnnotationInput): Annotation | null {
   if (
     typeof input.note !== "string" ||
     input.note.length > 2_000 ||
-    !(
-      input.categoryOverride === null ||
-      (typeof input.categoryOverride === "string" &&
-        input.categoryOverride.length <= 100)
-    ) ||
     !Array.isArray(input.labels) ||
     input.labels.length > 12 ||
     input.labels.some(
@@ -562,7 +566,6 @@ function normalizeAnnotation(input: AnnotationInput): Annotation | null {
     return null;
   }
   return {
-    categoryOverride: input.categoryOverride?.trim() || null,
     labels: [
       ...new Set(
         input.labels.map((label) => (label as string).trim()).filter(Boolean),
