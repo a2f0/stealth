@@ -443,25 +443,74 @@ function pathExists(candidate: string): boolean {
   }
 }
 
-function mountDependencyFacade(source: string, destination: string): string {
+interface SnapshotRoots {
+  readonly checkoutRoot: string;
+  readonly repositoryRoot: string;
+}
+
+/**
+ * Where a mounted dependency entry should point. Workspace packages are linked
+ * into the repository's own source tree, which the sandbox cannot read, so
+ * they resolve to the snapshot's copy instead; installed packages keep their
+ * read-only location.
+ */
+function dependencyTarget(entryPath: string, roots: SnapshotRoots): string {
+  if (!lstatSync(entryPath).isSymbolicLink()) return entryPath;
+  let target: string;
+  try {
+    target = realpathSync(entryPath);
+  } catch {
+    return entryPath;
+  }
+  const relative = path.relative(roots.repositoryRoot, target);
+  if (
+    relative === "" ||
+    !isWithin(roots.repositoryRoot, target) ||
+    relative.split(path.sep).includes("node_modules")
+  ) {
+    return entryPath;
+  }
+  const snapshotCopy = path.join(roots.checkoutRoot, relative);
+  return pathExists(snapshotCopy) ? snapshotCopy : entryPath;
+}
+
+function mountDependencyFacade(
+  source: string,
+  destination: string,
+  roots: SnapshotRoots,
+): string {
   const resolved = realpathSync(source);
   mkdirSync(destination, { recursive: true });
   for (const entry of readdirSync(resolved, { withFileTypes: true })) {
     const mountedEntry = path.join(destination, entry.name);
+    const sourceEntry = path.join(resolved, entry.name);
     if (MUTABLE_DEPENDENCY_CACHE_NAMES.has(entry.name)) {
       mkdirSync(mountedEntry, { recursive: true });
+    } else if (entry.isDirectory() && entry.name.startsWith("@")) {
+      // Scopes are mirrored per package so scoped workspace links resolve too.
+      mkdirSync(mountedEntry);
+      for (const scoped of readdirSync(sourceEntry)) {
+        symlinkSync(
+          dependencyTarget(path.join(sourceEntry, scoped), roots),
+          path.join(mountedEntry, scoped),
+        );
+      }
     } else {
-      symlinkSync(path.join(resolved, entry.name), mountedEntry);
+      symlinkSync(dependencyTarget(sourceEntry, roots), mountedEntry);
     }
   }
   return resolved;
 }
 
 /** Link only known dependency caches; the sandbox grants them read-only access. */
-function mountPreflightDependencies(
+export function mountPreflightDependencies(
   repositoryRoot: string,
   checkoutRoot: string,
 ): string[] {
+  const roots = {
+    checkoutRoot,
+    repositoryRoot: realpathSync(repositoryRoot),
+  };
   const nodeModules = [
     path.join(repositoryRoot, "node_modules"),
     ...["apps", "packages"].flatMap((directory) =>
@@ -477,7 +526,7 @@ function mountPreflightDependencies(
     const destination = path.join(checkoutRoot, relative);
     if (pathExists(destination)) continue;
     mkdirSync(path.dirname(destination), { recursive: true });
-    readonlyPaths.push(mountDependencyFacade(candidate, destination));
+    readonlyPaths.push(mountDependencyFacade(candidate, destination, roots));
   }
   const terraformCaches = childDirectories(
     path.join(repositoryRoot, "terraform", "stacks"),
