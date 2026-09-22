@@ -49,14 +49,12 @@
 
 .financeAccountInstitution {
   min-width: 0;
-  overflow: hidden;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   letter-spacing: var(--tracking-caps);
-  text-overflow: ellipsis;
   text-transform: uppercase;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .financeAccountCheck {
@@ -71,12 +69,10 @@
 }
 
 .financeAccountName {
-  overflow: hidden;
   margin-top: var(--space-1);
   font-size: var(--text-base);
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .financeAccountBalance {
@@ -216,10 +212,6 @@
 
   .financeAccount {
     padding: var(--space-4);
-  }
-
-  .financeAccountName {
-    white-space: normal;
   }
 
   .financeAccountBalance {

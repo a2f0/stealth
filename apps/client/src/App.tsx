@@ -145,6 +145,11 @@ function AuthenticationRoute({
           ? "Sign in to keep another account available on this browser."
           : invitationNotice
       }
+      initialNoticeTone={
+        !addingAccount && pathname !== "/invite" && verification.notice
+          ? "success"
+          : "info"
+      }
       onAuthenticated={async (action: AuthenticationAction) => {
         const invitationId =
           action === "sign-up"

@@ -4,14 +4,12 @@ import { InsideSection } from "./sectionContext";
 
 interface CardProps {
   actions?: ReactNode;
-  as?: "article" | "div" | "section" | undefined;
   children?: ReactNode;
   className?: string | undefined;
   description?: ReactNode;
   /** Render children edge to edge, for row lists and tables. */
   flush?: boolean | undefined;
   footer?: ReactNode;
-  id?: string | undefined;
   /** Render the card as a form so footer buttons can submit it. */
   onSubmit?: FormEventHandler<HTMLFormElement> | undefined;
   title?: ReactNode;
@@ -19,13 +17,11 @@ interface CardProps {
 
 export function Card({
   actions,
-  as: Element = "section",
   children,
   className,
   description,
   flush = false,
   footer,
-  id,
   onSubmit,
   title,
 }: CardProps) {
@@ -49,14 +45,10 @@ export function Card({
   );
   if (onSubmit) {
     return (
-      <form className={cx("card", className)} id={id} onSubmit={onSubmit}>
+      <form className={cx("card", className)} onSubmit={onSubmit}>
         {content}
       </form>
     );
   }
-  return (
-    <Element className={cx("card", className)} id={id}>
-      {content}
-    </Element>
-  );
+  return <section className={cx("card", className)}>{content}</section>;
 }

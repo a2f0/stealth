@@ -200,6 +200,8 @@ function useAccountMenuDismissal(
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // Handled here; the phone navigation panel must not also close.
+        event.preventDefault();
         close();
         trigger.current?.focus();
       }

@@ -8,11 +8,6 @@
   margin-left: calc(var(--space-2-5) * -1);
 }
 
-.runStatus {
-  font-family: var(--font-sans);
-  text-transform: none;
-}
-
 .runActions {
   display: flex;
   flex-wrap: wrap;

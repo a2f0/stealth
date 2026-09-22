@@ -7,5 +7,5 @@ export { cx } from "./cx";
 export { EmptyState, LoadingState } from "./EmptyState";
 export { Field } from "./Field";
 export { Icon } from "./Icon";
-export { Avatar, initialsFor, Logo } from "./Identity";
+export { Avatar, Logo } from "./Identity";
 export { Page, PageBody, PageHeader, PageSection } from "./Page";

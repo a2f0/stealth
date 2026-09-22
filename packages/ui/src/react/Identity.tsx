@@ -48,7 +48,8 @@ export function initialsFor(name: string) {
       : (words[0] ?? "").split(/[@._-]+/).filter(Boolean);
   const initials = parts
     .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
+    // Array.from keeps emoji and other astral characters whole.
+    .map((part) => Array.from(part)[0]?.toUpperCase() ?? "")
     .join("");
   return initials || "?";
 }

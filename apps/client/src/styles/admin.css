@@ -16,7 +16,7 @@
 .adminIdentityName {
   color: var(--color-text);
   font-weight: 600;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* Long emails and slugs wrap so the full value stays readable everywhere. */

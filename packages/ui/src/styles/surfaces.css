@@ -38,10 +38,6 @@
   justify-content: space-between;
 }
 
-.clusterEnd {
-  justify-content: flex-end;
-}
-
 .gridAuto {
   display: grid;
   grid-template-columns: repeat(
@@ -78,11 +74,6 @@
   font-weight: 500;
   letter-spacing: 0;
   line-height: 1;
-}
-
-.brandMarkInk {
-  color: var(--color-lime);
-  background: var(--color-ink);
 }
 
 /* Icons. */

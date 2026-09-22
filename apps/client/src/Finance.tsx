@@ -41,7 +41,7 @@ import {
   updateFinanceTransactionAnnotation,
 } from "./financeApi";
 import { filterTransactionsByAccount } from "./financeTransactions";
-import { countLabel } from "./labels";
+import { countLabel, formatLabel } from "./labels";
 
 const linkTokenStorageKey = "tearleads.plaid.linkToken";
 
@@ -448,7 +448,7 @@ function ConnectionRow({
         dot
         tone={connectionTone(connection.status)}
       >
-        {sentenceCase(connection.status)}
+        {formatLabel(connection.status)}
       </Badge>
       <ConnectionActions connection={connection} {...handlers} />
     </li>
@@ -577,7 +577,7 @@ function AccountCard({
         {formatMoney(account.currentBalance, account.currencyCode)}
       </span>
       <span className="financeAccountMeta">
-        {sentenceCase(account.subtype ?? account.type)}
+        {formatLabel(account.subtype ?? account.type)}
         {account.mask ? ` · ••••\u00a0${account.mask}` : ""}
       </span>
     </button>
@@ -802,7 +802,7 @@ function TransactionAnnotationForm({
               className="input"
               maxLength={100}
               onChange={(event) => setCategoryOverride(event.target.value)}
-              placeholder={sentenceCase(
+              placeholder={formatLabel(
                 transaction.categoryPrimary ?? "Uncategorized",
               )}
               value={categoryOverride}
@@ -897,17 +897,11 @@ function syncTime(connection: FinanceConnection) {
 }
 
 function category(transaction: FinanceTransaction) {
-  return sentenceCase(
+  return formatLabel(
     transaction.annotation.categoryOverride ??
       transaction.categoryPrimary ??
       "Uncategorized",
   );
-}
-
-/** Formats raw values such as "FOOD_AND_DRINK" as "Food and drink". */
-function sentenceCase(value: string) {
-  const words = value.toLowerCase().replaceAll("_", " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function connectionTone(status: string): BadgeTone {

@@ -13,5 +13,6 @@ test("formatLabel turns machine values into sentence case", () => {
   expect(formatLabel("in_progress")).toBe("In progress");
   expect(formatLabel("past_due")).toBe("Past due");
   expect(formatLabel("high")).toBe("High");
+  expect(formatLabel("FOOD_AND_DRINK")).toBe("Food and drink");
   expect(formatLabel("")).toBe("");
 });

@@ -5,14 +5,12 @@ import { cx } from "./cx";
 export function Field({
   children,
   className,
-  error,
   hint,
   label,
   optional = false,
 }: {
   children: ReactNode;
   className?: string | undefined;
-  error?: ReactNode;
   hint?: ReactNode;
   label: ReactNode;
   optional?: boolean | undefined;
@@ -30,11 +28,7 @@ export function Field({
         )}
       </span>
       {children}
-      {error ? (
-        <span className="fieldError">{error}</span>
-      ) : (
-        hint && <span className="fieldHint">{hint}</span>
-      )}
+      {hint && <span className="fieldHint">{hint}</span>}
     </label>
   );
 }

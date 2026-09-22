@@ -414,48 +414,54 @@ function BusinessFields({
   };
   const input = cx("input", compact && "inputSm");
   return (
-    <div className="businessFields">
-      <Field className="businessFieldWide" label="Business name">
-        <input
-          autoComplete="organization"
-          className={input}
+    <div className="businessFieldsFrame">
+      <div className="businessFields">
+        <Field className="businessFieldWide" label="Business name">
+          <input
+            autoComplete="organization"
+            className={input}
+            disabled={disabled}
+            maxLength={120}
+            onChange={(event) => set("name", event.target.value)}
+            placeholder="Acme, Inc."
+            required
+            type="text"
+            value={form.name}
+          />
+        </Field>
+        <Field className="businessFieldHalf" label="EIN" optional>
+          <input
+            className={input}
+            disabled={disabled}
+            inputMode="numeric"
+            maxLength={10}
+            onChange={(event) => set("ein", event.target.value)}
+            pattern="[0-9]{2}-?[0-9]{7}"
+            placeholder="12-3456789"
+            type="text"
+            value={form.ein}
+          />
+        </Field>
+        <Field
+          className="businessFieldHalf"
+          label="Incorporation date"
+          optional
+        >
+          <input
+            className={input}
+            disabled={disabled}
+            onChange={(event) => set("incorporationDate", event.target.value)}
+            type="date"
+            value={form.incorporationDate}
+          />
+        </Field>
+        <BusinessAddressFields
           disabled={disabled}
-          maxLength={120}
-          onChange={(event) => set("name", event.target.value)}
-          placeholder="Acme, Inc."
-          required
-          type="text"
-          value={form.name}
+          form={form}
+          input={input}
+          set={set}
         />
-      </Field>
-      <Field className="businessFieldHalf" label="EIN" optional>
-        <input
-          className={input}
-          disabled={disabled}
-          inputMode="numeric"
-          maxLength={10}
-          onChange={(event) => set("ein", event.target.value)}
-          pattern="[0-9]{2}-?[0-9]{7}"
-          placeholder="12-3456789"
-          type="text"
-          value={form.ein}
-        />
-      </Field>
-      <Field className="businessFieldHalf" label="Incorporation date" optional>
-        <input
-          className={input}
-          disabled={disabled}
-          onChange={(event) => set("incorporationDate", event.target.value)}
-          type="date"
-          value={form.incorporationDate}
-        />
-      </Field>
-      <BusinessAddressFields
-        disabled={disabled}
-        form={form}
-        input={input}
-        set={set}
-      />
+      </div>
     </div>
   );
 }

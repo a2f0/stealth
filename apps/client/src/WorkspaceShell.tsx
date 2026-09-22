@@ -198,7 +198,7 @@ function useNavigationDismissal(
   useEffect(() => {
     if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.defaultPrevented) return;
       // An open menu (or its trigger) handles its own Escape first.
       if (
         event.target instanceof Element &&

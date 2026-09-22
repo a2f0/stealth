@@ -16,6 +16,7 @@ import {
   type StoredObject,
   uploadObject,
 } from "./api";
+import { countLabel } from "./labels";
 import type { WorkspaceUser } from "./WorkspaceShell";
 
 interface LibraryProps {
@@ -112,7 +113,7 @@ export function Library({
         <PageSection
           actions={
             <span className="sectionCount">
-              {objects.length} {objects.length === 1 ? "file" : "files"}
+              {countLabel(objects.length, "file")}
             </span>
           }
           title="All files"

@@ -7,8 +7,11 @@ export function countLabel(
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-/** Display text for a machine value, e.g. "in_progress" → "In progress". */
+/**
+ * Display text for a machine value, e.g. "in_progress" → "In progress" or
+ * Plaid's "FOOD_AND_DRINK" → "Food and drink".
+ */
 export function formatLabel(value: string) {
-  const text = value.replaceAll("_", " ");
+  const text = value.toLowerCase().replaceAll("_", " ");
   return text.charAt(0).toUpperCase() + text.slice(1);
 }

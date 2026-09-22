@@ -15,6 +15,10 @@ test("a single word falls back to its separated parts", () => {
   expect(initialsFor("Cher")).toBe("C");
 });
 
+test("initials keep astral characters whole", () => {
+  expect(initialsFor("😀 Team")).toBe("😀T");
+});
+
 test("an empty name has a placeholder", () => {
   expect(initialsFor("")).toBe("?");
   expect(initialsFor("   ")).toBe("?");

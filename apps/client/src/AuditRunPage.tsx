@@ -33,7 +33,7 @@ import {
   updateAuditIssue,
   uploadAuditIssueImage,
 } from "./auditApi";
-import { formatLabel } from "./labels";
+import { countLabel, formatLabel } from "./labels";
 
 const acceptedImageTypes = [
   "image/gif",
@@ -200,11 +200,7 @@ function RunHeader({
       eyebrow={
         <>
           <span>Audit</span>
-          <Badge
-            className="runStatus"
-            dot
-            tone={status === "completed" ? "success" : "warning"}
-          >
+          <Badge dot tone={status === "completed" ? "success" : "warning"}>
             {formatLabel(status)}
           </Badge>
           {templateVersion ? <span>Template v{templateVersion}</span> : null}
@@ -300,7 +296,7 @@ function ProgressNote({
   return (
     <p className="runProgressNote">
       {requiredLeft > 0
-        ? `${requiredLeft} required ${requiredLeft === 1 ? "question" : "questions"} left before this audit can be completed.`
+        ? `${countLabel(requiredLeft, "required question")} left before this audit can be completed.`
         : "All required questions are answered."}
     </p>
   );
@@ -319,9 +315,7 @@ function AuditQuestions({
   return (
     <PageSection
       actions={
-        <span className="sectionCount">
-          {total} {total === 1 ? "question" : "questions"}
-        </span>
+        <span className="sectionCount">{countLabel(total, "question")}</span>
       }
       title="Checklist"
     >
@@ -354,7 +348,8 @@ function AuditSection({
   const answered = section.items.filter((item) =>
     isAnswered(responses[item.id]),
   ).length;
-  const done = answered === section.items.length;
+  const empty = section.items.length === 0;
+  const done = !empty && answered === section.items.length;
   return (
     <Card
       actions={
@@ -365,7 +360,9 @@ function AuditSection({
           )}
         >
           {done && <Icon name="check" size={16} />}
-          {answered}/{section.items.length} answered
+          {empty
+            ? "No questions"
+            : `${answered}/${section.items.length} answered`}
         </span>
       }
       className="runSection"
@@ -379,17 +376,19 @@ function AuditSection({
         </span>
       }
     >
-      <ol className="rowList">
-        {section.items.map((item, itemIndex) => (
-          <AuditQuestion
-            index={itemIndex}
-            item={item}
-            key={item.id}
-            onChange={(response) => onChange(item.id, response)}
-            response={responses[item.id] ?? ""}
-          />
-        ))}
-      </ol>
+      {empty ? undefined : (
+        <ol className="rowList">
+          {section.items.map((item, itemIndex) => (
+            <AuditQuestion
+              index={itemIndex}
+              item={item}
+              key={item.id}
+              onChange={(response) => onChange(item.id, response)}
+              response={responses[item.id] ?? ""}
+            />
+          ))}
+        </ol>
+      )}
     </Card>
   );
 }

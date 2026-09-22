@@ -73,12 +73,12 @@ rings switch to their inverse treatment.
   options), `popover`, `menuItem`, `menuLabel`, `menuSeparator`
 - **Page:** `page`, `pageNarrow`, `pageHeader`, `pageBody`, `pageSection`,
   `sectionHeader`, `sectionTitle`, `sectionDescription`, `sectionCount`
-- **Layout:** `stack` (+ `stackXs`…`stackXl`), `cluster` (+ `clusterBetween`,
-  `clusterEnd`), `gridAuto` (`--grid-min`)
+- **Layout:** `stack` (+ `stackXs`…`stackXl`), `cluster` (+ `clusterBetween`),
+  `gridAuto` (`--grid-min`)
 - **Type:** `display`, `headline`, `title`, `lead`, `eyebrow`, `eyebrowDot`,
   `serifAccent`, `prose`, `textMuted`, `textSubtle`, `textXs`, `textSm`,
-  `textStrong`, `mono`, `tabular`, `truncate`, `breakAnywhere`
-- **Identity:** `brand`, `brandMark`, `brandMarkInk`, `avatar` (+ `avatarSm`,
+  `textStrong`, `mono`, `tabular`, `truncate`
+- **Identity:** `brand`, `brandMark`, `avatar` (+ `avatarSm`,
   `avatarLg`), `keyValue`, `codeChip`, `icon`
 
 ## React primitives

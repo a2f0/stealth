@@ -24,6 +24,8 @@ interface AuthPageProps {
   initialError?: string | undefined;
   initialMode?: AuthMode;
   initialNotice?: string | undefined;
+  /** Initial notices are guidance unless the caller says they confirm something. */
+  initialNoticeTone?: "info" | "success";
   onAuthenticated: (action: AuthenticationAction) => Promise<void>;
   onCancel?: (() => Promise<void> | void) | undefined;
   variant?: AuthVariant;
@@ -59,6 +61,7 @@ export function AuthPage({
   initialError,
   initialMode = "sign-in",
   initialNotice,
+  initialNoticeTone = "info",
   onAuthenticated,
   onCancel,
   variant = "default",
@@ -92,8 +95,8 @@ export function AuthPage({
     <CredentialAuthPage
       {...auth}
       copy={contentFor(auth.mode, variant)}
-      // Notices that arrive with the page are guidance; the rest confirm an action.
-      noticeTone={auth.notice === initialNotice ? "info" : "success"}
+      // Action results confirm; a notice that arrived with the page keeps its tone.
+      noticeTone={auth.notice === initialNotice ? initialNoticeTone : "success"}
       onCancel={onCancel ? auth.cancel : undefined}
       onMode={auth.chooseMode}
       onSubmit={auth.submit}

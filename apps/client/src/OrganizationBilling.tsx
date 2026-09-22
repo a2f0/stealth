@@ -18,6 +18,7 @@ import {
   getBillingStatus,
   redirectToCurrentBillingSession,
 } from "./billingApi";
+import { formatLabel } from "./labels";
 
 type BillingRedirect = "checkout" | "portal";
 
@@ -166,7 +167,7 @@ function CurrentPlanCard({ status }: { status: BillingStatus }) {
           <p className="billingSummaryUsage">{currentUsage(status)}</p>
         </div>
         <Badge dot tone={statusTone(billingStatus)}>
-          {formatStatus(billingStatus)}
+          {formatLabel(billingStatus)}
         </Badge>
       </div>
       {status.billing.cancelAtPeriodEnd && (
@@ -285,11 +286,6 @@ function statusTone(value: string): BadgeTone {
   }
   if (value === "unpaid" || value === "incomplete_expired") return "danger";
   return "neutral";
-}
-
-function formatStatus(value: string) {
-  const words = value.replaceAll("_", " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function formatDate(value: string) {
