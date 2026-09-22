@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { formatBusinessDate, formatEin } from "./businessState";
+import {
+  formatBusinessAddress,
+  formatBusinessDate,
+  formatEin,
+} from "./businessState";
 
 describe("formatEin", () => {
   it("formats a normalized EIN for display", () => {
@@ -23,5 +27,31 @@ describe("formatBusinessDate", () => {
 
   it("leaves unexpected values visible", () => {
     expect(formatBusinessDate("unknown")).toBe("unknown");
+  });
+});
+
+describe("formatBusinessAddress", () => {
+  const empty = { city: null, state: null, streetAddress: null, zip: null };
+
+  it("joins street, city, state, and ZIP on one line", () => {
+    expect(
+      formatBusinessAddress({
+        city: "Portland",
+        state: "OR",
+        streetAddress: "410 SW Alder St",
+        zip: "97205",
+      }),
+    ).toBe("410 SW Alder St, Portland, OR 97205");
+  });
+
+  it("skips missing parts", () => {
+    expect(
+      formatBusinessAddress({ ...empty, streetAddress: "1 Main St" }),
+    ).toBe("1 Main St");
+    expect(
+      formatBusinessAddress({ ...empty, city: "Austin", state: "TX" }),
+    ).toBe("Austin, TX");
+    expect(formatBusinessAddress({ ...empty, zip: "10001" })).toBe("10001");
+    expect(formatBusinessAddress(empty)).toBe("");
   });
 });

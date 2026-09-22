@@ -1,5 +1,6 @@
-import type { FormEventHandler, ReactNode } from "react";
+import { type FormEventHandler, type ReactNode, useContext } from "react";
 import { cx } from "./cx";
+import { InsideSection } from "./sectionContext";
 
 interface CardProps {
   actions?: ReactNode;
@@ -28,12 +29,13 @@ export function Card({
   onSubmit,
   title,
 }: CardProps) {
+  const Title = useContext(InsideSection) ? "h3" : "h2";
   const content = (
     <>
       {(title || actions) && (
         <header className="cardHeader">
           <div className="cardHeading">
-            {title && <h2 className="cardTitle">{title}</h2>}
+            {title && <Title className="cardTitle">{title}</Title>}
             {description && <p className="cardDescription">{description}</p>}
           </div>
           {actions && <div className="cardActions">{actions}</div>}

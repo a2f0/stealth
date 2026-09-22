@@ -21,6 +21,7 @@ import {
   listAuditTemplateVersions,
   updateAuditTemplate,
 } from "./auditApi";
+import { countLabel } from "./labels";
 
 interface BuilderProps {
   id: string;
@@ -562,10 +563,6 @@ function replaceById<T extends { id: string }>(items: T[], replacement: T) {
 
 function questionCount(sections: AuditTemplateSection[]) {
   return sections.reduce((count, section) => count + section.items.length, 0);
-}
-
-function countLabel(count: number, noun: string) {
-  return `${count} ${count === 1 ? noun : `${noun}s`}`;
 }
 
 function formatVersionDate(value: string) {

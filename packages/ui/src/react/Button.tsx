@@ -96,7 +96,7 @@ export function Button({
   );
 }
 
-type ButtonLinkProps = ButtonContentProps &
+type ButtonLinkProps = Omit<ButtonContentProps, "busy"> &
   ButtonStyle &
   Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "className">;
 

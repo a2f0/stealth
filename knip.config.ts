@@ -38,7 +38,7 @@ const baseConfig = {
       project: ["src/**/*.ts"],
     },
     "packages/ui": {
-      entry: [],
+      entry: ["src/**/*.test.ts"],
       project: ["src/**/*.{css,ts,tsx}"],
     },
   },

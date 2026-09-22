@@ -115,11 +115,17 @@
   --button-fg: var(--color-text-inverse);
 }
 
-.onDark .buttonGhost {
+/* Matches the specificity of the rule above, so ghost buttons stay borderless. */
+.onDark .button.buttonGhost {
   --button-bg: transparent;
+  --button-bg-hover: var(--color-ink-raised);
   --button-border: transparent;
   --button-border-hover: transparent;
   --button-fg: var(--color-text-inverse-muted);
+}
+
+.onDark .buttonGhost:hover:not(:disabled, [aria-disabled="true"]) {
+  color: var(--color-text-inverse);
 }
 
 .onDark .buttonPrimary {

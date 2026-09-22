@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { cx } from "./cx";
+import { InsideSection } from "./sectionContext";
 
 export function Page({
   children,
@@ -87,7 +88,7 @@ export function PageSection({
         </div>
         {actions}
       </div>
-      {children}
+      <InsideSection value={true}>{children}</InsideSection>
     </section>
   );
 }

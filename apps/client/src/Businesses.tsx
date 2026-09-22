@@ -22,7 +22,12 @@ import {
   getBusinesses,
   updateBusiness,
 } from "./businessesApi";
-import { formatBusinessDate, formatEin } from "./businessState";
+import {
+  formatBusinessAddress,
+  formatBusinessDate,
+  formatEin,
+} from "./businessState";
+import { countLabel } from "./labels";
 
 interface BusinessFormState {
   city: string;
@@ -210,7 +215,7 @@ function BusinessList({
     <PageSection
       actions={
         <span className="sectionCount">
-          {count} {count === 1 ? "business" : "businesses"}
+          {countLabel(count, "business", "businesses")}
         </span>
       }
       title="Organization businesses"
@@ -558,12 +563,6 @@ function businessInput(form: BusinessFormState): BusinessInput {
     streetAddress: form.streetAddress.trim() || null,
     zip: form.zip.trim() || null,
   };
-}
-
-function formatBusinessAddress(business: Business) {
-  const region = [business.state, business.zip].filter(Boolean).join(" ");
-  const location = [business.city, region].filter(Boolean).join(", ");
-  return [business.streetAddress, location].filter(Boolean).join(", ");
 }
 
 function BusinessEmptyState({ title }: { title: string }) {

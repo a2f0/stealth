@@ -87,7 +87,9 @@ rings switch to their inverse treatment.
   `title`, `description`, `actions`, `back`, `tabs`), `PageBody`, and
   `PageSection` (`title`, `description`, `actions`).
 - `Card` (`title`, `description`, `actions`, `footer`, `flush` for row
-  lists and tables, `onSubmit` to render the card as a form).
+  lists and tables, `onSubmit` to render the card as a form). Its title is
+  an `h2`, or an `h3` inside a `PageSection`; a lone footer action sits at
+  the end.
 - `Button` and `ButtonLink` (`variant`, `size`, `icon`, `iconEnd`,
   `iconOnly`, `block`, `busy`), plus `buttonClass()` for other elements.
 - `Badge` (`tone`, `dot`), `Banner` (`tone`, `title`, `actions`,

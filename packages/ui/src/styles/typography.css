@@ -142,10 +142,6 @@
   font-size: var(--text-sm);
 }
 
-.textBase {
-  font-size: var(--text-base);
-}
-
 .textStrong {
   color: var(--color-text);
   font-weight: 650;

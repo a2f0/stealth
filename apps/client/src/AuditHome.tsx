@@ -22,6 +22,7 @@ import {
   listAuditTemplates,
   startAudit,
 } from "./auditApi";
+import { countLabel, formatLabel } from "./labels";
 
 export function AuditHome({
   canManageGlobal,
@@ -435,15 +436,6 @@ function status(run: AuditSummary) {
 function templateStatusTone(value: string): BadgeTone {
   if (value === "published") return "success";
   return "neutral";
-}
-
-function formatLabel(value: string) {
-  const text = value.replaceAll("_", " ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-function countLabel(count: number, noun: string) {
-  return `${count} ${count === 1 ? noun : `${noun}s`}`;
 }
 
 function scopeLabel(scope: AuditTemplateScope) {

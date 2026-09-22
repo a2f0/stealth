@@ -36,14 +36,19 @@ export function Avatar({
   );
 }
 
+/**
+ * Up to two initials: the first two words of a name, or, for a single word
+ * such as an email address, its first two dot-, dash-, or @-separated parts.
+ */
 export function initialsFor(name: string) {
-  const words = name
-    .trim()
-    .split(/[\s@._-]+/)
-    .filter(Boolean);
-  const initials = words
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  const parts =
+    words.length > 1
+      ? words
+      : (words[0] ?? "").split(/[@._-]+/).filter(Boolean);
+  const initials = parts
     .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase() ?? "")
+    .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
   return initials || "?";
 }

@@ -26,6 +26,7 @@ import {
   restoreAdminOrganization,
 } from "./api";
 import { authClient } from "./authClient";
+import { countLabel } from "./labels";
 
 interface ListedUser {
   banned?: boolean | null | undefined;
@@ -336,9 +337,7 @@ function OrganizationTableRow({
       <td>
         <div className="adminIdentityText adminOrganization">
           <span className="adminOrganizationName">{organization.name}</span>
-          <span className="adminSlug mono" title={organization.slug}>
-            {organization.slug}
-          </span>
+          <span className="adminSlug mono">{organization.slug}</span>
         </div>
       </td>
       <td>
@@ -508,11 +507,7 @@ function Identity({
       {avatar && <Avatar name={name} size="sm" />}
       <div className="adminIdentityText">
         <span className="adminIdentityName">{name}</span>
-        {detail && (
-          <span className="adminIdentityDetail" title={detail}>
-            {detail}
-          </span>
-        )}
+        {detail && <span className="adminIdentityDetail">{detail}</span>}
       </div>
     </div>
   );
@@ -572,10 +567,6 @@ function statusFor(user: ListedUser): { label: string; tone: BadgeTone } {
   if (user.banned) return { label: "Banned", tone: "danger" };
   if (user.emailVerified) return { label: "Verified", tone: "success" };
   return { label: "Unverified", tone: "warning" };
-}
-
-function countLabel(count: number, singular: string, plural: string) {
-  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function capitalize(value: string) {

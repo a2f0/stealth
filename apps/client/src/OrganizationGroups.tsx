@@ -274,6 +274,8 @@ function useGroupEditor(
       await onChanged();
     } catch (cause) {
       setError(messageFrom(cause));
+    } finally {
+      // A failed reload can leave this panel mounted; keep it usable.
       setBusy(false);
     }
   };

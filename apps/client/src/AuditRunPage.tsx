@@ -33,6 +33,7 @@ import {
   updateAuditIssue,
   uploadAuditIssueImage,
 } from "./auditApi";
+import { formatLabel } from "./labels";
 
 const acceptedImageTypes = [
   "image/gif",
@@ -241,7 +242,8 @@ function RunProgress({
     () => progressFor(audit.definition, responses),
     [audit.definition, responses],
   );
-  const percent = total ? Math.round((answered / total) * 100) : 0;
+  // Floor, so the bar never reads 100% while a question is unanswered.
+  const percent = total ? Math.floor((answered / total) * 100) : 0;
   const openIssues = issues.filter((issue) => issue.status === "open").length;
   return (
     <Card>
@@ -464,7 +466,7 @@ function ResponseChoices({
           onClick={() => onChange(value)}
           type="button"
         >
-          {value === "na" ? "N/A" : titleCase(value)}
+          {value === "na" ? "N/A" : formatLabel(value)}
         </button>
       ))}
     </fieldset>
@@ -843,7 +845,7 @@ function IssueCard({
       <div className="rowMain runIssueMain">
         <div className="cluster">
           <Badge tone={priorityTones[issue.priority] ?? "neutral"}>
-            {titleCase(issue.priority)}
+            {formatLabel(issue.priority)}
           </Badge>
           <Badge dot tone={issue.status === "open" ? "warning" : "success"}>
             {issue.status === "open" ? "Open" : "Resolved"}
@@ -1219,7 +1221,8 @@ function allItems(definition: AuditDefinition) {
   return definition.sections.flatMap((section) => section.items);
 }
 
-function progressFor(
+/** Answered, failed, and required-remaining counts shown above the checklist. */
+export function progressFor(
   definition: AuditDefinition,
   responses: Record<string, string>,
 ) {
@@ -1283,14 +1286,6 @@ function issueImageSelectionKey(file: File) {
     file.type,
     file.webkitRelativePath,
   ]);
-}
-
-function titleCase(value: string) {
-  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
-}
-
-function formatLabel(value: string) {
-  return titleCase(value.replaceAll("_", " "));
 }
 
 function formatDate(value: string) {

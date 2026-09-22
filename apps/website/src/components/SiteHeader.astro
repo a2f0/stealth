@@ -47,7 +47,8 @@ import Logo from "./Logo.astro";
 </header>
 
 <script>
-  // Close the small-screen menu after a choice, on Escape, or on an outside click.
+  // Close the small-screen menu after a choice, on Escape from inside it, on
+  // an outside click, or when focus moves on, so it never covers the page.
   const menu = document.querySelector<HTMLDetailsElement>(".siteMenu");
   if (menu) {
     const close = () => {
@@ -59,9 +60,14 @@ import Logo from "./Logo.astro";
       }
     });
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && menu.open) {
-        close();
-        menu.querySelector("summary")?.focus();
+      if (event.key !== "Escape" || !menu.open) return;
+      if (!menu.contains(document.activeElement)) return;
+      close();
+      menu.querySelector("summary")?.focus();
+    });
+    document.addEventListener("focusin", (event) => {
+      if (menu.open && event.target instanceof Node) {
+        if (!menu.contains(event.target)) close();
       }
     });
     document.addEventListener("click", (event) => {

@@ -199,9 +199,12 @@ function useNavigationDismissal(
     if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // An open menu (or its trigger) handles its own Escape first.
       if (
         event.target instanceof Element &&
-        event.target.closest('[role="menu"]')
+        event.target.closest(
+          '[role="menu"], [aria-haspopup="menu"][aria-expanded="true"]',
+        )
       ) {
         return;
       }

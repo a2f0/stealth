@@ -7,6 +7,9 @@ import BaseLayout from "../layouts/BaseLayout.astro";
 import { appUrl } from "../site";
 import "../styles/home.css";
 
+// Pricing sentences read from the shared plans so they never drift.
+const [free, pro] = plans;
+
 const features: { icon: IconName; text: string; title: string }[] = [
   {
     icon: "issues",
@@ -98,7 +101,8 @@ const principles: {
           <a class="button buttonLg" href="#how-it-works">See how it works</a>
         </div>
         <p class="heroNote">
-          Free for one person. Pro is $10 per active user each month.
+          {free.name} for {free.features[0]}. {pro.name} is {pro.price}{" "}
+          {pro.cadence}.
         </p>
       </div>
       <AuditPreview />
@@ -349,8 +353,8 @@ const principles: {
         <p class="eyebrow eyebrowDot">Ready when you are</p>
         <h2 class="display" id="closing-title">Make some room.</h2>
         <p class="lead closingLead">
-          Start free with one user and five templates. Invite your team when
-          you’re ready.
+          Start free with {free.features[0]} and {free.features[1]}. Invite
+          your team when you’re ready.
         </p>
         <div class="cluster closingActions">
           <a class="button buttonPrimary buttonLg" href={appUrl}>

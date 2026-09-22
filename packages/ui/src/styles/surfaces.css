@@ -694,14 +694,6 @@ a.row:focus-visible {
   color: var(--color-text-subtle);
 }
 
-.menuItemDanger {
-  color: var(--color-danger-fg);
-}
-
-.menuItemDanger > .icon {
-  color: currentColor;
-}
-
 .menuSeparator {
   height: 1px;
   margin: var(--space-1-5) calc(var(--space-1-5) * -1);

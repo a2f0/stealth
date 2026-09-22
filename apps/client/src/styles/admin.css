@@ -19,12 +19,11 @@
   white-space: nowrap;
 }
 
+/* Long emails and slugs wrap so the full value stays readable everywhere. */
 .adminIdentityDetail,
 .adminSlug {
-  overflow: hidden;
   color: var(--color-text-subtle);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .adminIdentityDetail {
@@ -64,9 +63,7 @@
   text-align: right;
 }
 
-/* The organization table has seven columns, so long owner and actor emails
- * truncate (full value on hover) to keep it inside the page on desktop;
- * phones scroll inside the table wrapper. */
+/* Owner and actor details wrap within a bounded column. */
 .adminOrganizationTable .adminIdentityDetail {
   max-width: 13rem;
 }

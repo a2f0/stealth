@@ -1,7 +1,7 @@
 ---
 /*
  * The document shell every page shares: head metadata, the skip link, the
- * site header and footer (both replaceable through named slots), and <main>.
+ * site header and footer, and <main>.
  */
 import "@tearleads/ui/styles.css";
 import "../styles/global.css";
@@ -34,14 +34,13 @@ const { description, title } = Astro.props;
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
-    <slot name="head" />
   </head>
   <body>
     <a class="button buttonPrimary skipLink" href="#main">Skip to content</a>
-    <slot name="header"><SiteHeader /></slot>
+    <SiteHeader />
     <main id="main" tabindex="-1">
       <slot />
     </main>
-    <slot name="footer"><SiteFooter /></slot>
+    <SiteFooter />
   </body>
 </html>

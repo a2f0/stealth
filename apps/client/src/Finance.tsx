@@ -41,6 +41,7 @@ import {
   updateFinanceTransactionAnnotation,
 } from "./financeApi";
 import { filterTransactionsByAccount } from "./financeTransactions";
+import { countLabel } from "./labels";
 
 const linkTokenStorageKey = "tearleads.plaid.linkToken";
 
@@ -907,10 +908,6 @@ function category(transaction: FinanceTransaction) {
 function sentenceCase(value: string) {
   const words = value.toLowerCase().replaceAll("_", " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-function countLabel(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function connectionTone(status: string): BadgeTone {

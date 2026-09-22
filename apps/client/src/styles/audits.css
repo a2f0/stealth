@@ -119,8 +119,9 @@
   transform: translateX(2px);
 }
 
-.auditRunCard .cardFooter {
-  justify-content: center;
+/* Center "Load more" instead of the footer's default end alignment. */
+.auditRunCard .cardFooter > :only-child {
+  margin-inline: auto;
 }
 
 /* Template builder. */
@@ -228,7 +229,7 @@
   min-height: var(--control-height-md);
   padding-block: var(--space-2);
   field-sizing: content;
-  resize: none;
+  resize: vertical;
 }
 
 .auditDescriptionInput {
@@ -344,8 +345,9 @@
     padding-left: var(--space-4);
   }
 
+  /* 16px keeps iOS Safari from zooming when the title is edited. */
   .auditSectionTitle {
-    font-size: var(--text-md);
+    font-size: 1rem;
   }
 
   .auditSectionFooter {
