@@ -21,6 +21,14 @@ resource "cloudflare_r2_bucket" "objects" {
   storage_class = "Standard"
 }
 
+# Email Routing itself is enabled once in the Cloudflare dashboard; the provider
+# cannot import that zone setting, so Terraform only manages the subdomain
+# records and the rule on top of it.
+resource "cloudflare_email_routing_dns" "inbound" {
+  zone_id = data.cloudflare_zone.main.id
+  name    = var.inbound_email_subdomain
+}
+
 resource "cloudflare_email_routing_rule" "inbound" {
   zone_id = data.cloudflare_zone.main.id
   name    = "Store inbound email in tearleads-api"
@@ -36,6 +44,8 @@ resource "cloudflare_email_routing_rule" "inbound" {
     type  = "worker"
     value = [var.api_worker_name]
   }]
+
+  depends_on = [cloudflare_email_routing_dns.inbound]
 }
 
 locals {

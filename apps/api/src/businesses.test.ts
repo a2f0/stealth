@@ -526,14 +526,14 @@ function update(
 
 function bindingsFor(database: Database): Bindings {
   return {
-    AUTH_EMAIL_FROM: "security@auth.tearleads.com",
+    AUTH_EMAIL_FROM: "security@auth.tearleads.de",
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
     DB: toD1(database),
     EMAIL: {} as SendEmail,
     IMAGES: {} as ImagesBinding,
-    INBOUND_EMAIL_DOMAIN: "inbox.tearleads.com",
+    INBOUND_EMAIL_DOMAIN: "inbox.tearleads.de",
     STORAGE: {} as R2Bucket,
   };
 }

@@ -9,7 +9,7 @@ source_env_file() {
 
   if [[ ! -f "$env_file" ]]; then
     echo "ERROR: $env_file is missing." >&2
-    echo "Create it or link .secrets to the shared Tearleads secret store." >&2
+    echo "Create it with the variables listed in README.md." >&2
     return 1
   fi
 

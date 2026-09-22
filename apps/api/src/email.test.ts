@@ -3,7 +3,7 @@ import { handleEmail } from "./email";
 import type { Bindings } from "./types";
 
 const organizationId = "organization-1";
-const inboundEmailDomain = "inbox.tearleads.com";
+const inboundEmailDomain = "inbox.tearleads.de";
 const recipient = `upload+${organizationId}@${inboundEmailDomain}`;
 const rawEmail = [
   "From: Sender <sender@example.com>",
@@ -99,10 +99,10 @@ describe("inbound email", () => {
 
 function createBindings(database: D1Database, storage: R2Bucket): Bindings {
   return {
-    AUTH_EMAIL_FROM: "security@auth.tearleads.com",
+    AUTH_EMAIL_FROM: "security@auth.tearleads.de",
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
-    BETTER_AUTH_URL: "https://api.tearleads.com",
-    CORS_ORIGIN: "https://app.tearleads.com",
+    BETTER_AUTH_URL: "https://api.tearleads.de",
+    CORS_ORIGIN: "https://app.tearleads.de",
     DB: database,
     EMAIL: {} as SendEmail,
     IMAGES: {} as ImagesBinding,

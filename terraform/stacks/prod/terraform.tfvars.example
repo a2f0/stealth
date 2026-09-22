@@ -1,14 +1,15 @@
 # Credentials are loaded from .secrets/root.env, never from this file.
-domain = "tearleads.com"
+domain = "tearleads.de"
 
 d1_database_name = "stealth-db"
 r2_bucket_name    = "stealth-objects"
-inbound_email_address = "upload@inbox.tearleads.com"
+inbound_email_subdomain = "inbox.tearleads.de"
+inbound_email_address   = "upload@inbox.tearleads.de"
 
 # The production deploy script creates all three Workers before Terraform
 # attaches these domains.
 enable_custom_domains = true
 
-website_hostname = "tearleads.com"
-client_hostname  = "app.tearleads.com"
-api_hostname     = "api.tearleads.com"
+website_hostname = "tearleads.de"
+client_hostname  = "app.tearleads.de"
+api_hostname     = "api.tearleads.de"

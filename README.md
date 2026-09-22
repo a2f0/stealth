@@ -5,7 +5,7 @@ A small Bun monorepo for a Cloudflare-native product:
 - `apps/api` — Hono API on Cloudflare Workers, with D1 and R2 bindings.
 - `apps/client` — React and Vite application.
 - `apps/website` — static Astro marketing site.
-- `terraform` — D1, R2, and `tearleads.com` Worker-domain infrastructure.
+- `terraform` — D1, R2, and `tearleads.de` Worker-domain infrastructure.
 
 The tooling follows the useful core of Tearleads (Bun, Turborepo, TypeScript,
 and Biome) without carrying over its mature product architecture. Repository
@@ -41,7 +41,7 @@ admin-plugin operations and the example `GET /api/admin` route. Passwords must
 be 12–128 characters, reset links expire after one hour, and a successful reset
 revokes the user's existing sessions.
 
-The main endpoints under `https://api.tearleads.com/api/auth` are:
+The main endpoints under `https://api.tearleads.de/api/auth` are:
 
 - `POST /sign-up/email`
 - `POST /sign-in/email`
@@ -83,9 +83,9 @@ request require membership in a group with the Finance capability.
 
 Authentication needs a strong `BETTER_AUTH_SECRET` in the ignored
 `.secrets/root.env`. Production password reset additionally requires Cloudflare
-Email Sending to be enabled for `auth.tearleads.com`, with
-`security@auth.tearleads.com` permitted as a sender. Sending DNS records and
-DMARC policy are isolated under `auth.tearleads.com`; Google Workspace remains
+Email Sending to be enabled for `auth.tearleads.de`, with
+`security@auth.tearleads.de` permitted as a sender. Sending DNS records and
+DMARC policy are isolated under `auth.tearleads.de`; Google Workspace remains
 responsible for mail at the apex. The deployment script uploads the auth secret
 to the Worker but never places it in Wrangler configuration or Terraform state.
 
@@ -156,7 +156,7 @@ key to decrypt their Plaid access tokens. The deployment script uploads all
 three values as encrypted Worker secrets.
 
 The Worker currently uses Plaid Sandbox. Add
-`https://app.tearleads.com/finance` to the Plaid Dashboard's allowed redirect
+`https://app.tearleads.de/finance` to the Plaid Dashboard's allowed redirect
 URIs for OAuth institutions. Before switching `PLAID_ENV` to `production` in
 the API Wrangler configuration, replace the Sandbox secret with the Production
 secret and complete Plaid's application and company profile requirements.
@@ -190,18 +190,21 @@ list before rotating the current price so existing subscriptions keep their
 entitlements. Local development overrides the production IDs in Wrangler with
 these values, so test-mode keys must be paired with test-mode IDs. The public
 Stripe webhook URL is
-`https://api.tearleads.com/api/billing/webhook`. The non-secret Pro price and
+`https://api.tearleads.de/api/billing/webhook`. The non-secret Pro price and
 optional Billing Portal configuration IDs belong in `apps/api/wrangler.jsonc`;
 the API deployment script uploads the two secret values as encrypted Worker
 secrets and requires a live-mode API key for production.
 
 ## Provision Cloudflare resources
 
-Link or create the ignored `.secrets` directory, then review the Terraform
-plan. The local setup shares Tearleads' existing secret store:
+Create the ignored `.secrets/root.env` with the Cloudflare credentials, then
+review the Terraform plan. Both tokens must be scoped to the `tearleads.de`
+zone; `scripts/cloudflareEnv.sh` lists every variable the scripts read:
 
 ```sh
-ln -s ../tearleads-shared/.secrets .secrets
+export TF_VAR_cloudflare_api_token=your-account-token
+export TF_VAR_cloudflare_account_id=your-account-id
+export CLOUDFLARE_EMAIL_API_TOKEN=your-zone-token
 bun run terraform:plan
 ```
 
@@ -214,9 +217,12 @@ bun run terraform:plan
 bun run terraform:apply
 ```
 
-Inbound mail to `upload+<organization-id>@inbox.tearleads.com` is handled by
-the API Worker. It stores the full `.eml` and each attachment in the private R2
-bucket, with organization-scoped delivery and attachment metadata in D1.
+Inbound mail to `upload+<organization-id>@inbox.tearleads.de` is handled by
+the API Worker. Email Routing is enabled once in the Cloudflare dashboard;
+Terraform then creates the `inbox.tearleads.de` MX records and routes the
+address to the Worker. The Worker stores the full `.eml` and each attachment in
+the private R2 bucket, with organization-scoped delivery and attachment
+metadata in D1.
 Organization members can inspect their active organization's mailbox in the
 client at `/inbox`. The ignored `.secrets/root.env` also needs
 `CLOUDFLARE_EMAIL_API_TOKEN`; it configures subaddressing and verifies the
@@ -299,8 +305,8 @@ The move downloads each legacy object, uploads it beneath
 `organizations/<organization-id>/`, verifies that the bytes match, updates its
 D1 key, and only then deletes the legacy object.
 
-Production URLs are `api.tearleads.com`, `app.tearleads.com`, and
-`tearleads.com`. See [`terraform/README.md`](terraform/README.md) for state and
+Production URLs are `api.tearleads.de`, `app.tearleads.de`, and
+`tearleads.de`. See [`terraform/README.md`](terraform/README.md) for state and
 domain details.
 
 ## Useful commands

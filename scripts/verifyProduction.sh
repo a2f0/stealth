@@ -31,9 +31,9 @@ verify_url() {
   echo "PASS: $label is reachable."
 }
 
-verify_url "API" "https://api.tearleads.com/health"
-verify_url "app" "https://app.tearleads.com"
-verify_url "website" "https://tearleads.com"
-verify_url "privacy policy" "https://tearleads.com/privacy"
-verify_url "terms of service" "https://tearleads.com/terms"
-verify_url "data retention policy" "https://tearleads.com/data-retention"
+verify_url "API" "https://api.tearleads.de/health"
+verify_url "app" "https://app.tearleads.de"
+verify_url "website" "https://tearleads.de"
+verify_url "privacy policy" "https://tearleads.de/privacy"
+verify_url "terms of service" "https://tearleads.de/terms"
+verify_url "data retention policy" "https://tearleads.de/data-retention"
