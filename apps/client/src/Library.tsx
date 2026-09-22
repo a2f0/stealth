@@ -1,3 +1,13 @@
+import {
+  Banner,
+  Button,
+  EmptyState,
+  Icon,
+  Page,
+  PageBody,
+  PageHeader,
+  PageSection,
+} from "@tearleads/ui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteObject,
@@ -6,6 +16,7 @@ import {
   type StoredObject,
   uploadObject,
 } from "./api";
+import { countLabel } from "./labels";
 import type { WorkspaceUser } from "./WorkspaceShell";
 
 interface LibraryProps {
@@ -64,78 +75,103 @@ export function Library({
   }
 
   return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Personal workspace</p>
-          <h1>Your library</h1>
-        </div>
-        <button
-          className="primaryButton"
-          disabled={busy}
-          onClick={() => fileInput.current?.click()}
-          type="button"
-        >
-          {busy ? "Working…" : "+ Add file"}
-        </button>
-        <input
-          ref={fileInput}
-          hidden
-          name="file"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void upload(file);
-            event.target.value = "";
-          }}
-          type="file"
-        />
-      </header>
-
-      <section className="content" id="library">
+    <Page>
+      <PageHeader
+        actions={
+          <Button
+            busy={busy}
+            icon="upload"
+            onClick={() => fileInput.current?.click()}
+            variant="primary"
+          >
+            Upload file
+          </Button>
+        }
+        description="Documents, photos, and anything else your organization wants to keep close."
+        eyebrow="Workspace"
+        title="Library"
+      />
+      <input
+        ref={fileInput}
+        hidden
+        name="file"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void upload(file);
+          event.target.value = "";
+        }}
+        type="file"
+      />
+      <PageBody>
         <VerificationStatus
           email={user.email}
           emailVerified={user.emailVerified}
           initialNotice={initialNotice}
           onResend={onResendVerification}
         />
-        {error && <div className="errorBanner">{error}</div>}
-        <div className="sectionHeading">
-          <h2>All files</h2>
-          <span>{objects.length} items</span>
-        </div>
-        {objects.length === 0 ? (
-          <EmptyState onUpload={() => fileInput.current?.click()} />
-        ) : (
-          <div className="fileGrid">
-            {objects.map((object) => (
-              <article className="fileCard" key={object.id}>
-                <a href={objectDownloadUrl(object.id)}>
-                  <div className="filePreview">
-                    {extensionFor(object.filename)}
-                  </div>
-                  <div className="fileMeta">
-                    <strong>{object.filename}</strong>
-                    <span>
-                      {formatBytes(object.size)} ·{" "}
-                      {formatDate(object.createdAt)}
-                    </span>
-                  </div>
-                </a>
-                <button
-                  aria-label={`Delete ${object.filename}`}
-                  className="deleteButton"
-                  disabled={busy}
-                  onClick={() => void remove(object)}
-                  type="button"
-                >
-                  ×
-                </button>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-    </>
+        {error && <Banner tone="danger">{error}</Banner>}
+        <PageSection
+          actions={
+            <span className="sectionCount">
+              {countLabel(objects.length, "file")}
+            </span>
+          }
+          title="All files"
+        >
+          {objects.length === 0 ? (
+            <LibraryEmptyState onUpload={() => fileInput.current?.click()} />
+          ) : (
+            <FileGrid
+              busy={busy}
+              objects={objects}
+              onRemove={(object) => void remove(object)}
+            />
+          )}
+        </PageSection>
+      </PageBody>
+    </Page>
+  );
+}
+
+function FileGrid({
+  busy,
+  objects,
+  onRemove,
+}: {
+  busy: boolean;
+  objects: StoredObject[];
+  onRemove: (object: StoredObject) => void;
+}) {
+  return (
+    <div className="gridAuto fileGrid">
+      {objects.map((object) => (
+        <article className="card cardInteractive fileCard" key={object.id}>
+          <a className="fileCardLink" href={objectDownloadUrl(object.id)}>
+            <div className="filePreview">
+              <Icon name="document" size={28} strokeWidth={1.5} />
+              <span className="filePreviewExtension">
+                {extensionFor(object.filename)}
+              </span>
+            </div>
+            <div className="fileMeta">
+              <strong className="truncate">{object.filename}</strong>
+              <span>
+                {formatBytes(object.size)} · {formatDate(object.createdAt)}
+              </span>
+            </div>
+          </a>
+          <Button
+            aria-label={`Delete ${object.filename}`}
+            className="fileDelete"
+            disabled={busy}
+            icon="trash"
+            iconOnly
+            onClick={() => onRemove(object)}
+            size="sm"
+          />
+        </article>
+      ))}
+    </div>
   );
 }
 
@@ -170,42 +206,46 @@ function VerificationStatus({
     }
   }
 
+  if (!notice && emailVerified) return null;
   return (
-    <>
-      {notice && (
-        <div aria-live="polite" className="successBanner pageBanner">
-          {notice}
-        </div>
-      )}
+    <div className="stack stackMd">
+      {notice && <Banner tone="success">{notice}</Banner>}
       {!emailVerified && (
-        <div className="verificationBanner">
-          <div>
-            <strong>Verify your email</strong>
-            <p>
-              You can use Tearleads now, but confirming {email} helps secure
-              your account.
-            </p>
-            {error && <span className="verificationError">{error}</span>}
-          </div>
-          <button disabled={busy} onClick={() => void resend()} type="button">
-            {busy ? "Sending…" : "Resend email"}
-          </button>
-        </div>
+        <Banner
+          actions={
+            <Button busy={busy} onClick={() => void resend()} size="sm">
+              {busy ? "Sending…" : "Resend email"}
+            </Button>
+          }
+          announce={false}
+          icon="mail"
+          title="Verify your email"
+          tone="warning"
+        >
+          <p>
+            You can use Tearleads now, but confirming {email} helps secure your
+            account.
+          </p>
+          {error && <p className="fieldError">{error}</p>}
+        </Banner>
       )}
-    </>
+    </div>
   );
 }
 
-function EmptyState({ onUpload }: { onUpload: () => void }) {
+function LibraryEmptyState({ onUpload }: { onUpload: () => void }) {
   return (
-    <div className="emptyState">
-      <div className="emptyGlyph">↥</div>
-      <h3>A quiet place for important things.</h3>
-      <p>Upload your first file. It will be stored in Cloudflare R2.</p>
-      <button className="textButton" onClick={onUpload} type="button">
-        Choose a file
-      </button>
-    </div>
+    <EmptyState
+      actions={
+        <Button icon="upload" onClick={onUpload} variant="primary">
+          Choose a file
+        </Button>
+      }
+      icon="library"
+      title="A quiet place for important things"
+    >
+      Upload your first file to keep it with your organization.
+    </EmptyState>
   );
 }
 

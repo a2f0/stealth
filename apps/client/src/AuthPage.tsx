@@ -1,4 +1,14 @@
-import { type FormEvent, useState } from "react";
+import { legalLinks, productName } from "@tearleads/ui/brand";
+import {
+  Banner,
+  Button,
+  cx,
+  Field,
+  Icon,
+  type IconName,
+  Logo,
+} from "@tearleads/ui/react";
+import { type FormEvent, type ReactNode, useState } from "react";
 import { authClient } from "./authClient";
 import { websiteUrl } from "./config";
 
@@ -14,6 +24,8 @@ interface AuthPageProps {
   initialError?: string | undefined;
   initialMode?: AuthMode;
   initialNotice?: string | undefined;
+  /** Initial notices are guidance unless the caller says they confirm something. */
+  initialNoticeTone?: "info" | "success";
   onAuthenticated: (action: AuthenticationAction) => Promise<void>;
   onCancel?: (() => Promise<void> | void) | undefined;
   variant?: AuthVariant;
@@ -49,6 +61,7 @@ export function AuthPage({
   initialError,
   initialMode = "sign-in",
   initialNotice,
+  initialNoticeTone = "info",
   onAuthenticated,
   onCancel,
   variant = "default",
@@ -82,6 +95,8 @@ export function AuthPage({
     <CredentialAuthPage
       {...auth}
       copy={contentFor(auth.mode, variant)}
+      // Action results confirm; a notice that arrived with the page keeps its tone.
+      noticeTone={auth.notice === initialNotice ? initialNoticeTone : "success"}
       onCancel={onCancel ? auth.cancel : undefined}
       onMode={auth.chooseMode}
       onSubmit={auth.submit}
@@ -190,27 +205,7 @@ function useAuthPageState({
   };
 }
 
-function CredentialAuthPage({
-  busy,
-  confirmation,
-  copy,
-  email,
-  error,
-  mode,
-  name,
-  notice,
-  onCancel,
-  onConfirmation,
-  onEmail,
-  onMode,
-  onName,
-  onPassword,
-  onSubmit,
-  password,
-  termsAccepted,
-  onTermsAccepted,
-  variant,
-}: {
+interface CredentialAuthPageProps {
   busy: boolean;
   confirmation: string;
   copy: { button: string; eyebrow: string; title: string };
@@ -219,6 +214,7 @@ function CredentialAuthPage({
   mode: AuthMode;
   name: string;
   notice: string | undefined;
+  noticeTone: "info" | "success";
   onCancel: (() => Promise<void>) | undefined;
   onConfirmation: (value: string) => void;
   onEmail: (value: string) => void;
@@ -230,121 +226,163 @@ function CredentialAuthPage({
   termsAccepted: boolean;
   onTermsAccepted: (accepted: boolean) => void;
   variant: AuthVariant;
+}
+
+function CredentialAuthPage({
+  busy,
+  confirmation,
+  copy,
+  email,
+  error,
+  mode,
+  name,
+  notice,
+  noticeTone,
+  onCancel,
+  onConfirmation,
+  onEmail,
+  onMode,
+  onName,
+  onPassword,
+  onSubmit,
+  password,
+  termsAccepted,
+  onTermsAccepted,
+  variant,
+}: CredentialAuthPageProps) {
+  const noticeBanner = notice && <Banner tone={noticeTone}>{notice}</Banner>;
+  return (
+    <AuthLayout>
+      <AuthHeading
+        description={descriptionFor(mode, variant)}
+        eyebrow={copy.eyebrow}
+        title={copy.title}
+      />
+
+      <form
+        autoComplete="on"
+        className="formGrid"
+        method="post"
+        onSubmit={(event) => void onSubmit(event)}
+      >
+        {noticeTone === "info" && noticeBanner}
+        <AuthFields
+          confirmation={confirmation}
+          email={email}
+          mode={mode}
+          name={name}
+          onConfirmation={onConfirmation}
+          onEmail={onEmail}
+          onName={onName}
+          onPassword={onPassword}
+          password={password}
+        />
+
+        {mode === "sign-up" && (
+          <TermsAgreement
+            accepted={termsAccepted}
+            onAccepted={onTermsAccepted}
+          />
+        )}
+
+        {mode === "sign-in" && (
+          <Button
+            className="authForgot"
+            onClick={() => onMode("forgot")}
+            variant="link"
+          >
+            Forgot password?
+          </Button>
+        )}
+
+        {error && <Banner tone="danger">{error}</Banner>}
+        {noticeTone === "success" && noticeBanner}
+
+        <Button block busy={busy} size="lg" type="submit" variant="primary">
+          {busy ? "One moment…" : copy.button}
+        </Button>
+      </form>
+
+      <CredentialAuthLinks
+        busy={busy}
+        mode={mode}
+        onCancel={onCancel}
+        onMode={onMode}
+      />
+    </AuthLayout>
+  );
+}
+
+function TermsAgreement({
+  accepted,
+  onAccepted,
+}: {
+  accepted: boolean;
+  onAccepted: (accepted: boolean) => void;
 }) {
   return (
-    <div className="authShell">
-      <AuthAside />
+    <label className="check">
+      <input
+        checked={accepted}
+        name="terms-accepted"
+        onChange={(event) => onAccepted(event.target.checked)}
+        required
+        type="checkbox"
+      />
+      <span>
+        I agree to the{" "}
+        <a href={`${websiteUrl}/terms`} rel="noreferrer" target="_blank">
+          Terms of Service
+        </a>{" "}
+        and acknowledge the{" "}
+        <a href={`${websiteUrl}/privacy`} rel="noreferrer" target="_blank">
+          Privacy Policy
+        </a>
+        .
+      </span>
+    </label>
+  );
+}
 
-      <main className="authMain">
-        <div className="authCard">
-          <p className="eyebrow">{copy.eyebrow}</p>
-          <h2>{copy.title}</h2>
-          <p className="authIntro">{descriptionFor(mode, variant)}</p>
-
-          <form
-            autoComplete="on"
-            className="authForm"
-            method="post"
-            onSubmit={(event) => void onSubmit(event)}
-          >
-            <AuthFields
-              confirmation={confirmation}
-              email={email}
-              mode={mode}
-              name={name}
-              onConfirmation={onConfirmation}
-              onEmail={onEmail}
-              onName={onName}
-              onPassword={onPassword}
-              password={password}
-            />
-
-            {mode === "sign-up" && (
-              <label className="authAgreement">
-                <input
-                  checked={termsAccepted}
-                  name="terms-accepted"
-                  onChange={(event) => onTermsAccepted(event.target.checked)}
-                  required
-                  type="checkbox"
-                />
-                <span>
-                  I agree to the{" "}
-                  <a
-                    href={`${websiteUrl}/terms`}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Terms of Service
-                  </a>{" "}
-                  and acknowledge the{" "}
-                  <a
-                    href={`${websiteUrl}/privacy`}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Privacy Policy
-                  </a>
-                  .
-                </span>
-              </label>
-            )}
-
-            {mode === "sign-in" && (
-              <button
-                className="forgotButton"
-                onClick={() => onMode("forgot")}
-                type="button"
-              >
-                Forgot password?
-              </button>
-            )}
-
-            {error && (
-              <div aria-live="polite" className="errorBanner">
-                {error}
-              </div>
-            )}
-            {notice && (
-              <div aria-live="polite" className="successBanner">
-                {notice}
-              </div>
-            )}
-
-            <button className="authSubmit" disabled={busy} type="submit">
-              {busy ? "One moment…" : copy.button}
-            </button>
-          </form>
-
-          {mode === "sign-in" && (
-            <p className="authSwitch">
-              New here?{" "}
-              <button onClick={() => onMode("sign-up")} type="button">
-                Create an account
-              </button>
-            </p>
-          )}
-          {mode !== "sign-in" && (
-            <p className="authSwitch">
-              <button onClick={() => onMode("sign-in")} type="button">
-                Back to sign in
-              </button>
-            </p>
-          )}
-          {onCancel && (
-            <p className="authSwitch authCancel">
-              <button
-                disabled={busy}
-                onClick={() => void onCancel()}
-                type="button"
-              >
-                Cancel and return to your account
-              </button>
-            </p>
-          )}
-          <AuthLegalLinks />
-        </div>
-      </main>
+function CredentialAuthLinks({
+  busy,
+  mode,
+  onCancel,
+  onMode,
+}: {
+  busy: boolean;
+  mode: AuthMode;
+  onCancel: (() => Promise<void>) | undefined;
+  onMode: (mode: AuthMode) => void;
+}) {
+  return (
+    <div className="authLinks">
+      {mode === "sign-in" ? (
+        <p>
+          New here?{" "}
+          <Button onClick={() => onMode("sign-up")} variant="link">
+            Create an account
+          </Button>
+        </p>
+      ) : (
+        <Button
+          icon="arrowLeft"
+          onClick={() => onMode("sign-in")}
+          variant="link"
+        >
+          Back to sign in
+        </Button>
+      )}
+      {onCancel && (
+        <Button
+          disabled={busy}
+          icon="arrowLeft"
+          onClick={() => void onCancel()}
+          variant="link"
+        >
+          Cancel and return to your account
+        </Button>
+      )}
     </div>
   );
 }
@@ -486,115 +524,208 @@ function TwoFactorChallenge({
   }
 
   return (
+    <AuthLayout>
+      <AuthHeading
+        description={
+          backupCode
+            ? "Enter one of the recovery codes you saved when you turned on two-factor authentication."
+            : "Enter the six-digit code from your authenticator app."
+        }
+        eyebrow="Two-step verification"
+        title="Confirm it’s you"
+      />
+      <TwoFactorForm
+        backupCode={backupCode}
+        busy={busy}
+        code={code}
+        error={error}
+        onCode={setCode}
+        onSubmit={verify}
+        onTrustDevice={setTrustDevice}
+        submitLabel={
+          variant === "add-account"
+            ? "Verify and add account"
+            : "Verify and sign in"
+        }
+        trustDevice={trustDevice}
+      />
+      <div className="authLinks">
+        <Button
+          disabled={busy}
+          onClick={() => chooseBackupCode(!backupCode)}
+          variant="link"
+        >
+          {backupCode ? "Use an authenticator code" : "Use a recovery code"}
+        </Button>
+        <Button
+          disabled={busy}
+          icon="arrowLeft"
+          onClick={() => void onCancel()}
+          variant="link"
+        >
+          {variant === "add-account"
+            ? "Cancel and return to your account"
+            : "Back to sign in"}
+        </Button>
+      </div>
+    </AuthLayout>
+  );
+}
+
+function TwoFactorForm({
+  backupCode,
+  busy,
+  code,
+  error,
+  onCode,
+  onSubmit,
+  onTrustDevice,
+  submitLabel,
+  trustDevice,
+}: {
+  backupCode: boolean;
+  busy: boolean;
+  code: string;
+  error: string | undefined;
+  onCode: (code: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onTrustDevice: (trustDevice: boolean) => void;
+  submitLabel: string;
+  trustDevice: boolean;
+}) {
+  return (
+    <form
+      autoComplete="on"
+      className="formGrid"
+      method="post"
+      onSubmit={(event) => void onSubmit(event)}
+    >
+      <Field label={backupCode ? "Recovery code" : "Authentication code"}>
+        <input
+          autoCapitalize="none"
+          autoComplete={backupCode ? "off" : "one-time-code"}
+          className={cx("input authCode", !backupCode && "authCodeDigits")}
+          id="two-factor-code"
+          inputMode={backupCode ? "text" : "numeric"}
+          maxLength={backupCode ? 32 : 8}
+          onChange={(event) => onCode(event.target.value)}
+          pattern={backupCode ? undefined : "[0-9 ]{6,8}"}
+          required
+          spellCheck={false}
+          value={code}
+        />
+      </Field>
+      <label className="check">
+        <input
+          checked={trustDevice}
+          onChange={(event) => onTrustDevice(event.target.checked)}
+          type="checkbox"
+        />
+        <span>Trust this device for 30 days</span>
+      </label>
+      {error && <Banner tone="danger">{error}</Banner>}
+      <Button block busy={busy} size="lg" type="submit" variant="primary">
+        {busy ? "Verifying…" : submitLabel}
+      </Button>
+    </form>
+  );
+}
+
+function AuthLayout({ children }: { children: ReactNode }) {
+  return (
     <div className="authShell">
       <AuthAside />
       <main className="authMain">
-        <div className="authCard">
-          <p className="eyebrow">Two-step verification</p>
-          <h2>Confirm it’s you</h2>
-          <p className="authIntro">
-            {backupCode
-              ? "Enter one of the recovery codes you saved when you enabled MFA."
-              : "Enter the six-digit code from your authenticator app."}
-          </p>
-          <form
-            autoComplete="on"
-            className="authForm"
-            method="post"
-            onSubmit={(event) => void verify(event)}
-          >
-            <label className="field" htmlFor="two-factor-code">
-              <span>
-                {backupCode ? "Recovery code" : "Authentication code"}
-              </span>
-              <input
-                autoCapitalize="none"
-                autoComplete={backupCode ? "off" : "one-time-code"}
-                id="two-factor-code"
-                inputMode={backupCode ? "text" : "numeric"}
-                maxLength={backupCode ? 32 : 8}
-                onChange={(event) => setCode(event.target.value)}
-                pattern={backupCode ? undefined : "[0-9 ]{6,8}"}
-                required
-                spellCheck={false}
-                value={code}
-              />
-            </label>
-            <label className="authCheckbox">
-              <input
-                checked={trustDevice}
-                onChange={(event) => setTrustDevice(event.target.checked)}
-                type="checkbox"
-              />
-              <span>Trust this device for 30 days</span>
-            </label>
-            {error && (
-              <div aria-live="polite" className="errorBanner">
-                {error}
-              </div>
-            )}
-            <button className="authSubmit" disabled={busy} type="submit">
-              {busy
-                ? "Verifying…"
-                : variant === "add-account"
-                  ? "Verify and add account"
-                  : "Verify and sign in"}
-            </button>
-          </form>
-          <p className="authSwitch">
-            <button
-              disabled={busy}
-              onClick={() => chooseBackupCode(!backupCode)}
-              type="button"
-            >
-              {backupCode ? "Use an authenticator code" : "Use a recovery code"}
-            </button>
-          </p>
-          <p className="authSwitch authCancel">
-            <button
-              disabled={busy}
-              onClick={() => void onCancel()}
-              type="button"
-            >
-              {variant === "add-account"
-                ? "Cancel and return to your account"
-                : "Back to sign in"}
-            </button>
-          </p>
-          <AuthLegalLinks />
-        </div>
+        <div className="authPanel">{children}</div>
+        <AuthLegalLinks />
       </main>
     </div>
+  );
+}
+
+function AuthHeading({
+  description,
+  eyebrow,
+  title,
+}: {
+  description: string;
+  eyebrow: string;
+  title: string;
+}) {
+  return (
+    <header className="authHeading">
+      <p className="eyebrow">{eyebrow}</p>
+      <h1 className="authTitle">{title}</h1>
+      <p className="authIntro">{description}</p>
+    </header>
   );
 }
 
 function AuthLegalLinks() {
   return (
     <nav aria-label="Legal" className="authLegal">
-      <a href={`${websiteUrl}/privacy`}>Privacy</a>
-      <a href={`${websiteUrl}/terms`}>Terms</a>
-      <a href={`${websiteUrl}/data-retention`}>Retention</a>
+      {legalLinks.map((link) => (
+        <a href={`${websiteUrl}${link.href}`} key={link.href}>
+          {link.label}
+        </a>
+      ))}
     </nav>
   );
 }
 
+const asidePoints: ReadonlyArray<{
+  description: string;
+  icon: IconName;
+  title: string;
+}> = [
+  {
+    description: "Run inspections from reusable templates.",
+    icon: "audits",
+    title: "Audits and checklists",
+  },
+  {
+    description: "Capture what needs fixing, right where you find it.",
+    icon: "camera",
+    title: "Issues with photos",
+  },
+  {
+    description: "Invite your team and require two-factor authentication.",
+    icon: "security",
+    title: "Team access you control",
+  },
+];
+
 function AuthAside() {
   return (
-    <aside className="authAside">
-      <a className="brand" href="/" aria-label="Tearleads home">
-        <span className="brandMark">T</span>
-        <span>Tearleads</span>
-      </a>
-      <div className="authAsideCopy">
-        <p className="eyebrow">Private by design</p>
-        <h1>Keep the things that matter close.</h1>
-        <p>
-          A small, quiet workspace backed by Cloudflare. No noise, no
-          ceremony—just your files when you need them.
-        </p>
-      </div>
-      <div className="sidebarFoot">
-        <span className="statusDot" /> Cloudflare connected
+    <aside className="authAside onDark">
+      <div className="authAsideInner">
+        <a aria-label={`${productName} home`} className="authBrand" href="/">
+          <Logo />
+        </a>
+        <div className="authAsideCopy">
+          <p className="eyebrow eyebrowDot">Private by design</p>
+          <p className="title authHeadline">
+            Keep what matters.{" "}
+            <span className="serifAccent">Lose the noise.</span>
+          </p>
+          <p className="lead">
+            One quiet workspace for your audits, the issues they turn up, and
+            the business records and files behind them.
+          </p>
+        </div>
+        <ul className="authPoints">
+          {asidePoints.map((point) => (
+            <li className="authPoint" key={point.title}>
+              <span className="authPointIcon">
+                <Icon name={point.icon} />
+              </span>
+              <span className="authPointText">
+                <strong>{point.title}</strong>
+                <span>{point.description}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
     </aside>
   );
@@ -648,6 +779,7 @@ function AuthFields(props: AuthFieldsProps) {
           autoComplete={
             mode === "sign-in" ? "current-password" : "new-password"
           }
+          help={needsConfirmation ? "Use at least 12 characters." : undefined}
           label={mode === "sign-in" ? "Password" : "New password"}
           maxLength={128}
           minLength={12}
@@ -660,7 +792,6 @@ function AuthFields(props: AuthFieldsProps) {
       {needsConfirmation && (
         <AuthInput
           autoComplete="new-password"
-          help="Use at least 12 characters."
           label="Confirm password"
           maxLength={128}
           minLength={12}
@@ -677,7 +808,7 @@ function AuthFields(props: AuthFieldsProps) {
 interface AuthInputProps {
   autoCapitalize?: "none";
   autoComplete: string;
-  help?: string;
+  help?: string | undefined;
   inputMode?: "email";
   label: string;
   maxLength?: number;
@@ -697,17 +828,16 @@ function AuthInput({
   ...props
 }: AuthInputProps) {
   return (
-    <label className="field" htmlFor={props.name}>
-      <span>{label}</span>
+    <Field hint={help} label={label}>
       <input
         {...props}
+        className="input"
         id={props.name}
         onChange={(event) => onValue(event.target.value)}
         required
         type={type}
       />
-      {help && <small>{help}</small>}
-    </label>
+    </Field>
   );
 }
 

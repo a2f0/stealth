@@ -1,3 +1,17 @@
+import {
+  Badge,
+  type BadgeTone,
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  Icon,
+  LoadingState,
+  Page,
+  PageBody,
+  PageHeader,
+  PageSection,
+} from "@tearleads/ui/react";
 import { useCallback, useEffect, useState } from "react";
 import {
   type AuditSummary,
@@ -8,6 +22,7 @@ import {
   listAuditTemplates,
   startAudit,
 } from "./auditApi";
+import { countLabel, formatLabel } from "./labels";
 
 export function AuditHome({
   canManageGlobal,
@@ -81,34 +96,14 @@ export function AuditHome({
   }
 
   return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Inspections &amp; compliance</p>
-          <h1>Audits</h1>
-        </div>
-        <div className="auditHeaderActions">
-          {canManageGlobal && (
-            <button
-              disabled={busy}
-              onClick={() => void createTemplate("global")}
-              type="button"
-            >
-              New global checklist
-            </button>
-          )}
-          <button
-            className="primaryButton"
-            disabled={busy}
-            onClick={() => void createTemplate("organization")}
-            type="button"
-          >
-            New organization checklist
-          </button>
-        </div>
-      </header>
-      <section className="content auditHome">
-        {error && <div className="errorBanner">{error}</div>}
+    <Page>
+      <AuditHomeHeader
+        busy={busy}
+        canManageGlobal={canManageGlobal}
+        onCreate={createTemplate}
+      />
+      <PageBody>
+        {error && <Banner tone="danger">{error}</Banner>}
         <TemplateGrid
           busy={busy}
           canManageGlobal={canManageGlobal}
@@ -124,142 +119,209 @@ export function AuditHome({
           onOpen={(id) => onNavigate(`/audits/runs/${id}`)}
           runs={runs}
         />
-      </section>
-    </>
+      </PageBody>
+    </Page>
   );
 }
 
-function TemplateGrid({
+function AuditHomeHeader({
   busy,
   canManageGlobal,
-  onBegin,
-  onEdit,
-  onManage,
-  templates,
+  onCreate,
 }: {
   busy: boolean;
   canManageGlobal: boolean;
+  onCreate: (scope: AuditTemplateScope) => Promise<void>;
+}) {
+  return (
+    <PageHeader
+      actions={
+        <>
+          {canManageGlobal && (
+            <Button
+              disabled={busy}
+              icon="add"
+              onClick={() => void onCreate("global")}
+            >
+              New global checklist
+            </Button>
+          )}
+          <Button
+            disabled={busy}
+            icon="add"
+            onClick={() => void onCreate("organization")}
+            variant="primary"
+          >
+            New organization checklist
+          </Button>
+        </>
+      }
+      description="Run inspections from shared or organization checklists and keep every finding in one place."
+      eyebrow="Inspections & compliance"
+      title="Audits"
+    />
+  );
+}
+
+interface TemplateActions {
+  busy: boolean;
   onBegin: (id: string) => Promise<void>;
   onEdit: (id: string) => void;
   onManage: (id: string) => void;
+}
+
+function TemplateGrid({
+  canManageGlobal,
+  templates,
+  ...actions
+}: TemplateActions & {
+  canManageGlobal: boolean;
   templates: AuditTemplate[] | undefined;
 }) {
   return (
-    <section>
-      <div className="sectionHeading">
-        <h2>Checklist templates</h2>
-        <span>{templates?.length ?? 0} templates</span>
-      </div>
-      {templates && (
-        <div className="auditTemplateCollections">
+    <PageSection
+      actions={
+        templates && (
+          <span className="sectionCount">
+            {countLabel(templates.length, "template")}
+          </span>
+        )
+      }
+      title="Checklist templates"
+    >
+      {templates ? (
+        <div className="auditCollections">
           <TemplateCollection
-            busy={busy}
+            {...actions}
             canManageGlobal={canManageGlobal}
+            description="Available in every organization."
             emptyMessage="No global checklists are available yet."
-            onBegin={onBegin}
-            onEdit={onEdit}
-            onManage={onManage}
-            scope="global"
+            emptyTitle="No global forms"
             templates={templates.filter(({ scope }) => scope === "global")}
             title="Global forms"
           />
           <TemplateCollection
-            busy={busy}
+            {...actions}
             canManageGlobal={false}
-            emptyMessage="No forms have been created for this organization yet."
-            onBegin={onBegin}
-            onEdit={onEdit}
-            onManage={onManage}
-            scope="organization"
+            description="Private to the active organization."
+            emptyMessage="No forms have been created for this organization yet. Customize a global form or start a new checklist."
+            emptyTitle="No organization forms yet"
             templates={templates.filter(
               ({ scope }) => scope === "organization",
             )}
             title="Organization forms"
           />
         </div>
+      ) : (
+        <LoadingState label="Loading checklists…" />
       )}
-      {!templates && <p className="auditLoading">Loading checklists…</p>}
-    </section>
+    </PageSection>
   );
 }
 
 function TemplateCollection({
-  busy,
   canManageGlobal,
+  description,
   emptyMessage,
-  onBegin,
-  onEdit,
-  onManage,
-  scope,
+  emptyTitle,
   templates,
   title,
-}: {
-  busy: boolean;
+  ...actions
+}: TemplateActions & {
   canManageGlobal: boolean;
+  description: string;
   emptyMessage: string;
-  onBegin: (id: string) => Promise<void>;
-  onEdit: (id: string) => void;
-  onManage: (id: string) => void;
-  scope: AuditTemplateScope;
+  emptyTitle: string;
   templates: AuditTemplate[];
   title: string;
 }) {
   return (
-    <section className="auditTemplateCollection">
+    <section className="auditCollection">
       <div className="auditCollectionHeading">
-        <div>
-          <h3>{title}</h3>
-          <p>
-            {scope === "global"
-              ? "Available in every organization."
-              : "Private to the active organization."}
-          </p>
-        </div>
-        <span>{templates.length}</span>
+        <h3 className="auditCollectionTitle">
+          {title}
+          <Badge>{templates.length}</Badge>
+        </h3>
+        <p className="textSm textMuted">{description}</p>
       </div>
       {templates.length > 0 ? (
-        <div className="auditTemplateGrid">
+        <div className="gridAuto auditTemplateGrid">
           {templates.map((template) => (
-            <article className="auditTemplateCard" key={template.id}>
-              <div>
-                <div className="auditTemplateBadges">
-                  <span className="auditStatus">{template.status}</span>
-                  <span className="auditScope">
-                    {scopeLabel(template.scope)}
-                  </span>
-                </div>
-                <h3>{template.name}</h3>
-                <p>{template.description || "A custom checklist."}</p>
-              </div>
-              <span className="auditCardMeta">
-                v{template.version} · {itemCount(template)} items ·{" "}
-                {template.definition.sections.length} sections
-              </span>
-              <div className="auditCardActions">
-                <button onClick={() => onEdit(template.id)} type="button">
-                  {scope === "global" ? "Customize" : "Edit"}
-                </button>
-                {scope === "global" && canManageGlobal && (
-                  <button onClick={() => onManage(template.id)} type="button">
-                    Manage global
-                  </button>
-                )}
-                <button
-                  className="primaryButton"
-                  disabled={busy}
-                  onClick={() => void onBegin(template.id)}
-                  type="button"
-                >
-                  Start audit
-                </button>
-              </div>
-            </article>
+            <TemplateCard
+              {...actions}
+              canManageGlobal={canManageGlobal}
+              key={template.id}
+              template={template}
+            />
           ))}
         </div>
       ) : (
-        <p className="auditCollectionEmpty">{emptyMessage}</p>
+        <EmptyState compact icon="checklist" title={emptyTitle}>
+          {emptyMessage}
+        </EmptyState>
       )}
     </section>
+  );
+}
+
+function TemplateCard({
+  busy,
+  canManageGlobal,
+  onBegin,
+  onEdit,
+  onManage,
+  template,
+}: TemplateActions & { canManageGlobal: boolean; template: AuditTemplate }) {
+  const isGlobal = template.scope === "global";
+  const sectionCount = template.definition.sections.length;
+  return (
+    <article className="card auditTemplateCard">
+      <div className="auditTemplateBody">
+        <div className="cluster">
+          <Badge dot tone={templateStatusTone(template.status)}>
+            {formatLabel(template.status)}
+          </Badge>
+          <Badge tone="info">{scopeLabel(template.scope)}</Badge>
+        </div>
+        <h4 className="auditTemplateName">{template.name}</h4>
+        <p className="auditTemplateDescription">
+          {template.description || "A custom checklist."}
+        </p>
+        <p className="auditTemplateMeta">
+          <span className="cluster auditTemplateStat">
+            <Icon name="checklist" size={16} />
+            {countLabel(itemCount(template), "item")}
+          </span>
+          <span className="cluster auditTemplateStat">
+            <Icon name="layers" size={16} />
+            {countLabel(sectionCount, "section")}
+          </span>
+          <span className="auditTemplateStat mono">v{template.version}</span>
+        </p>
+      </div>
+      <div className="cardFooter auditTemplateFooter">
+        <div className="cluster auditTemplateActions">
+          <Button icon="edit" onClick={() => onEdit(template.id)} size="sm">
+            {isGlobal ? "Customize" : "Edit"}
+          </Button>
+          {isGlobal && canManageGlobal && (
+            <Button onClick={() => onManage(template.id)} size="sm">
+              Manage global
+            </Button>
+          )}
+        </div>
+        <Button
+          className="auditTemplateStart"
+          disabled={busy}
+          iconEnd="arrowRight"
+          onClick={() => void onBegin(template.id)}
+          size="sm"
+          variant="primary"
+        >
+          Start audit
+        </Button>
+      </div>
+    </article>
   );
 }
 
@@ -277,52 +339,86 @@ function AuditHistory({
   runs: AuditSummary[] | undefined;
 }) {
   return (
-    <section className="auditHistory">
-      <div className="sectionHeading">
-        <h2>Recent audits</h2>
-        <span>
-          {runs?.length ?? 0}
-          {hasMore ? "+" : ""} audits
-        </span>
-      </div>
+    <PageSection
+      actions={
+        runs && (
+          <span className="sectionCount">
+            {runs.length}
+            {hasMore ? "+" : ""}{" "}
+            {runs.length === 1 && !hasMore ? "audit" : "audits"}
+          </span>
+        )
+      }
+      title="Recent audits"
+    >
       {runs?.length ? (
-        <div className="auditRunList">
-          {runs.map((run) => (
-            <button key={run.id} onClick={() => onOpen(run.id)} type="button">
-              <span>
-                <strong>{run.templateName}</strong>
-                <small>
-                  {run.templateVersion ? `v${run.templateVersion} · ` : ""}
-                  {formatDate(run.updatedAt)}
-                </small>
-              </span>
-              <span className={`auditStatus ${run.status}`}>{status(run)}</span>
-              <span>{run.responseCount} answered</span>
-              <span>{run.issueCount} issues</span>
-              <b>→</b>
-            </button>
-          ))}
-        </div>
-      ) : runs ? (
-        <div className="emptyState compactEmptyState">
-          <div className="emptyGlyph">✓</div>
-          <h3>No audits yet.</h3>
-          <p>Start one from a checklist above.</p>
-        </div>
-      ) : (
-        <p className="auditLoading">Loading audits…</p>
-      )}
-      {hasMore && (
-        <button
-          className="auditLoadMore"
-          disabled={loadingMore}
-          onClick={() => void onLoadMore()}
-          type="button"
+        <Card
+          className="auditRunCard"
+          flush
+          footer={
+            hasMore && (
+              <Button
+                busy={loadingMore}
+                onClick={() => void onLoadMore()}
+                size="sm"
+              >
+                {loadingMore ? "Loading…" : "Load more audits"}
+              </Button>
+            )
+          }
         >
-          {loadingMore ? "Loading…" : "Load more audits"}
-        </button>
+          <div className="rowList">
+            {runs.map((run) => (
+              <AuditRunRow key={run.id} onOpen={onOpen} run={run} />
+            ))}
+          </div>
+        </Card>
+      ) : runs ? (
+        <EmptyState compact icon="audits" title="No audits yet">
+          Start one from a checklist above.
+        </EmptyState>
+      ) : (
+        <LoadingState label="Loading audits…" />
       )}
-    </section>
+    </PageSection>
+  );
+}
+
+function AuditRunRow({
+  onOpen,
+  run,
+}: {
+  onOpen: (id: string) => void;
+  run: AuditSummary;
+}) {
+  return (
+    <button
+      className="row auditRunRow"
+      onClick={() => onOpen(run.id)}
+      type="button"
+    >
+      <span className="rowMain">
+        <span className="rowTitle">{run.templateName}</span>
+        <span className="rowMeta">
+          {run.templateVersion ? `v${run.templateVersion} · ` : ""}
+          {formatDate(run.updatedAt)}
+        </span>
+      </span>
+      <span className="auditRunStats">
+        <Badge dot tone={run.status === "completed" ? "success" : "warning"}>
+          {status(run)}
+        </Badge>
+        <span className="auditRunStat">
+          <Icon name="check" size={16} />
+          {run.responseCount} answered
+        </span>
+        <span className="auditRunStat">
+          <Icon name="issues" size={16} />
+          {countLabel(run.issueCount, "issue")}
+        </span>
+      </span>
+      <Icon className="auditRunArrow" name="arrowRight" />
+    </button>
   );
 }
 
@@ -335,6 +431,11 @@ function itemCount(template: AuditTemplate) {
 
 function status(run: AuditSummary) {
   return run.status === "completed" ? "Completed" : "In progress";
+}
+
+function templateStatusTone(value: string): BadgeTone {
+  if (value === "published") return "success";
+  return "neutral";
 }
 
 function scopeLabel(scope: AuditTemplateScope) {

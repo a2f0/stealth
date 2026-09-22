@@ -1,0 +1,80 @@
+/* Platform administration: user and organization tables. */
+
+.adminIdentity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.adminIdentityText {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.adminIdentityName {
+  color: var(--color-text);
+  font-weight: 600;
+  overflow-wrap: break-word;
+}
+
+/* Values stay whole and readable. break-word (unlike anywhere) keeps each
+ * column's minimum width, so narrow screens scroll the table instead of
+ * crushing a column to a few characters. */
+.adminIdentityDetail,
+.adminSlug {
+  color: var(--color-text-subtle);
+  overflow-wrap: break-word;
+}
+
+.adminIdentityDetail {
+  font-size: var(--text-sm);
+}
+
+.adminSlug {
+  max-width: 13rem;
+  font-size: var(--text-xs);
+}
+
+.adminOrganization {
+  min-width: 11rem;
+}
+
+.adminOrganizationName {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.adminStatus {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.adminDate {
+  white-space: nowrap;
+}
+
+.adminActions {
+  text-align: right;
+}
+
+.adminNumeric {
+  text-align: right;
+}
+
+/* Owner and actor details wrap within a bounded column. */
+.adminOrganizationTable .adminIdentityDetail {
+  max-width: 13rem;
+}
+
+/* Minimum widths keep columns legible; the wrapper scrolls on small screens. */
+.adminUsersTable {
+  min-width: 40rem;
+}
+
+.adminOrganizationTable {
+  min-width: 56rem;
+}

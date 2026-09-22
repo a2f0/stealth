@@ -1,0 +1,16 @@
+/*
+ * Client-only layout. Shared tokens and components come from
+ * @tearleads/ui/styles.css, which main.tsx imports first.
+ */
+@import "./shell.css";
+@import "./auth.css";
+@import "./library.css";
+@import "./inbox.css";
+@import "./audits.css";
+@import "./auditRun.css";
+@import "./finance.css";
+@import "./businesses.css";
+@import "./organization.css";
+@import "./organizationPeople.css";
+@import "./admin.css";
+@import "./account.css";

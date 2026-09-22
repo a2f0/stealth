@@ -1,149 +1,369 @@
 ---
-import SiteFooter from "../components/SiteFooter.astro";
-import "../styles/global.css";
+import { plans, productName } from "@tearleads/ui/brand";
+import type { IconName } from "@tearleads/ui/icons";
+import AuditPreview from "../components/AuditPreview.astro";
+import Icon from "../components/Icon.astro";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { appUrl } from "../site";
+import "../styles/home.css";
 
-const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
+// Pricing sentences read from the shared plans so they never drift.
+const [free, pro] = plans;
+
+const features: { icon: IconName; text: string; title: string }[] = [
+  {
+    icon: "issues",
+    text: "Raise an issue in the middle of an audit with a priority, a description, an assignee from your organization, and up to ten photos. Reassign it later as the work moves.",
+    title: "Issues",
+  },
+  {
+    icon: "organization",
+    text: "Invite members as owners, admins, or members. Groups grant capabilities such as Finance, and owners can require two-factor authentication for any member.",
+    title: "People and roles",
+  },
+  {
+    icon: "security",
+    text: "Two-factor authentication with an authenticator app and recovery codes. Keep several accounts signed in on one browser and switch between them quickly.",
+    title: "Sign-in security",
+  },
+  {
+    icon: "inbox",
+    text: "Upload files to your organization’s library. Each organization also gets its own inbound email address for forwarding documents and attachments, with trash and restore.",
+    title: "Library and inbox",
+  },
+  {
+    icon: "businesses",
+    text: "Keep a record for each business you run: legal name, EIN, incorporation date, and address.",
+    title: "Businesses",
+  },
+];
+
+const steps: { icon: IconName; text: string; title: string }[] = [
+  {
+    icon: "checklist",
+    text: "Start from one of your organization’s templates, or customize a global starting point into your own form. Every organization has two to begin with.",
+    title: "Pick a checklist",
+  },
+  {
+    icon: "camera",
+    text: "Record pass, fail, N/A, or a written response for each item. When something needs attention, raise an issue on the spot with photos and an assignee.",
+    title: "Walk the site",
+  },
+  {
+    icon: "success",
+    text: "Reassign issues as the work moves. The audit keeps a snapshot of the template it started from, so the record stays exactly as it was taken.",
+    title: "Close the loop",
+  },
+];
+
+const principles: {
+  link?: { href: string; label: string };
+  text: string;
+  title: string;
+}[] = [
+  {
+    text: "No feeds, streaks, or manufactured urgency. The workspace stays out of the way until there is work to do.",
+    title: "Quiet by default",
+  },
+  {
+    text: "Templates are versioned and every audit keeps its own snapshot, so later edits never rewrite a finished record.",
+    title: "Built to endure",
+  },
+  {
+    link: { href: "/data-retention", label: "How retention works" },
+    text: "Each organization’s data is isolated from every other. A deleted organization stays recoverable for 30 days before it is permanently purged.",
+    title: "Private by design",
+  },
+];
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width" />
-    <meta name="theme-color" content="#e9ffcc" />
-    <meta
-      name="description"
-      content="Tearleads is a quiet, durable home for the work and files that matter."
-    />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <title>Tearleads — Keep what matters</title>
-  </head>
-  <body>
-    <header class="siteHeader">
-      <a class="logo" href="/" aria-label="Tearleads home">
-        <span>T</span> Tearleads
-      </a>
-      <nav aria-label="Main navigation">
-        <a href="#principles">Principles</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#pricing">Pricing</a>
-      </nav>
-      <a class="headerCta" href={appUrl}>Open app ↗</a>
-    </header>
-
-    <main>
-      <section class="hero">
-        <div class="heroCopy">
-          <p class="kicker"><span></span> Private by disposition</p>
-          <h1>Keep what matters.<br /><em>Lose the noise.</em></h1>
-          <p class="lede">
-            A focused home for your files, designed around clarity, durability,
-            and an edge-native foundation.
-          </p>
-          <div class="heroActions">
-            <a class="primaryCta" href={appUrl}>Enter your workspace</a>
-            <a class="secondaryCta" href="#architecture">See how it works ↓</a>
-          </div>
-        </div>
-        <div class="heroVisual" aria-hidden="true">
-          <div class="orbit orbitOne"></div>
-          <div class="orbit orbitTwo"></div>
-          <div class="signal"><span>T</span></div>
-          <div class="coordinate coordinateOne">40.7128° N</div>
-          <div class="coordinate coordinateTwo">EDGE / 001</div>
-        </div>
-      </section>
-
-      <section class="manifesto" id="principles">
-        <p class="sectionLabel">01 / Principles</p>
-        <p class="manifestoText">
-          Software should feel like a well-made room: useful objects close at
-          hand, nothing shouting for attention, and enough space to think.
+<BaseLayout
+  description={`${productName} is a calm workspace for audits, issues, files, and business records. Run audits from versioned checklists, raise issues with photos, and keep every record as it was.`}
+  title={`${productName} — Keep what matters`}
+>
+  <section aria-labelledby="hero-title" class="hero">
+    <div class="container heroInner">
+      <div class="heroCopy">
+        <p class="eyebrow eyebrowDot">Audits · Issues · Records</p>
+        <h1 class="headline heroTitle" id="hero-title">
+          Keep what matters. <span class="serifAccent">Lose the noise.</span>
+        </h1>
+        <p class="lead heroLead">
+          A quiet workspace for your organization’s audits, issues, files, and
+          records. Walk a site, note what you find, and keep the result exactly as
+          it was recorded.
         </p>
-        <div class="principles">
-          <article>
-            <span>01</span>
-            <h2>Quiet by default</h2>
-            <p>No feeds, streaks, or ornamental urgency. Your work sets the pace.</p>
-          </article>
-          <article>
-            <span>02</span>
-            <h2>Built to endure</h2>
-            <p>Simple primitives and open formats make a calmer foundation.</p>
-          </article>
-          <article>
-            <span>03</span>
-            <h2>Fast everywhere</h2>
-            <p>Compute and storage live close to you on Cloudflare's network.</p>
-          </article>
+        <div class="cluster heroActions">
+          <a class="button buttonPrimary buttonLg" href={appUrl}>
+            Start free
+            <Icon name="arrowRight" />
+          </a>
+          <a class="button buttonLg" href="#how-it-works">See how it works</a>
         </div>
-      </section>
+        <p class="heroNote">
+          {free.name} for {free.features[0]}. {pro.name} is {pro.price}{" "}
+          {pro.cadence}.
+        </p>
+      </div>
+      <AuditPreview />
+    </div>
+  </section>
 
-      <section class="architecture" id="architecture">
-        <div>
-          <p class="sectionLabel">02 / Foundation</p>
-          <h2>Small surface.<br />Serious infrastructure.</h2>
-        </div>
-        <div class="stack">
-          <div class="stackRow">
-            <span class="stackIndex">A</span>
-            <div><strong>Workers</strong><small>API at the edge</small></div>
-            <span class="stackStatus">Active</span>
-          </div>
-          <div class="stackRow">
-            <span class="stackIndex">B</span>
-            <div><strong>D1</strong><small>Relational metadata</small></div>
-            <span class="stackStatus">Active</span>
-          </div>
-          <div class="stackRow">
-            <span class="stackIndex">C</span>
-            <div><strong>R2</strong><small>Durable object storage</small></div>
-            <span class="stackStatus">Active</span>
-          </div>
-        </div>
-      </section>
+  <section aria-labelledby="product-title" class="band" id="product">
+    <div class="container">
+      <div class="bandIntro">
+        <p class="eyebrow eyebrowDot">Product</p>
+        <h2 class="title" id="product-title">
+          One place for the work{" "}
+          <span class="serifAccent titleBreak">and the paperwork.</span>
+        </h2>
+        <p class="lead">
+          Audits sit at the center. Around them are the people, files, and
+          records your organization keeps, each scoped to that organization.
+        </p>
+      </div>
 
-      <section class="pricing" id="pricing">
-        <div class="pricingHeading">
-          <p class="sectionLabel">03 / Pricing</p>
-          <h2>Start free.<br />Scale by seat.</h2>
-        </div>
-        <div class="pricingGrid">
-          <article class="priceCard">
-            <p class="kicker"><span></span> Free</p>
-            <h3>$0</h3>
-            <ul>
-              <li>1 user</li>
-              <li>5 form templates</li>
-              <li>30-day audit history</li>
+      <div class="featureGrid">
+        <article class="card cardAccent featureCard featureWide">
+          <div class="featureText">
+            <div class="featureHead">
+              <span class="featureIcon"><Icon name="audits" size={20} /></span>
+              <h3 class="featureTitle">Audits and checklists</h3>
+            </div>
+            <p>
+              Build checklist templates for your organization and start audits
+              from them. Record pass, fail, N/A, or a written response for each
+              item. Templates are versioned and each audit snapshots its
+              template, so later edits never rewrite history.
+            </p>
+          </div>
+          <div aria-hidden="true" class="card cardFlush featureVisual">
+            <ul class="rowList">
+              <li class="row">
+                <div class="rowMain">
+                  <span class="rowTitle">Site walkthrough</span>
+                  <span class="rowMeta">Template · version 3</span>
+                </div>
+                <span class="badge badgeAccent">Current</span>
+              </li>
+              <li class="row">
+                <div class="rowMain">
+                  <span class="rowTitle">Audit · Maple Street</span>
+                  <span class="rowMeta">Snapshot of version 2</span>
+                </div>
+                <span class="badge">Kept as recorded</span>
+              </li>
+              <li class="row">
+                <div class="rowMain">
+                  <span class="rowTitle">Audit · Harbor Lane</span>
+                  <span class="rowMeta">Snapshot of version 1</span>
+                </div>
+                <span class="badge">Kept as recorded</span>
+              </li>
             </ul>
-            <a class="secondaryCta" href={appUrl}>Get started →</a>
-          </article>
-          <article class="priceCard featured">
-            <p class="kicker"><span></span> Pro</p>
-            <h3>$10 <small class="priceCaption">/ user / month</small></h3>
-            <ul>
-              <li>Unlimited form templates</li>
-              <li>Unlimited audit history</li>
-              <li>Seats stay in sync with your team</li>
+          </div>
+        </article>
+
+        {
+          features.map((feature) => (
+            <article class="card featureCard">
+              <div class="featureText">
+                <div class="featureHead">
+                  <span class="featureIcon">
+                    <Icon name={feature.icon} size={20} />
+                  </span>
+                  <h3 class="featureTitle">{feature.title}</h3>
+                </div>
+                <p>{feature.text}</p>
+              </div>
+            </article>
+          ))
+        }
+
+        <article class="card featureCard featureWide">
+          <div class="featureText">
+            <div class="featureHead">
+              <span class="featureIcon"><Icon name="finance" size={20} /></span>
+              <h3 class="featureTitle">Finance</h3>
+            </div>
+            <p>
+              Members of a Finance group can connect bank accounts through Plaid,
+              import up to 24 months of transactions, and add notes, category
+              overrides, labels, and a reviewed flag.
+            </p>
+          </div>
+          <div aria-hidden="true" class="card cardFlush featureVisual">
+            <ul class="rowList">
+              <li class="row">
+                <div class="rowMain">
+                  <span class="rowTitle">Harbor Supply Co.</span>
+                  <span class="rowMeta">Materials · Note added</span>
+                </div>
+                <span class="badge badgeSuccess">Reviewed</span>
+              </li>
+              <li class="row">
+                <div class="rowMain">
+                  <span class="rowTitle">City permit office</span>
+                  <span class="rowMeta">Permits · Label: Maple Street</span>
+                </div>
+                <span class="badge badgeWarning">Pending</span>
+              </li>
             </ul>
-            <a class="primaryCta" href={appUrl}>Open Tearleads ↗</a>
-          </article>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="how-title" class="band bandInk onDark" id="how-it-works">
+    <div class="container">
+      <div class="bandIntro">
+        <p class="eyebrow eyebrowDot">How it works</p>
+        <h2 class="title" id="how-title">
+          Walk the site. <span class="serifAccent">Keep the record.</span>
+        </h2>
+      </div>
+      <ol class="steps">
+        {
+          steps.map((step, index) => (
+            <li class="step">
+              <div class="stepHead">
+                <span class="stepNumber">{String(index + 1).padStart(2, "0")}</span>
+                <Icon class="stepIcon" name={step.icon} size={20} />
+              </div>
+              <h3 class="stepTitle">{step.title}</h3>
+              <p class="stepText">{step.text}</p>
+            </li>
+          ))
+        }
+      </ol>
+      <div class="startingPoints">
+        <h3 class="startingPointsTitle">Two global starting points</h3>
+        <ul class="startingPointsList">
+          <li>
+            <Icon name="checklist" />
+            <span>
+              An electrical-safety readiness checklist based on broad NFPA 70E
+              themes.
+            </span>
+          </li>
+          <li>
+            <Icon name="checklist" />
+            <span>
+              A U.S. residential construction baseline with 253 controls for
+              detached one- and two-family homes and townhouses.
+            </span>
+          </li>
+        </ul>
+        <p class="finePrint">
+          Global checklists are starting points, not official checklists,
+          certifications, or code-compliance determinations. Review them against
+          the requirements that apply to your work.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="principles-title" class="band" id="principles">
+    <div class="container">
+      <div class="bandIntro">
+        <p class="eyebrow eyebrowDot">Principles</p>
+        <h2 class="title" id="principles-title">
+          Software should feel like a <span class="serifAccent">well-made room.</span>
+        </h2>
+        <p class="lead">
+          Useful things close at hand, nothing shouting for attention, and enough
+          space to think.
+        </p>
+      </div>
+      <ol class="principles">
+        {
+          principles.map((principle, index) => (
+            <li class="principle">
+              <span class="principleNumber">{String(index + 1).padStart(2, "0")}</span>
+              <h3 class="principleTitle">{principle.title}</h3>
+              <p>{principle.text}</p>
+              {principle.link && (
+                <a class="button buttonLink principleLink" href={principle.link.href}>
+                  {principle.link.label}
+                </a>
+              )}
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <section aria-labelledby="pricing-title" class="band bandSunken" id="pricing">
+    <div class="container">
+      <div class="bandIntro bandIntroCenter">
+        <p class="eyebrow eyebrowDot">Pricing</p>
+        <h2 class="title" id="pricing-title">
+          Start free. <span class="serifAccent">Scale by seat.</span>
+        </h2>
+      </div>
+      <div class="pricingGrid">
+        {
+          plans.map((plan) => (
+            <article
+              class:list={["card", "priceCard", { cardAccent: plan.id === "pro" }]}
+            >
+              <div class="priceCardHead">
+                <h3 class="priceName">{plan.name}</h3>
+                <p class="priceDescription">{plan.description}</p>
+              </div>
+              <p class="price">
+                <span class="priceAmount">{plan.price}</span>
+                <span class="priceCadence">{plan.cadence}</span>
+              </p>
+              <ul class="priceFeatures">
+                {plan.features.map((feature) => (
+                  <li>
+                    <Icon name="check" size={16} />
+                    {feature}
+                  </li>
+                ))}
+              </ul>
+              <a
+                class:list={[
+                  "button",
+                  "buttonLg",
+                  "buttonBlock",
+                  { buttonPrimary: plan.id === "pro" },
+                ]}
+                href={appUrl}
+              >
+                {plan.id === "pro" ? "Get started" : "Start free"}
+              </a>
+            </article>
+          ))
+        }
+      </div>
+      <p class="pricingNote">
+        Pro is billed per active user each month, and seats stay in sync with
+        your team. Checkout and billing management run through Stripe.
+      </p>
+    </div>
+  </section>
+
+  <section aria-labelledby="closing-title" class="band">
+    <div class="container">
+      <div class="closingPanel">
+        <p class="eyebrow eyebrowDot">Ready when you are</p>
+        <h2 class="display" id="closing-title">Make some room.</h2>
+        <p class="lead closingLead">
+          Start free with {free.features[0]} and {free.features[1]}. Invite
+          your team when you’re ready.
+        </p>
+        <div class="cluster closingActions">
+          <a class="button buttonPrimary buttonLg" href={appUrl}>
+            Start free
+            <Icon name="arrowRight" />
+          </a>
+          <a class="button buttonLg" href={appUrl}>Sign in</a>
         </div>
-      </section>
-
-      <section class="closing">
-        <p class="kicker"><span></span> Ready when you are</p>
-        <h2>Make some room.</h2>
-        <a class="primaryCta light" href={appUrl}>Open Tearleads ↗</a>
-      </section>
-    </main>
-
-    <SiteFooter />
-  </body>
-</html>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

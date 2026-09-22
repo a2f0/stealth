@@ -1,0 +1,279 @@
+/* Organization people (members, invitations) and access (groups). */
+
+/* Invite form: the address gets the room, the role stays compact. */
+.inviteFields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+/* Member rows share one column grid so controls line up across rows. */
+.memberListFrame {
+  container-type: inline-size;
+}
+
+.memberList {
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+}
+
+.memberRow {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  column-gap: 0;
+}
+
+.memberIdentity {
+  display: flex;
+  flex: 1 1 10rem;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.memberName {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.memberTwoFactor,
+.memberRole,
+.memberActions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.memberActions {
+  justify-content: flex-end;
+}
+
+.memberRoleSelect {
+  width: 7.5rem;
+}
+
+.memberTwoFactor .check {
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* Only occupied cells take a gutter, so empty columns collapse. */
+.memberTwoFactor:not(:empty),
+.memberRole:not(:empty),
+.memberActions:not(:empty) {
+  padding-left: var(--space-6);
+}
+
+.memberListReadOnly .memberRole {
+  justify-content: flex-end;
+}
+
+.invitationMark {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  place-items: center;
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+}
+
+/* Narrow cards stack each member: identity first, then its controls. */
+@container (max-width: 40rem) {
+  .memberList {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memberRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .memberIdentity {
+    flex-basis: 100%;
+  }
+
+  .memberRoleSelect {
+    width: auto;
+  }
+
+  .memberListReadOnly .memberIdentity {
+    flex-basis: 10rem;
+  }
+
+  .memberRow > .memberTwoFactor,
+  .memberRow > .memberRole,
+  .memberRow > .memberActions {
+    padding-left: 0;
+  }
+
+  .memberRow > .memberTwoFactor {
+    flex: 1 0 auto;
+  }
+
+  .memberRow > .memberRole,
+  .memberRow > .memberActions {
+    margin-left: auto;
+  }
+
+  .memberRow > .memberTwoFactor:empty,
+  .memberRow > .memberActions:empty {
+    display: none;
+  }
+}
+
+/* Access: create a group, then edit each group in its own panel. */
+.groupCreate {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.groupCreateRow {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.groupCreateRow .field {
+  flex: 0 1 28rem;
+}
+
+.groupList {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.groupPanel {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.groupPanelBody {
+  display: grid;
+  gap: var(--space-5);
+  padding: var(--space-5);
+}
+
+.groupPanelHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3) var(--space-6);
+}
+
+.groupNameField {
+  flex: 1 1 16rem;
+  max-width: 28rem;
+}
+
+.groupCapability {
+  align-items: center;
+  min-height: var(--control-height-md);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.groupMembersCount {
+  margin-left: var(--space-1);
+  color: var(--color-text-subtle);
+  font-weight: 500;
+}
+
+.groupMemberGrid {
+  --grid-min: 15rem;
+  --grid-gap: var(--space-2);
+}
+
+.groupMemberOption {
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    background-color var(--duration-fast) var(--ease);
+}
+
+.groupMemberText {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-0-5);
+  line-height: var(--leading-snug);
+}
+
+.groupMemberName {
+  color: var(--color-text);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.groupMemberEmail {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.groupPanelFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+
+.groupMemberOption:hover {
+  border-color: var(--color-border-strong);
+}
+
+.groupMemberOption:has(input:checked) {
+  border-color: var(--color-lime-border);
+  background: var(--color-lime-wash);
+}
+
+.groupMemberOption:has(input:focus-visible) {
+  border-color: var(--color-ink);
+  box-shadow: var(--focus-ring);
+}
+
+@media (max-width: 720px) {
+  .inviteFields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .groupCreate {
+    padding-inline: var(--space-4);
+  }
+
+  .groupList {
+    padding: var(--space-4);
+  }
+
+  .groupPanelBody {
+    padding: var(--space-4);
+  }
+
+  .groupPanelFooter {
+    padding-inline: var(--space-4);
+  }
+
+  .groupNameField {
+    max-width: none;
+  }
+}

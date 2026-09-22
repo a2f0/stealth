@@ -1,0 +1,101 @@
+/* Account security: authenticator enrollment and recovery codes. */
+.totpSetup {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-6);
+}
+
+/* QR codes need a light, high-contrast quiet zone to scan reliably. */
+.totpQrTile {
+  display: grid;
+  place-items: center;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.totpSetupFields {
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.totpManualKey {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.totpManualLabel {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.totpSecret {
+  justify-self: start;
+  padding: var(--space-1-5) var(--space-2-5);
+  font-size: var(--text-base);
+  letter-spacing: 0.04em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.totpCodeInput {
+  max-width: 12rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.18em;
+}
+
+.recoveryCodeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 8rem), 1fr));
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+
+.recoveryCopyNotice {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 720px) {
+  .totpSetup {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+
+  .totpQrTile {
+    justify-self: center;
+  }
+
+  .recoveryCodeGrid {
+    padding: var(--space-3);
+  }
+}
+
+/* Descendant selectors come last (noDescendingSpecificity). */
+.totpQrTile svg {
+  display: block;
+}
+
+.recoveryCodeGrid code {
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface);
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}

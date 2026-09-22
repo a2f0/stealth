@@ -1,3 +1,14 @@
+import {
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  LoadingState,
+  Page,
+  PageBody,
+  PageHeader,
+} from "@tearleads/ui/react";
 import { type FormEvent, type MouseEvent, useEffect, useState } from "react";
 import { authClient } from "./authClient";
 import { OrganizationBilling } from "./OrganizationBilling";
@@ -41,19 +52,26 @@ export function OrganizationSettings({
   const page = organizationSettingsPage(pathname);
   const canManage = canManageOrganization(memberRole);
   return (
-    <>
-      <header className="topbar organizationSettingsHeader">
-        <div>
-          <p className="eyebrow">Workspace settings</p>
-          <h1>Organization</h1>
-        </div>
-        <OrganizationSettingsNavigation
-          canManage={canManage}
-          onNavigate={onNavigate}
-          page={page}
-        />
-      </header>
-      <section className="content organizationSettingsContent">
+    <Page>
+      <PageHeader
+        eyebrow="Organization"
+        tabs={
+          <OrganizationSettingsNavigation
+            canManage={canManage}
+            onNavigate={onNavigate}
+            page={page}
+          />
+        }
+        tabsLabel="Organization settings"
+        title={organization?.name ?? "Organization settings"}
+      />
+      <PageBody
+        className={
+          page === "general" || page === "billing"
+            ? "organizationNarrowBody"
+            : undefined
+        }
+      >
         <OrganizationSettingsPageContent
           accessError={accessError}
           canManage={canManage}
@@ -66,8 +84,8 @@ export function OrganizationSettings({
           ownerCount={ownerCount}
           page={page}
         />
-      </section>
-    </>
+      </PageBody>
+    </Page>
   );
 }
 
@@ -94,7 +112,7 @@ function OrganizationSettingsPageContent({
   ownerCount: number;
   page: ReturnType<typeof organizationSettingsPage>;
 }) {
-  if (!organization) return <SettingsLoading label="Loading organization…" />;
+  if (!organization) return <LoadingState label="Loading organization…" />;
   if (page === "people") {
     return (
       <OrganizationPeople
@@ -154,11 +172,11 @@ function OrganizationSettingsNavigation({
       : []),
   ] as const;
   return (
-    <nav aria-label="Organization settings" className="settingsSubnav">
+    <>
       {items.map((item) => (
         <a
           aria-current={page === item.page ? "page" : undefined}
-          className={page === item.page ? "active" : undefined}
+          className="tab"
           href={item.path}
           key={item.path}
           onClick={(event) => handleNavigation(event, item.path, onNavigate)}
@@ -166,7 +184,7 @@ function OrganizationSettingsNavigation({
           {item.label}
         </a>
       ))}
-    </nav>
+    </>
   );
 }
 
@@ -208,23 +226,20 @@ function OrganizationGeneral({
 
   return (
     <>
-      {accessError && <div className="errorBanner">{accessError}</div>}
-      {actions.error && <div className="errorBanner">{actions.error}</div>}
-      {actions.notice && (
-        <div aria-live="polite" className="successBanner pageBanner">
-          {actions.notice}
-        </div>
-      )}
-      <div className="organizationSettingsGrid">
-        <OrganizationDetailsCard
-          busy={actions.action !== undefined}
-          loadError={accessError}
-          memberRole={memberRole}
-          name={actions.name}
-          onName={actions.setName}
-          onSave={actions.save}
-          organization={organization}
-        />
+      {accessError && <Banner tone="danger">{accessError}</Banner>}
+      {actions.error && <Banner tone="danger">{actions.error}</Banner>}
+      {actions.notice && <Banner tone="success">{actions.notice}</Banner>}
+      <OrganizationDetailsCard
+        busy={actions.action !== undefined}
+        loadError={accessError}
+        memberRole={memberRole}
+        name={actions.name}
+        onName={actions.setName}
+        onSave={actions.save}
+        organization={organization}
+        saving={actions.action === "save"}
+      />
+      <div className="stack">
         <LeaveOrganizationCard
           action={actions.action}
           canLeave={canLeave}
@@ -336,6 +351,7 @@ function OrganizationDetailsCard({
   onName,
   onSave,
   organization,
+  saving,
 }: {
   busy: boolean;
   loadError: string | undefined;
@@ -344,24 +360,37 @@ function OrganizationDetailsCard({
   onName: (name: string) => void;
   onSave: (event: FormEvent) => Promise<void>;
   organization: WorkspaceOrganization;
+  saving: boolean;
 }) {
   const canManage = canManageOrganization(memberRole);
   return (
-    <form className="settingsCard" onSubmit={(event) => void onSave(event)}>
-      <div>
-        <h2>Organization details</h2>
-        <p>
-          {memberRole
-            ? `Active workspace · your role is ${formatRole(memberRole)}.`
-            : loadError
-              ? "Your organization role could not be loaded."
-              : "Loading your organization role…"}
-        </p>
-      </div>
-      <label className="field">
-        <span>Organization name</span>
+    <Card
+      description={
+        memberRole
+          ? `Active workspace · your role is ${formatRole(memberRole)}.`
+          : loadError
+            ? "Your organization role could not be loaded."
+            : "Loading your organization role…"
+      }
+      footer={
+        canManage && (
+          <Button
+            busy={saving}
+            disabled={busy || !name.trim() || name.trim() === organization.name}
+            type="submit"
+            variant="primary"
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </Button>
+        )
+      }
+      onSubmit={(event) => void onSave(event)}
+      title="Organization details"
+    >
+      <Field label="Organization name">
         <input
           autoComplete="organization"
+          className="input"
           disabled={busy || !canManage}
           maxLength={100}
           name="organization"
@@ -370,17 +399,8 @@ function OrganizationDetailsCard({
           type="text"
           value={name}
         />
-      </label>
-      {canManage && (
-        <button
-          className="primaryButton settingsSubmit"
-          disabled={busy || !name.trim() || name.trim() === organization.name}
-          type="submit"
-        >
-          {busy ? "Saving…" : "Save changes"}
-        </button>
-      )}
-    </form>
+      </Field>
+    </Card>
   );
 }
 
@@ -405,20 +425,22 @@ function LeaveOrganizationCard({
         ? "Assign another owner before leaving this organization."
         : "Your account and your other organizations will remain available.";
   return (
-    <section className="settingsCard leaveOrganizationCard">
-      <div>
-        <h2>Leave organization</h2>
-        <p>{restriction}</p>
-      </div>
-      <button
-        className="dangerButton settingsSubmit"
-        disabled={action !== undefined || !canLeave}
-        onClick={() => void onLeave()}
-        type="button"
-      >
-        {action === "leave" ? "Leaving…" : "Leave organization"}
-      </button>
-    </section>
+    <Card
+      actions={
+        <Button
+          busy={action === "leave"}
+          disabled={action !== undefined || !canLeave}
+          icon="signOut"
+          onClick={() => void onLeave()}
+          variant="danger"
+        >
+          {action === "leave" ? "Leaving…" : "Leave organization"}
+        </Button>
+      }
+      className="organizationActionCard"
+      description={restriction}
+      title="Leave organization"
+    />
   );
 }
 
@@ -432,32 +454,22 @@ function DeleteOrganizationCard({
   organizationName: string;
 }) {
   return (
-    <section className="settingsCard deleteOrganizationCard">
-      <div>
-        <h2>Delete organization</h2>
-        <p>
-          {organizationName} and all of its workspace data will become
-          unavailable immediately. Permanent deletion occurs after 30 days.
-        </p>
-      </div>
-      <button
-        className="dangerButton settingsSubmit"
-        disabled={action !== undefined}
-        onClick={() => void onDelete()}
-        type="button"
-      >
-        {action === "delete" ? "Deleting…" : "Delete organization"}
-      </button>
-    </section>
-  );
-}
-
-function SettingsLoading({ label }: { label: string }) {
-  return (
-    <div className="emptyState compactEmptyState">
-      <div className="emptyGlyph">◇</div>
-      <h3>{label}</h3>
-    </div>
+    <Card
+      actions={
+        <Button
+          busy={action === "delete"}
+          disabled={action !== undefined}
+          icon="trash"
+          onClick={() => void onDelete()}
+          variant="danger"
+        >
+          {action === "delete" ? "Deleting…" : "Delete organization"}
+        </Button>
+      }
+      className="cardDanger organizationActionCard"
+      description={`${organizationName} and all of its workspace data will become unavailable immediately. Permanent deletion occurs after 30 days.`}
+      title="Delete organization"
+    />
   );
 }
 
@@ -467,13 +479,15 @@ function SettingsAccessDenied({
   onNavigate: (pathname: string) => void;
 }) {
   return (
-    <div className="emptyState compactEmptyState">
-      <div className="emptyGlyph">◇</div>
-      <h3>Organization manager access is required.</h3>
-      <button onClick={() => onNavigate("/organization")} type="button">
-        Return to general settings
-      </button>
-    </div>
+    <EmptyState
+      actions={
+        <Button icon="arrowLeft" onClick={() => onNavigate("/organization")}>
+          Return to general settings
+        </Button>
+      }
+      icon="lock"
+      title="Organization manager access is required."
+    />
   );
 }
 

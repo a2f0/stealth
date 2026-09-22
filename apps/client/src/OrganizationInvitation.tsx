@@ -1,3 +1,4 @@
+import { Banner, Button, Card, Icon, LoadingState } from "@tearleads/ui/react";
 import { useEffect, useState } from "react";
 import { authClient } from "./authClient";
 
@@ -79,67 +80,91 @@ export function OrganizationInvitation({
   }
 
   return (
-    <>
-      <header className="topbar">
-        <div>
+    <div className="acceptInvitePage">
+      <div className="acceptInvitePanel">
+        <header className="acceptInviteHeader">
+          <span aria-hidden="true" className="acceptInviteMark">
+            <Icon name={accepted ? "success" : "mail"} size={22} />
+          </span>
           <p className="eyebrow">Organization invitation</p>
-          <h1>{accepted ? "You’re in" : "Join your team"}</h1>
-        </div>
-      </header>
-      <section className="content invitationContent">
+          <h1 className="acceptInviteTitle">
+            {accepted ? "You’re in" : "Join your team"}
+          </h1>
+        </header>
         {error && !isRecipientMismatch(error) && (
-          <div className="errorBanner">{error}</div>
+          <Banner tone="danger">{error}</Banner>
         )}
         {error && isRecipientMismatch(error) && (
           <WrongAccount onUseAnotherAccount={onUseAnotherAccount} />
         )}
-        {accepted && invitation ? (
-          <div className="settingsCard invitationCard">
-            <div>
-              <h2>Welcome to {invitation.organizationName}</h2>
-              <p>The organization is active for this session.</p>
-            </div>
-            <button
-              className="primaryButton settingsSubmit"
-              onClick={onNavigate}
-              type="button"
-            >
-              Open organization
-            </button>
-          </div>
-        ) : invitation ? (
-          <div className="settingsCard invitationCard">
-            <div>
-              <h2>Join {invitation.organizationName}</h2>
-              <p>
-                Invited by {invitation.inviterEmail} as {invitation.role}.
-              </p>
-            </div>
-            <dl className="invitationDetails">
-              <div>
-                <dt>Invited email</dt>
-                <dd>{invitation.email}</dd>
-              </div>
-              <div>
-                <dt>Expires</dt>
-                <dd>{formatDate(invitation.expiresAt)}</dd>
-              </div>
-            </dl>
-            <button
-              className="primaryButton settingsSubmit"
-              disabled={busy}
-              onClick={() => void accept()}
-              type="button"
-            >
-              {busy ? "Joining…" : "Accept invitation"}
-            </button>
-          </div>
-        ) : busy ? (
-          <p className="auditLoading">Loading invitation…</p>
-        ) : null}
-      </section>
-    </>
+        <InvitationStatus
+          accepted={accepted}
+          busy={busy}
+          invitation={invitation}
+          onAccept={() => void accept()}
+          onNavigate={onNavigate}
+        />
+      </div>
+    </div>
   );
+}
+
+function InvitationStatus({
+  accepted,
+  busy,
+  invitation,
+  onAccept,
+  onNavigate,
+}: {
+  accepted: boolean;
+  busy: boolean;
+  invitation: InvitationDetails | undefined;
+  onAccept: () => void;
+  onNavigate: () => void;
+}) {
+  if (accepted && invitation) {
+    return (
+      <Card
+        description="The organization is active for this session."
+        title={`Welcome to ${invitation.organizationName}`}
+      >
+        <Button
+          block
+          iconEnd="arrowRight"
+          onClick={onNavigate}
+          variant="primary"
+        >
+          Open organization
+        </Button>
+      </Card>
+    );
+  }
+  if (invitation) {
+    return (
+      <Card
+        description={`Invited by ${invitation.inviterEmail} as ${invitation.role}.`}
+        title={`Join ${invitation.organizationName}`}
+      >
+        <dl className="keyValue">
+          <dt>Invited email</dt>
+          <dd>{invitation.email}</dd>
+          <dt>Expires</dt>
+          <dd>{formatDate(invitation.expiresAt)}</dd>
+        </dl>
+        <Button block busy={busy} onClick={onAccept} variant="primary">
+          {busy ? "Joining…" : "Accept invitation"}
+        </Button>
+      </Card>
+    );
+  }
+  if (busy) {
+    return (
+      <Card>
+        <LoadingState label="Loading invitation…" />
+      </Card>
+    );
+  }
+  return null;
 }
 
 function WrongAccount({
@@ -148,22 +173,19 @@ function WrongAccount({
   onUseAnotherAccount: () => void;
 }) {
   return (
-    <div className="settingsCard invitationCard">
-      <div>
-        <h2>This invitation belongs to another account</h2>
-        <p>
-          Switch to the invited account from the account menu in the lower-left,
-          or sign in to another account. You’ll return to this invitation.
-        </p>
-      </div>
-      <button
-        className="primaryButton settingsSubmit"
+    <Card
+      description="Switch to the invited account from the account menu, or sign in to another account. You’ll return to this invitation."
+      title="This invitation belongs to another account"
+    >
+      <Button
+        block
+        icon="userAdd"
         onClick={onUseAnotherAccount}
-        type="button"
+        variant="primary"
       >
         Sign in to another account
-      </button>
-    </div>
+      </Button>
+    </Card>
   );
 }
 

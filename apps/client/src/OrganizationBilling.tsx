@@ -1,3 +1,15 @@
+import { type Plan, plans } from "@tearleads/ui/brand";
+import {
+  Badge,
+  type BadgeTone,
+  Banner,
+  Button,
+  Card,
+  cx,
+  Icon,
+  LoadingState,
+  PageSection,
+} from "@tearleads/ui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type BillingStatus,
@@ -6,6 +18,12 @@ import {
   getBillingStatus,
   redirectToCurrentBillingSession,
 } from "./billingApi";
+import { countLabel, formatLabel } from "./labels";
+
+type BillingRedirect = "checkout" | "portal";
+
+const checkoutCanceledNotice =
+  "Checkout was canceled. Your plan has not changed.";
 
 export function OrganizationBilling({
   organizationId,
@@ -48,75 +66,36 @@ export function OrganizationBilling({
   useBillingReload(load, loadSequence, actionSequence);
 
   if (!status && !error) {
-    return <SettingsLoading />;
+    return <LoadingState label="Loading billing…" />;
   }
   return (
-    <div className="billingSettings">
-      {error && <div className="errorBanner">{error}</div>}
+    <>
+      {error && <Banner tone="danger">{error}</Banner>}
       {notice && (
-        <div aria-live="polite" className="successBanner pageBanner">
+        <Banner tone={notice === checkoutCanceledNotice ? "info" : "success"}>
           {notice}
-        </div>
+        </Banner>
       )}
       {status && (
         <>
-          <section className="settingsCard billingSummaryCard">
-            <div>
-              <p className="eyebrow">Current plan</p>
-              <h2>{status.plan === "pro" ? "Pro" : "Free"}</h2>
-              <p>{currentUsage(status)}</p>
-            </div>
-            <span className={`billingPlanBadge ${status.plan}`}>
-              {status.billing.status ?? status.plan}
-            </span>
-            {status.billing.cancelAtPeriodEnd && (
-              <p className="billingNotice">
-                Cancellation is scheduled
-                {status.billing.currentPeriodEnd
-                  ? ` for ${formatDate(status.billing.currentPeriodEnd)}`
-                  : " for the end of the billing period"}
-                .
-              </p>
-            )}
-          </section>
-          <div className="billingPlans">
-            <PlanCard
-              action={status.plan === "free" ? "Current plan" : undefined}
-              features={["1 user", "5 form templates", "30-day audit history"]}
-              name="Free"
-              price="$0"
-            />
-            <PlanCard
-              action={
-                status.canManage
-                  ? status.plan === "pro"
-                    ? "Manage billing"
-                    : "Upgrade to Pro"
-                  : undefined
-              }
+          <CurrentPlanCard status={status} />
+          <PageSection
+            description={
+              status.canManage
+                ? undefined
+                : "An organization owner or admin can change the plan and manage payment details."
+            }
+            title="Plans"
+          >
+            <PlanCards
               busy={busy}
-              featured
-              features={[
-                "$10 for each active user",
-                "Unlimited form templates",
-                "Unlimited audit history",
-              ]}
-              name="Pro"
-              onAction={() =>
-                void redirect(status.plan === "pro" ? "portal" : "checkout")
-              }
-              price="$10/user/mo"
+              onRedirect={(action) => void redirect(action)}
+              status={status}
             />
-          </div>
-          {!status.canManage && (
-            <p className="billingManagerNote">
-              An organization owner or admin can change the plan and manage
-              payment details.
-            </p>
-          )}
+          </PageSection>
         </>
       )}
-    </div>
+    </>
   );
 }
 
@@ -126,7 +105,7 @@ function createBillingAction(
   setError: (value: string | undefined) => void,
   setNotice: (value: string | undefined) => void,
 ) {
-  return async (action: "checkout" | "portal") => {
+  return async (action: BillingRedirect) => {
     const sequence = ++actionSequence.current;
     setBusy(true);
     setError(undefined);
@@ -165,9 +144,7 @@ function useBillingReload(
 function checkoutNotice(query: URLSearchParams) {
   const checkout = query.get("checkout");
   if (checkout === "success") return "Your Pro subscription is active.";
-  if (checkout === "canceled") {
-    return "Checkout was canceled. Your plan has not changed.";
-  }
+  if (checkout === "canceled") return checkoutCanceledNotice;
   return undefined;
 }
 
@@ -177,52 +154,136 @@ function clearCheckoutQuery(query: URLSearchParams) {
   }
 }
 
+function CurrentPlanCard({ status }: { status: BillingStatus }) {
+  const billingStatus = status.billing.status ?? status.plan;
+  return (
+    <Card>
+      <div className="billingSummary">
+        <div className="billingSummaryHeading">
+          <p className="eyebrow">Current plan</p>
+          <h2 className="billingSummaryPlan">
+            {status.plan === "pro" ? "Pro" : "Free"}
+          </h2>
+          <p className="billingSummaryUsage">{currentUsage(status)}</p>
+        </div>
+        <Badge dot tone={statusTone(billingStatus)}>
+          {formatLabel(billingStatus)}
+        </Badge>
+      </div>
+      {status.billing.cancelAtPeriodEnd && (
+        <Banner announce={false} tone="warning">
+          Cancellation is scheduled
+          {status.billing.currentPeriodEnd
+            ? ` for ${formatDate(status.billing.currentPeriodEnd)}`
+            : " for the end of the billing period"}
+          .
+        </Banner>
+      )}
+    </Card>
+  );
+}
+
+function PlanCards({
+  busy,
+  onRedirect,
+  status,
+}: {
+  busy: boolean;
+  onRedirect: (action: BillingRedirect) => void;
+  status: BillingStatus;
+}) {
+  return (
+    <div className="gridAuto billingPlans">
+      {plans.map((plan) =>
+        plan.id === "pro" ? (
+          <PlanCard
+            action={
+              status.canManage
+                ? status.plan === "pro"
+                  ? "Manage billing"
+                  : "Upgrade to Pro"
+                : undefined
+            }
+            busy={busy}
+            featured
+            key={plan.id}
+            onAction={() =>
+              onRedirect(status.plan === "pro" ? "portal" : "checkout")
+            }
+            plan={plan}
+          />
+        ) : (
+          <PlanCard
+            action={status.plan === "free" ? "Current plan" : undefined}
+            key={plan.id}
+            plan={plan}
+          />
+        ),
+      )}
+    </div>
+  );
+}
+
 function PlanCard({
   action,
   busy = false,
   featured = false,
-  features,
-  name,
   onAction,
-  price,
+  plan,
 }: {
   action?: string | undefined;
   busy?: boolean;
   featured?: boolean;
-  features: string[];
-  name: string;
   onAction?: () => void;
-  price: string;
+  plan: Plan;
 }) {
   return (
-    <section className={featured ? "billingPlan featured" : "billingPlan"}>
-      <div>
-        <p className="eyebrow">{name}</p>
-        <h2>{price}</h2>
+    <section className={cx("card billingPlan", featured && "cardAccent")}>
+      <div className="billingPlanHeading">
+        <h3 className="billingPlanName">{plan.name}</h3>
+        <p className="billingPlanDescription">{plan.description}</p>
       </div>
-      <ul>
-        {features.map((feature) => (
-          <li key={feature}>{feature}</li>
+      <p className="billingPrice">
+        <span className="billingPriceAmount">{plan.price}</span>
+        <span className="billingPriceCadence">{plan.cadence}</span>
+      </p>
+      <ul className="billingFeatures">
+        {plan.features.map((feature) => (
+          <li className="billingFeature" key={feature}>
+            <Icon name="check" size={16} strokeWidth={2} />
+            {feature}
+          </li>
         ))}
       </ul>
       {action && (
-        <button
-          className={onAction ? "primaryButton" : undefined}
-          disabled={busy || !onAction}
+        <Button
+          block
+          busy={busy}
+          className="billingPlanAction"
+          disabled={!onAction}
           onClick={onAction}
-          type="button"
+          variant={onAction ? "primary" : "secondary"}
         >
           {busy ? "Opening Stripe…" : action}
-        </button>
+        </Button>
       )}
     </section>
   );
 }
 
 function currentUsage(status: BillingStatus) {
-  const forms = `${status.current.formTemplates} form${status.current.formTemplates === 1 ? "" : "s"}`;
-  const members = `${status.current.members} user${status.current.members === 1 ? "" : "s"}`;
-  return `${members} · ${forms}`;
+  return `${countLabel(status.current.members, "user")} · ${countLabel(status.current.formTemplates, "form")}`;
+}
+
+function statusTone(value: string): BadgeTone {
+  if (value === "active" || value === "trialing" || value === "pro") {
+    return "success";
+  }
+  if (value === "past_due" || value === "incomplete" || value === "paused") {
+    return "warning";
+  }
+  if (value === "unpaid" || value === "incomplete_expired") return "danger";
+  return "neutral";
 }
 
 function formatDate(value: string) {
@@ -231,15 +292,6 @@ function formatDate(value: string) {
     month: "long",
     year: "numeric",
   }).format(new Date(value));
-}
-
-function SettingsLoading() {
-  return (
-    <div className="emptyState compactEmptyState">
-      <div className="emptyGlyph">$</div>
-      <h3>Loading billing…</h3>
-    </div>
-  );
 }
 
 function messageFrom(cause: unknown) {

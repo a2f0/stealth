@@ -1,12 +1,47 @@
-<footer class="siteFooter">
-  <a class="logo" href="/"><span>T</span> Tearleads</a>
-  <div class="footerCenter">
-    <p>Made for less, not more.</p>
-    <nav class="footerLinks" aria-label="Legal">
-      <a href="/privacy">Privacy</a>
-      <a href="/terms">Terms</a>
-      <a href="/data-retention">Data retention</a>
+---
+import { legalLinks, productName } from "@tearleads/ui/brand";
+import { appUrl, siteSections } from "../site";
+import Logo from "./Logo.astro";
+
+const year = new Date().getFullYear();
+---
+
+<footer class="siteFooter onDark">
+  <div class="container siteFooterInner">
+    <div class="siteFooterBrand">
+      <Logo />
+      <p class="siteFooterTagline">
+        A quiet workspace for audits, issues, files, and records. Made for less,
+        not more.
+      </p>
+    </div>
+    <nav aria-labelledby="footer-product" class="siteFooterNav">
+      <p class="siteFooterHeading" id="footer-product">Explore</p>
+      <ul class="siteFooterLinks">
+        {
+          siteSections.map((section) => (
+            <li>
+              <a href={section.href}>{section.label}</a>
+            </li>
+          ))
+        }
+        <li><a href={appUrl}>Sign in</a></li>
+      </ul>
+    </nav>
+    <nav aria-labelledby="footer-legal" class="siteFooterNav">
+      <p class="siteFooterHeading" id="footer-legal">Legal</p>
+      <ul class="siteFooterLinks">
+        {
+          legalLinks.map((link) => (
+            <li>
+              <a href={link.href}>{link.label}</a>
+            </li>
+          ))
+        }
+      </ul>
     </nav>
   </div>
-  <p class="copyright">© {new Date().getFullYear()}</p>
+  <div class="container">
+    <p class="siteFooterBase">© {year} {productName}, LLC</p>
+  </div>
 </footer>

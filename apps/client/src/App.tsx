@@ -1,3 +1,12 @@
+import {
+  Banner,
+  Button,
+  EmptyState,
+  Icon,
+  Page,
+  PageBody,
+  PageHeader,
+} from "@tearleads/ui/react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AccountSecurity } from "./AccountSecurity";
 import { AdminUsers } from "./AdminUsers";
@@ -135,6 +144,11 @@ function AuthenticationRoute({
         addingAccount
           ? "Sign in to keep another account available on this browser."
           : invitationNotice
+      }
+      initialNoticeTone={
+        !addingAccount && pathname !== "/invite" && verification.notice
+          ? "success"
+          : "info"
       }
       onAuthenticated={async (action: AuthenticationAction) => {
         const invitationId =
@@ -315,58 +329,55 @@ function OrganizationTwoFactorRequired({
   }
 
   return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Organization security</p>
-          <h1>Two-factor authentication required</h1>
-        </div>
-      </header>
-      <section className="content">
-        <div className="emptyState compactEmptyState">
-          <div className="emptyGlyph">◇</div>
-          <h3>{needsSetup ? "Protect your account" : "Verify your sign-in"}</h3>
+    <Page narrow>
+      <PageHeader
+        eyebrow="Organization security"
+        title="Two-factor authentication required"
+      />
+      <PageBody>
+        <EmptyState
+          actions={
+            <Button
+              busy={busy}
+              icon={needsSetup ? "security" : "signOut"}
+              onClick={needsSetup ? onSecurity : () => void signOut()}
+              variant="primary"
+            >
+              {needsSetup
+                ? "Set up two-factor authentication"
+                : busy
+                  ? "Signing out…"
+                  : "Sign out to verify"}
+            </Button>
+          }
+          icon="lock"
+          title={needsSetup ? "Protect your account" : "Verify your sign-in"}
+        >
           <p>
             {needsSetup
               ? "This organization requires you to set up an authenticator before you can use its workspace."
               : "This organization requires a sign-in verified with two-factor authentication. Sign out, then sign in again to continue."}
           </p>
-          {error && <div className="errorBanner compactBanner">{error}</div>}
-          <button
-            className="primaryButton"
-            disabled={busy}
-            onClick={needsSetup ? onSecurity : () => void signOut()}
-            type="button"
-          >
-            {needsSetup
-              ? "Set up two-factor authentication"
-              : busy
-                ? "Signing out…"
-                : "Sign out to verify"}
-          </button>
-        </div>
-      </section>
-    </>
+          {error && <Banner tone="danger">{error}</Banner>}
+        </EmptyState>
+      </PageBody>
+    </Page>
   );
 }
 
 function NoOrganization() {
   return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Workspace</p>
-          <h1>Create an organization</h1>
-        </div>
-      </header>
-      <section className="content">
-        <div className="emptyState compactEmptyState">
-          <div className="emptyGlyph">◇</div>
-          <h3>You don’t have an active organization.</h3>
-          <p>Use the organization control in the sidebar to create one.</p>
-        </div>
-      </section>
-    </>
+    <Page narrow>
+      <PageHeader eyebrow="Workspace" title="Create an organization" />
+      <PageBody>
+        <EmptyState
+          icon="organization"
+          title="You don’t have an active organization"
+        >
+          Use the organization control in the sidebar to create one.
+        </EmptyState>
+      </PageBody>
+    </Page>
   );
 }
 
@@ -533,33 +544,54 @@ function activePageFor(pathname: string) {
 
 function AdminAccessDenied({ onNavigate }: { onNavigate: () => void }) {
   return (
-    <div className="fatalState">
-      <p>Administrator access is required.</p>
-      <button onClick={onNavigate} type="button">
-        Return to your library
-      </button>
-    </div>
+    <FatalState
+      action="Return to your library"
+      message="Administrator access is required."
+      onAction={onNavigate}
+    />
   );
 }
 
 function FeatureAccessDenied({ onNavigate }: { onNavigate: () => void }) {
   return (
-    <div className="fatalState">
-      <p>Finance group membership is required.</p>
-      <button onClick={onNavigate} type="button">
-        Return to your library
-      </button>
-    </div>
+    <FatalState
+      action="Return to your library"
+      message="Finance group membership is required."
+      onAction={onNavigate}
+    />
   );
 }
 
 function SessionError({ onRetry }: { onRetry: () => void }) {
   return (
+    <FatalState
+      action="Try again"
+      message="We couldn’t load your session."
+      onAction={onRetry}
+    />
+  );
+}
+
+function FatalState({
+  action,
+  message,
+  onAction,
+}: {
+  action: string;
+  message: string;
+  onAction: () => void;
+}) {
+  return (
     <div className="fatalState">
-      <p>We couldn’t load your session.</p>
-      <button onClick={onRetry} type="button">
-        Try again
-      </button>
+      <div className="card fatalCard">
+        <span className="emptyStateIcon">
+          <Icon name="alert" size={22} />
+        </span>
+        <h1 className="cardTitle">{message}</h1>
+        <Button onClick={onAction} variant="primary">
+          {action}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -586,9 +618,11 @@ function verificationFeedback() {
 
 function LoadingScreen() {
   return (
-    <div className="loadingScreen" role="status">
+    <div className="loadingScreen onDark" role="status">
       <span className="srOnly">Loading session</span>
-      <span className="brandMark">T</span>
+      <span aria-hidden="true" className="brandMark loadingMark">
+        T
+      </span>
       <span className="loadingPulse" />
     </div>
   );

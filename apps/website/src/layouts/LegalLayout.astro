@@ -1,6 +1,7 @@
 ---
-import SiteFooter from "../components/SiteFooter.astro";
-import "../styles/global.css";
+import { legalLinks, productName } from "@tearleads/ui/brand";
+import BaseLayout from "./BaseLayout.astro";
+import "../styles/legal.css";
 
 interface Props {
   description: string;
@@ -10,49 +11,36 @@ interface Props {
 }
 
 const { description, eyebrow, title, updated } = Astro.props;
-const appUrl = import.meta.env.PUBLIC_APP_URL ?? "http://localhost:5173";
+const currentPath = Astro.url.pathname.replace(/\/+$/, "");
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width" />
-    <meta name="theme-color" content="#e9ffcc" />
-    <meta name="description" content={description} />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <title>{title} — Tearleads</title>
-  </head>
-  <body>
-    <header class="legalHeader">
-      <a class="logo" href="/" aria-label="Tearleads home">
-        <span>T</span> Tearleads
-      </a>
-      <nav class="legalNav" aria-label="Legal navigation">
-        <a href="/privacy">Privacy</a>
-        <a href="/terms">Terms</a>
-        <a href="/data-retention">Data retention</a>
+<BaseLayout description={description} title={`${title} — ${productName}`}>
+  <header class="legalHero">
+    <div class="container legalContainer">
+      <div class="legalHeroText">
+        <p class="eyebrow eyebrowDot">{eyebrow}</p>
+        <h1 class="title">{title}</h1>
+        <p class="lead">{description}</p>
+        <p class="legalEffective">Effective {updated}</p>
+      </div>
+      <nav aria-label="Policies" class="tabs legalTabs">
+        {
+          legalLinks.map((link) => (
+            <a
+              aria-current={currentPath === link.href ? "page" : undefined}
+              class="tab"
+              href={link.href}
+            >
+              {link.label}
+            </a>
+          ))
+        }
       </nav>
-      <a class="headerCta" href={appUrl}>Open app ↗</a>
-    </header>
-
-    <main class="legalPage">
-      <header class="legalHero">
-        <p class="sectionLabel">{eyebrow}</p>
-        <h1>{title}</h1>
-        <p>{description}</p>
-        <small>Effective {updated}</small>
-      </header>
-      <article class="legalDocument">
-        <slot />
-      </article>
-    </main>
-
-    <SiteFooter />
-  </body>
-</html>
+    </div>
+  </header>
+  <div class="container legalContainer">
+    <article class="prose legalDocument">
+      <slot />
+    </article>
+  </div>
+</BaseLayout>

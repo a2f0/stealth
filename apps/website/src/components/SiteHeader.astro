@@ -1,0 +1,79 @@
+---
+import { appUrl, siteSections } from "../site";
+import Icon from "./Icon.astro";
+import Logo from "./Logo.astro";
+---
+
+<header class="siteHeader">
+  <div class="container siteHeaderInner">
+    <Logo />
+    <nav aria-label="Main" class="siteNav">
+      {
+        siteSections.map((section) => (
+          <a class="siteNavLink" href={section.href}>
+            {section.label}
+          </a>
+        ))
+      }
+    </nav>
+    <div class="siteHeaderActions">
+      <a class="button buttonGhost siteSignIn" href={appUrl}>Sign in</a>
+      <a class="button buttonPrimary" href={appUrl}>Start free</a>
+      <details class="siteMenu">
+        <summary class="button buttonGhost buttonIconOnly siteMenuToggle">
+          <Icon class="siteMenuOpenIcon" name="menu" size={20} />
+          <Icon class="siteMenuCloseIcon" name="close" size={20} />
+          <span class="srOnly">Menu</span>
+        </summary>
+        <div class="popover siteMenuPanel">
+          <nav aria-label="Main">
+            {
+              siteSections.map((section) => (
+                <a class="menuItem" href={section.href}>
+                  {section.label}
+                </a>
+              ))
+            }
+          </nav>
+          <hr class="menuSeparator" />
+          <a class="menuItem" href={appUrl}>
+            Sign in
+            <Icon class="siteMenuItemEnd" name="arrowRight" size={16} />
+          </a>
+        </div>
+      </details>
+    </div>
+  </div>
+</header>
+
+<script>
+  // Close the small-screen menu after a choice, on Escape from inside it, on
+  // an outside click, or when focus moves on, so it never covers the page.
+  const menu = document.querySelector<HTMLDetailsElement>(".siteMenu");
+  if (menu) {
+    const close = () => {
+      menu.open = false;
+    };
+    menu.addEventListener("click", (event) => {
+      if (event.target instanceof Element && event.target.closest("a")) {
+        close();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !menu.open) return;
+      if (!menu.contains(document.activeElement)) return;
+      close();
+      menu.querySelector("summary")?.focus();
+    });
+    document.addEventListener("focusin", (event) => {
+      if (menu.open && event.target instanceof Node) {
+        if (!menu.contains(event.target)) close();
+      }
+    });
+    document.addEventListener("click", (event) => {
+      if (menu.open && event.target instanceof Node) {
+        if (!menu.contains(event.target)) close();
+      }
+    });
+  }
+</script>

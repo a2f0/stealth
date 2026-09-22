@@ -1,0 +1,128 @@
+---
+/*
+ * A miniature of the client's audit screen, built from the same design-system
+ * classes the app renders. It is decorative: the frame is inert and hidden
+ * from assistive technology, and the caption describes it instead.
+ */
+import type { IconName } from "@tearleads/ui/icons";
+import Icon from "./Icon.astro";
+
+const railItems: IconName[] = [
+  "library",
+  "audits",
+  "inbox",
+  "businesses",
+  "finance",
+  "organization",
+];
+
+const responses = ["Pass", "Fail", "N/A"] as const;
+
+// Matches the client's audit run page: pass and fail tint when selected.
+const responseTone: Record<(typeof responses)[number], string | undefined> = {
+  Fail: "danger",
+  "N/A": undefined,
+  Pass: "success",
+};
+
+const checks: { prompt: string; response: (typeof responses)[number] }[] = [
+  {
+    prompt: "Exits and walkways are clear of stored material.",
+    response: "Pass",
+  },
+  {
+    prompt: "Guardrails are in place at open floor edges and landings.",
+    response: "Fail",
+  },
+  {
+    prompt: "Temporary power cords are protected from damage.",
+    response: "N/A",
+  },
+];
+---
+
+<figure class="auditPreview">
+  <div aria-hidden="true" class="previewFrame" inert>
+    <div class="previewRail onDark">
+      <span class="brandMark">T</span>
+      {
+        railItems.map((name) => (
+          <span
+            class="previewRailItem"
+            data-active={name === "audits" ? "true" : undefined}
+          >
+            <Icon name={name} />
+          </span>
+        ))
+      }
+    </div>
+    <div class="previewMain">
+      <div class="previewHeader">
+        <div class="stack stackXs">
+          <p class="eyebrow">Audit · In progress · Template v3</p>
+          <p class="previewTitle">Site walkthrough</p>
+        </div>
+        <span class="button buttonPrimary buttonSm">Complete audit</span>
+      </div>
+
+      <div class="card cardFlush">
+        <div class="cardHeader previewSection">
+          <p class="previewSectionTitle">
+            <span class="mono textSubtle">02</span> Walkways and edges
+          </p>
+          <span class="sectionCount">3 of 3 answered</span>
+        </div>
+        <ul class="rowList">
+          {
+            checks.map((check) => (
+              <li class="row previewRow">
+                <div class="rowMain">
+                  <p class="previewPrompt">{check.prompt}</p>
+                </div>
+                <div class="segmented">
+                  {responses.map((response) => (
+                    <button
+                      aria-pressed={response === check.response ? "true" : "false"}
+                      data-tone={responseTone[response]}
+                      tabindex="-1"
+                      type="button"
+                    >
+                      {response}
+                    </button>
+                  ))}
+                </div>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+
+      <div class="card previewIssue">
+        <div class="cluster">
+          <span class="badge badgeDanger">High</span>
+          <span class="textXs textSubtle">Issue · raised on item 2</span>
+        </div>
+        <p class="previewIssueTitle">
+          Guardrail missing at the second-floor landing
+        </p>
+        <div class="cluster clusterBetween">
+          <span class="cluster">
+            <span class="avatar avatarSm">JL</span>
+            <span class="textSm textMuted">Jordan Lee</span>
+          </span>
+          <span class="cluster previewPhotos">
+            <span class="previewPhoto"><Icon name="image" size={14} /></span>
+            <span class="previewPhoto"><Icon name="image" size={14} /></span>
+            <span class="textXs textSubtle">
+              <Icon name="camera" size={14} /> 2 photos
+            </span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <figcaption class="srOnly">
+    An audit in progress in Tearleads: checklist items answered pass, fail, or
+    N/A, and a high-priority issue assigned to a teammate with two photos.
+  </figcaption>
+</figure>

@@ -1,3 +1,14 @@
+import {
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  LoadingState,
+  Page,
+  PageBody,
+  PageHeader,
+} from "@tearleads/ui/react";
 import { useEffect, useState } from "react";
 import {
   type AuditTemplate,
@@ -10,6 +21,7 @@ import {
   listAuditTemplateVersions,
   updateAuditTemplate,
 } from "./auditApi";
+import { countLabel } from "./labels";
 
 interface BuilderProps {
   id: string;
@@ -89,7 +101,7 @@ export function AuditTemplateBuilder({
   }
 
   return (
-    <>
+    <Page>
       <BuilderHeader
         busy={busy}
         manageGlobal={manageGlobal}
@@ -109,7 +121,7 @@ export function AuditTemplateBuilder({
         }}
         template={template}
       />
-    </>
+    </Page>
   );
 }
 
@@ -126,29 +138,90 @@ function BuilderBody({
   onChange: (template: AuditTemplate) => void;
   template: AuditTemplate;
 }) {
-  const updateSections = (sections: AuditTemplateSection[]) =>
+  const sections = template.definition.sections;
+  const updateSections = (nextSections: AuditTemplateSection[]) =>
     onChange({
       ...template,
-      definition: { ...template.definition, sections },
+      definition: { ...template.definition, sections: nextSections },
     });
   return (
-    <section className="content auditBuilder">
-      {error && <div className="errorBanner">{error}</div>}
-      {notice && <div className="successBanner pageBanner">{notice}</div>}
-      {template.scope === "global" && !manageGlobal && (
-        <div className="auditVersionNotice">
+    <PageBody>
+      <BuilderNotices
+        error={error}
+        manageGlobal={manageGlobal}
+        notice={notice}
+        template={template}
+      />
+      <fieldset className="fieldset auditBuilderFields">
+        <TemplateDetails template={template} update={onChange} />
+        <div className="stack">
+          <div className="sectionHeader">
+            <h2 className="sectionTitle">Sections</h2>
+            <span className="sectionCount">
+              {countLabel(sections.length, "section")} ·{" "}
+              {countLabel(questionCount(sections), "question")}
+            </span>
+          </div>
+          {sections.map((section, index) => (
+            <SectionEditor
+              canRemove={sections.length > 1}
+              index={index}
+              key={section.id}
+              onChange={(nextSection) =>
+                updateSections(replaceById(sections, nextSection))
+              }
+              onRemove={() =>
+                updateSections(
+                  sections.filter((candidate) => candidate.id !== section.id),
+                )
+              }
+              section={section}
+            />
+          ))}
+          <Button
+            block
+            className="auditAddButton"
+            icon="add"
+            onClick={() => updateSections([...sections, newSection()])}
+          >
+            Add section
+          </Button>
+        </div>
+      </fieldset>
+    </PageBody>
+  );
+}
+
+function BuilderNotices({
+  error,
+  manageGlobal,
+  notice,
+  template,
+}: {
+  error: string | undefined;
+  manageGlobal: boolean;
+  notice: string | undefined;
+  template: AuditTemplate;
+}) {
+  const isGlobal = template.scope === "global";
+  return (
+    <>
+      {error && <Banner tone="danger">{error}</Banner>}
+      {notice && <Banner tone="success">{notice}</Banner>}
+      {isGlobal && !manageGlobal && (
+        <Banner announce={false} icon="copy" tone="info">
           Changes will be saved as a new form for this organization. The global
           form and its version history will stay unchanged.
-        </div>
+        </Banner>
       )}
-      {template.scope === "global" && manageGlobal && (
-        <div className="auditVersionNotice">
+      {isGlobal && manageGlobal && (
+        <Banner announce={false} tone="warning">
           You are managing the shared global form. Saving will publish a new
           version for every organization.
-        </div>
+        </Banner>
       )}
       {template.version < template.currentVersion && (
-        <div className="auditVersionNotice">
+        <Banner announce={false} icon="layers" tone="neutral">
           {template.scope === "organization" || manageGlobal ? (
             <>
               You are viewing version {template.version}. Saving changes will
@@ -161,43 +234,9 @@ function BuilderBody({
               point. The latest global version is {template.currentVersion}.
             </>
           )}
-        </div>
+        </Banner>
       )}
-      <fieldset className="auditBuilderFields">
-        <TemplateDetails template={template} update={onChange} />
-        <div className="auditBuilderSections">
-          {template.definition.sections.map((section, index) => (
-            <SectionEditor
-              canRemove={template.definition.sections.length > 1}
-              index={index}
-              key={section.id}
-              onChange={(nextSection) =>
-                updateSections(
-                  replaceById(template.definition.sections, nextSection),
-                )
-              }
-              onRemove={() =>
-                updateSections(
-                  template.definition.sections.filter(
-                    (candidate) => candidate.id !== section.id,
-                  ),
-                )
-              }
-              section={section}
-            />
-          ))}
-        </div>
-        <button
-          className="auditAddButton"
-          onClick={() =>
-            updateSections([...template.definition.sections, newSection()])
-          }
-          type="button"
-        >
-          + Add section
-        </button>
-      </fieldset>
-    </section>
+    </>
   );
 }
 
@@ -218,54 +257,66 @@ function BuilderHeader({
   template: AuditTemplate;
   versions: AuditTemplateVersion[];
 }) {
+  const customizing = template.scope === "global" && !manageGlobal;
   return (
-    <header className="topbar auditEditorTopbar">
-      <div>
-        <button className="auditBack" onClick={onBack} type="button">
-          ← Audits
-        </button>
-        <p className="eyebrow">
+    <PageHeader
+      actions={
+        <div className="auditVersionControls">
+          <label className="auditVersionPicker">
+            <span className="auditVersionLabel">Version</span>
+            <select
+              className="select auditVersionSelect"
+              disabled={busy || versions.length === 0}
+              onChange={(event) =>
+                void onVersionChange(Number(event.target.value))
+              }
+              value={template.version}
+            >
+              {versions.map((version) => (
+                <option key={version.version} value={version.version}>
+                  v{version.version} · {formatVersionDate(version.createdAt)} ·{" "}
+                  {version.createdBy.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            busy={busy}
+            icon="check"
+            onClick={() => void onSave()}
+            variant="primary"
+          >
+            {busy
+              ? "Saving…"
+              : customizing
+                ? "Save organization copy"
+                : `Save as version ${template.currentVersion + 1}`}
+          </Button>
+        </div>
+      }
+      back={<BackButton onBack={onBack} />}
+      eyebrow={
+        <>
           {template.scope === "global" ? "Global form" : "Organization form"}
           {" · "}Version {template.version} of {template.currentVersion}
-        </p>
-        <h1>
-          {template.scope === "global" && !manageGlobal
-            ? "Customize template"
-            : "Edit template"}
-        </h1>
-      </div>
-      <div className="auditVersionControls">
-        <label>
-          <span>Version</span>
-          <select
-            disabled={busy || versions.length === 0}
-            onChange={(event) =>
-              void onVersionChange(Number(event.target.value))
-            }
-            value={template.version}
-          >
-            {versions.map((version) => (
-              <option key={version.version} value={version.version}>
-                v{version.version} · {formatVersionDate(version.createdAt)} ·{" "}
-                {version.createdBy.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          className="primaryButton"
-          disabled={busy}
-          onClick={() => void onSave()}
-          type="button"
-        >
-          {busy
-            ? "Saving…"
-            : template.scope === "global" && !manageGlobal
-              ? "Save organization copy"
-              : `Save as version ${template.currentVersion + 1}`}
-        </button>
-      </div>
-    </header>
+        </>
+      }
+      title={customizing ? "Customize template" : "Edit template"}
+    />
+  );
+}
+
+function BackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <Button
+      className="auditBack"
+      icon="arrowLeft"
+      onClick={onBack}
+      size="sm"
+      variant="ghost"
+    >
+      Audits
+    </Button>
   );
 }
 
@@ -277,31 +328,33 @@ function TemplateDetails({
   update: (template: AuditTemplate) => void;
 }) {
   return (
-    <div className="auditDetailsCard">
-      <label className="field">
-        <span>Checklist name</span>
-        <input
-          maxLength={200}
-          onChange={(event) =>
-            update({ ...template, name: event.target.value })
-          }
-          required
-          value={template.name}
-        />
-      </label>
-      <label className="field">
-        <span>Description</span>
-        <textarea
-          maxLength={2000}
-          onChange={(event) =>
-            update({ ...template, description: event.target.value })
-          }
-          placeholder="What should an auditor know before starting?"
-          rows={3}
-          value={template.description}
-        />
-      </label>
-    </div>
+    <Card title="Details">
+      <div className="formGrid">
+        <Field label="Checklist name">
+          <input
+            className="input"
+            maxLength={200}
+            onChange={(event) =>
+              update({ ...template, name: event.target.value })
+            }
+            required
+            value={template.name}
+          />
+        </Field>
+        <Field label="Description" optional>
+          <textarea
+            className="textarea auditDescriptionInput"
+            maxLength={2000}
+            onChange={(event) =>
+              update({ ...template, description: event.target.value })
+            }
+            placeholder="What should an auditor know before starting?"
+            rows={3}
+            value={template.description}
+          />
+        </Field>
+      </div>
+    </Card>
   );
 }
 
@@ -321,51 +374,73 @@ function SectionEditor({
   const updateItem = (item: AuditTemplateItem) =>
     onChange({ ...section, items: replaceById(section.items, item) });
   return (
-    <article className="auditSectionEditor">
-      <div className="auditSectionHeader">
-        <span>{String(index + 1).padStart(2, "0")}</span>
+    <article className="card auditSectionCard">
+      <header className="auditSectionHeader">
+        <span aria-hidden="true" className="auditSectionNumber">
+          {String(index + 1).padStart(2, "0")}
+        </span>
         <input
           aria-label={`Section ${index + 1} title`}
+          className="input auditSectionTitle"
           maxLength={200}
           onChange={(event) =>
             onChange({ ...section, title: event.target.value })
           }
           value={section.title}
         />
-        <button disabled={!canRemove} onClick={onRemove} type="button">
-          Remove
-        </button>
+        <Button
+          aria-label={`Remove section ${index + 1}`}
+          className="auditRemoveButton"
+          disabled={!canRemove}
+          icon="trash"
+          iconOnly
+          onClick={onRemove}
+          size="sm"
+          title="Remove section"
+          variant="ghost"
+        />
+      </header>
+      {section.items.length > 0 ? (
+        <div>
+          {section.items.map((item, itemIndex) => (
+            <QuestionEditor
+              index={itemIndex}
+              item={item}
+              key={item.id}
+              onChange={updateItem}
+              onRemove={() =>
+                onChange({
+                  ...section,
+                  items: section.items.filter(
+                    (candidate) => candidate.id !== item.id,
+                  ),
+                })
+              }
+            />
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          className="auditQuestionEmpty"
+          compact
+          icon="checklist"
+          plain
+          title="No questions in this section"
+        />
+      )}
+      <div className="auditSectionFooter">
+        <Button
+          block
+          className="auditAddButton"
+          icon="add"
+          onClick={() =>
+            onChange({ ...section, items: [...section.items, newItem()] })
+          }
+          size="sm"
+        >
+          Add question
+        </Button>
       </div>
-      <div className="auditQuestionList">
-        {section.items.map((item, itemIndex) => (
-          <QuestionEditor
-            index={itemIndex}
-            item={item}
-            key={item.id}
-            onChange={updateItem}
-            onRemove={() =>
-              onChange({
-                ...section,
-                items: section.items.filter(
-                  (candidate) => candidate.id !== item.id,
-                ),
-              })
-            }
-          />
-        ))}
-        {section.items.length === 0 && (
-          <p className="auditQuestionEmpty">No questions in this section.</p>
-        )}
-      </div>
-      <button
-        className="auditAddQuestion"
-        onClick={() =>
-          onChange({ ...section, items: [...section.items, newItem()] })
-        }
-        type="button"
-      >
-        + Add question
-      </button>
     </article>
   );
 }
@@ -382,46 +457,54 @@ function QuestionEditor({
   onRemove: () => void;
 }) {
   return (
-    <div className="auditQuestionEditor">
-      <span>{index + 1}</span>
+    <div className="auditQuestion">
+      <span aria-hidden="true" className="auditQuestionNumber">
+        {index + 1}
+      </span>
       <textarea
         aria-label={`Question ${index + 1}`}
+        className="textarea auditQuestionPrompt"
         maxLength={500}
         onChange={(event) => onChange({ ...item, prompt: event.target.value })}
         rows={2}
         value={item.prompt}
       />
-      <select
-        aria-label="Response type"
-        onChange={(event) =>
-          onChange({
-            ...item,
-            responseType: event.target.value === "text" ? "text" : "check",
-          })
-        }
-        value={item.responseType}
-      >
-        <option value="check">Pass / fail / N/A</option>
-        <option value="text">Text answer</option>
-      </select>
-      <label className="auditRequired">
-        <input
-          checked={item.required}
+      <div className="auditQuestionControls">
+        <select
+          aria-label="Response type"
+          className="select inputSm auditResponseType"
           onChange={(event) =>
-            onChange({ ...item, required: event.target.checked })
+            onChange({
+              ...item,
+              responseType: event.target.value === "text" ? "text" : "check",
+            })
           }
-          type="checkbox"
-        />
-        Required
-      </label>
-      <button
+          value={item.responseType}
+        >
+          <option value="check">Pass / fail / N/A</option>
+          <option value="text">Text answer</option>
+        </select>
+        <label className="check auditRequired">
+          <input
+            checked={item.required}
+            onChange={(event) =>
+              onChange({ ...item, required: event.target.checked })
+            }
+            type="checkbox"
+          />
+          Required
+        </label>
+      </div>
+      <Button
         aria-label={`Delete question ${index + 1}`}
-        className="auditDeleteQuestion"
+        className="auditRemoveButton auditQuestionRemove"
+        icon="trash"
+        iconOnly
         onClick={onRemove}
-        type="button"
-      >
-        Delete
-      </button>
+        size="sm"
+        title="Delete question"
+        variant="ghost"
+      />
     </div>
   );
 }
@@ -433,13 +516,31 @@ function BuilderLoading({
   error: string | undefined;
   onBack: () => void;
 }) {
+  const returnButton = (
+    <Button
+      icon="arrowLeft"
+      onClick={onBack}
+      size={error ? "sm" : "md"}
+      variant={error ? "secondary" : "ghost"}
+    >
+      Return to audits
+    </Button>
+  );
   return (
-    <section className="content auditStandaloneState">
-      {error ? <div className="errorBanner">{error}</div> : <p>Loading…</p>}
-      <button className="textButton" onClick={onBack} type="button">
-        Return to audits
-      </button>
-    </section>
+    <Page>
+      <PageBody>
+        {error ? (
+          <Banner actions={returnButton} tone="danger">
+            {error}
+          </Banner>
+        ) : (
+          <div className="auditBuilderState">
+            <LoadingState label="Loading checklist…" />
+            {returnButton}
+          </div>
+        )}
+      </PageBody>
+    </Page>
   );
 }
 
@@ -458,6 +559,10 @@ function newSection(): AuditTemplateSection {
 
 function replaceById<T extends { id: string }>(items: T[], replacement: T) {
   return items.map((item) => (item.id === replacement.id ? replacement : item));
+}
+
+function questionCount(sections: AuditTemplateSection[]) {
+  return sections.reduce((count, section) => count + section.items.length, 0);
 }
 
 function formatVersionDate(value: string) {

@@ -1,0 +1,218 @@
+/*
+ * Sign-in, sign-up, password recovery, and the two-factor challenge.
+ * The ink aside echoes the marketing site; the form column matches the app.
+ */
+.authShell {
+  display: grid;
+  grid-template-columns: clamp(22rem, 42%, 44rem) minmax(0, 1fr);
+  min-height: 100dvh;
+}
+
+/* Brand aside. */
+.authAside {
+  min-width: 0;
+  background:
+    radial-gradient(
+      ellipse 90% 55% at 0% 100%,
+      color-mix(in srgb, var(--color-green) 30%, transparent),
+      transparent
+    ),
+    var(--color-ink);
+}
+
+.authAsideInner {
+  display: flex;
+  position: sticky;
+  top: 0;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--space-12);
+  min-height: 100dvh;
+  padding: var(--space-8) clamp(var(--space-8), 4.5vw, var(--space-16))
+    var(--space-10);
+}
+
+.authBrand {
+  align-self: flex-start;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  text-decoration: none;
+}
+
+.authAsideCopy {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-5);
+  max-width: 32rem;
+}
+
+.authHeadline {
+  color: var(--color-text-inverse);
+}
+
+.authPoints {
+  display: grid;
+  max-width: 32rem;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--color-ink-line);
+  list-style: none;
+}
+
+.authPoint {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--color-ink-line);
+}
+
+.authPointIcon {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--color-ink-line);
+  border-radius: var(--radius-md);
+  place-items: center;
+  color: var(--color-lime);
+  background: var(--color-ink-raised);
+}
+
+.authPointText {
+  display: grid;
+  gap: var(--space-0-5);
+  color: var(--color-text-inverse-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+/* Form column. */
+.authMain {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  justify-items: center;
+  gap: var(--space-12);
+  min-width: 0;
+  padding: var(--space-12) var(--page-gutter) var(--space-6);
+}
+
+.authPanel {
+  display: grid;
+  align-content: center;
+  gap: var(--space-8);
+  width: min(100%, 25rem);
+}
+
+.authHeading {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.authTitle {
+  font-size: var(--text-3xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+}
+
+.authIntro {
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+}
+
+.authForgot {
+  justify-self: end;
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.authCode {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+}
+
+.authCodeDigits {
+  letter-spacing: 0.2em;
+}
+
+.authLinks {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+  text-align: center;
+}
+
+.authLegal {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1) var(--space-5);
+}
+
+@media (max-width: 860px) {
+  .authShell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .authAside {
+    background: var(--color-ink);
+  }
+
+  .authAsideInner {
+    position: static;
+    justify-content: center;
+    min-height: 3.5rem;
+    padding: var(--space-2) var(--page-gutter);
+  }
+
+  .authAsideCopy,
+  .authPoints {
+    display: none;
+  }
+
+  .authMain {
+    padding-top: var(--space-10);
+  }
+}
+
+@media (max-width: 720px) {
+  .authMain {
+    gap: var(--space-10);
+    padding-top: var(--space-8);
+  }
+
+  .authPanel {
+    align-content: start;
+    gap: var(--space-6);
+  }
+}
+
+/* Descendant rules come last so the single-class rules above never outrank them. */
+.authHeadline .serifAccent {
+  display: block;
+  color: var(--color-lime);
+}
+
+.authPointText strong {
+  color: var(--color-text-inverse);
+  font-size: var(--text-base);
+  font-weight: 650;
+}
+
+.authLegal a {
+  border-radius: var(--radius-xs);
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.authLegal a:hover {
+  color: var(--color-text);
+  text-decoration: underline;
+}

@@ -1,10 +1,29 @@
+import {
+  Badge,
+  type BadgeTone,
+  Banner,
+  Button,
+  buttonClass,
+  Card,
+  cx,
+  EmptyState,
+  Field,
+  Icon,
+  LoadingState,
+  Page,
+  PageBody,
+  PageHeader,
+  PageSection,
+} from "@tearleads/ui/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AuditApiError,
   type AuditDefinition,
   type AuditDetail,
   type AuditIssue,
+  type AuditRun,
   type AuditTemplateItem,
+  type AuditTemplateSection,
   auditIssueImageUrl,
   createAuditIssue,
   deleteAuditIssueImage,
@@ -14,6 +33,7 @@ import {
   updateAuditIssue,
   uploadAuditIssueImage,
 } from "./auditApi";
+import { countLabel, formatLabel } from "./labels";
 
 const acceptedImageTypes = [
   "image/gif",
@@ -23,6 +43,24 @@ const acceptedImageTypes = [
 ];
 const maxIssueImages = 10;
 const maxIssueImageBytes = 10 * 1024 * 1024;
+
+const checkResponses = ["pass", "fail", "na"] as const;
+
+const choiceTone: Record<
+  (typeof checkResponses)[number],
+  "danger" | "success" | undefined
+> = {
+  fail: "danger",
+  na: undefined,
+  pass: "success",
+};
+
+const priorityTones: Record<string, BadgeTone> = {
+  critical: "danger",
+  high: "danger",
+  low: "neutral",
+  medium: "warning",
+};
 
 interface AuditRunPageProps {
   id: string;
@@ -68,18 +106,30 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
   }
 
   return (
-    <>
+    <Page>
       <RunHeader
         busy={busy}
+        feedback={
+          error
+            ? { text: error, tone: "danger" }
+            : notice
+              ? { text: notice, tone: "success" }
+              : undefined
+        }
         name={detail.audit.templateName}
         onBack={() => onNavigate("/audits")}
         onSave={save}
         status={detail.audit.status}
         templateVersion={detail.audit.templateVersion}
       />
-      <section className="content auditRunContent">
-        {error && <div className="errorBanner">{error}</div>}
-        {notice && <div className="successBanner pageBanner">{notice}</div>}
+      <PageBody className="runBody">
+        {error && <Banner tone="danger">{error}</Banner>}
+        {notice && <Banner tone="success">{notice}</Banner>}
+        <RunProgress
+          audit={detail.audit}
+          issues={detail.issues}
+          responses={responses}
+        />
         <AuditQuestions
           definition={detail.audit.definition}
           onChange={(itemId, response) =>
@@ -95,13 +145,14 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
           onChange={load}
           responses={responses}
         />
-      </section>
-    </>
+      </PageBody>
+    </Page>
   );
 }
 
 function RunHeader({
   busy,
+  feedback,
   name,
   onBack,
   onSave,
@@ -109,6 +160,8 @@ function RunHeader({
   templateVersion,
 }: {
   busy: boolean;
+  /** Mirrors the save result inside the phone action bar; the banners announce it. */
+  feedback: { text: string; tone: "danger" | "success" } | undefined;
   name: string;
   onBack: () => void;
   onSave: (status: "completed" | "in_progress") => Promise<void>;
@@ -116,35 +169,136 @@ function RunHeader({
   templateVersion: number | null;
 }) {
   return (
-    <header className="topbar auditEditorTopbar">
-      <div>
-        <button className="auditBack" onClick={onBack} type="button">
-          ← Audits
-        </button>
-        <p className="eyebrow">
-          Audit · {status.replace("_", " ")}
-          {templateVersion ? ` · Template v${templateVersion}` : ""}
-        </p>
-        <h1>{name}</h1>
+    <PageHeader
+      actions={
+        <div className="runActions">
+          {feedback && (
+            <p
+              aria-hidden="true"
+              className={cx(
+                "runActionsFeedback",
+                feedback.tone === "danger" && "runActionsFeedbackDanger",
+              )}
+            >
+              {feedback.text}
+            </p>
+          )}
+          <Button disabled={busy} onClick={() => void onSave("in_progress")}>
+            Save draft
+          </Button>
+          <Button
+            disabled={busy}
+            icon="check"
+            onClick={() => void onSave("completed")}
+            variant="primary"
+          >
+            Complete audit
+          </Button>
+        </div>
+      }
+      back={<RunBackButton onBack={onBack} />}
+      eyebrow={
+        <>
+          <span>Audit</span>
+          <Badge dot tone={status === "completed" ? "success" : "warning"}>
+            {formatLabel(status)}
+          </Badge>
+          {templateVersion ? <span>Template v{templateVersion}</span> : null}
+        </>
+      }
+      title={name}
+    />
+  );
+}
+
+function RunBackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <Button
+      className="runBack"
+      icon="arrowLeft"
+      onClick={onBack}
+      size="sm"
+      variant="ghost"
+    >
+      Audits
+    </Button>
+  );
+}
+
+function RunProgress({
+  audit,
+  issues,
+  responses,
+}: {
+  audit: AuditRun;
+  issues: AuditIssue[];
+  responses: Record<string, string>;
+}) {
+  const { answered, failed, requiredLeft, total } = useMemo(
+    () => progressFor(audit.definition, responses),
+    [audit.definition, responses],
+  );
+  // Floor, so the bar never reads 100% while a question is unanswered.
+  const percent = total ? Math.floor((answered / total) * 100) : 0;
+  const openIssues = issues.filter((issue) => issue.status === "open").length;
+  return (
+    <Card>
+      <div className="runProgressLayout">
+        <div className="runProgressMain">
+          <div className="runProgressHeading">
+            <p className="runProgressValue">
+              {answered} of {total} answered
+            </p>
+            <span className="runProgressPercent">{percent}%</span>
+          </div>
+          <div aria-hidden="true" className="runProgressTrack">
+            <span
+              className="runProgressFill"
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+          <ProgressNote audit={audit} requiredLeft={requiredLeft} />
+        </div>
+        <dl className="runStats">
+          <div className={cx(failed > 0 && "runStatDanger")}>
+            <dt>Failed</dt>
+            <dd>{failed}</dd>
+          </div>
+          <div>
+            <dt>Open issues</dt>
+            <dd>{openIssues}</dd>
+          </div>
+        </dl>
       </div>
-      <div className="auditHeaderActions">
-        <button
-          disabled={busy}
-          onClick={() => void onSave("in_progress")}
-          type="button"
-        >
-          Save draft
-        </button>
-        <button
-          className="primaryButton"
-          disabled={busy}
-          onClick={() => void onSave("completed")}
-          type="button"
-        >
-          Complete audit
-        </button>
-      </div>
-    </header>
+    </Card>
+  );
+}
+
+function ProgressNote({
+  audit,
+  requiredLeft,
+}: {
+  audit: AuditRun;
+  requiredLeft: number;
+}) {
+  if (audit.status === "completed") {
+    return (
+      <p className="runProgressNote runProgressDone">
+        <Icon name="success" size={16} />
+        <span>
+          Completed
+          {audit.completedAt ? ` ${formatDate(audit.completedAt)}` : ""}
+          <span className="runProgressHint"> · Saving a draft reopens it.</span>
+        </span>
+      </p>
+    );
+  }
+  return (
+    <p className="runProgressNote">
+      {requiredLeft > 0
+        ? `${countLabel(requiredLeft, "required question")} left before this audit can be completed.`
+        : "All required questions are answered."}
+    </p>
   );
 }
 
@@ -157,26 +311,85 @@ function AuditQuestions({
   onChange: (itemId: string, response: string) => void;
   responses: Record<string, string>;
 }) {
+  const total = allItems(definition).length;
   return (
-    <div className="auditRunSections">
-      {definition.sections.map((section, sectionIndex) => (
-        <section className="auditRunSection" key={section.id}>
-          <header>
-            <span>{String(sectionIndex + 1).padStart(2, "0")}</span>
-            <h2>{section.title}</h2>
-          </header>
-          {section.items.map((item, index) => (
+    <PageSection
+      actions={
+        <span className="sectionCount">{countLabel(total, "question")}</span>
+      }
+      title="Checklist"
+    >
+      <div className="runSections">
+        {definition.sections.map((section, sectionIndex) => (
+          <AuditSection
+            index={sectionIndex}
+            key={section.id}
+            onChange={onChange}
+            responses={responses}
+            section={section}
+          />
+        ))}
+      </div>
+    </PageSection>
+  );
+}
+
+function AuditSection({
+  index,
+  onChange,
+  responses,
+  section,
+}: {
+  index: number;
+  onChange: (itemId: string, response: string) => void;
+  responses: Record<string, string>;
+  section: AuditTemplateSection;
+}) {
+  const answered = section.items.filter((item) =>
+    isAnswered(responses[item.id]),
+  ).length;
+  const empty = section.items.length === 0;
+  const done = !empty && answered === section.items.length;
+  return (
+    <Card
+      actions={
+        <span
+          className={cx(
+            "sectionCount runSectionCount",
+            done && "runSectionDone",
+          )}
+        >
+          {done && <Icon name="check" size={16} />}
+          {empty
+            ? "No questions"
+            : `${answered}/${section.items.length} answered`}
+        </span>
+      }
+      className="runSection"
+      flush
+      title={
+        <span className="runSectionTitle">
+          <span className="runSectionNumber">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          {section.title}
+        </span>
+      }
+    >
+      {empty ? undefined : (
+        <ol className="rowList">
+          {section.items.map((item, itemIndex) => (
             <AuditQuestion
-              index={index}
+              index={itemIndex}
               item={item}
               key={item.id}
               onChange={(response) => onChange(item.id, response)}
               response={responses[item.id] ?? ""}
             />
           ))}
-        </section>
-      ))}
-    </div>
+        </ol>
+      )}
+    </Card>
   );
 }
 
@@ -191,30 +404,34 @@ function AuditQuestion({
   onChange: (response: string) => void;
   response: string;
 }) {
+  const promptId = `audit-item-${item.id}`;
   return (
-    <div className={`auditRunQuestion ${response === "fail" ? "failed" : ""}`}>
-      <div className="auditQuestionPrompt">
-        <span>{index + 1}</span>
-        <p>
-          {item.prompt}
-          {item.required && <small>Required</small>}
-        </p>
+    <li
+      className={cx(
+        "row runQuestion",
+        item.responseType !== "check" && "runQuestionWritten",
+        response === "fail" && "runQuestionFailed",
+      )}
+    >
+      <div className="runQuestionBody">
+        <span className="runQuestionNumber">{index + 1}</span>
+        <div className="runQuestionCopy">
+          <p className="runQuestionPrompt" id={promptId}>
+            {item.prompt}
+          </p>
+          {item.required && <span className="runRequired">Required</span>}
+        </div>
       </div>
       {item.responseType === "check" ? (
-        <div className="auditResponseButtons">
-          {(["pass", "fail", "na"] as const).map((value) => (
-            <button
-              className={response === value ? `selected ${value}` : ""}
-              key={value}
-              onClick={() => onChange(value)}
-              type="button"
-            >
-              {value === "na" ? "N/A" : titleCase(value)}
-            </button>
-          ))}
-        </div>
+        <ResponseChoices
+          labelledBy={promptId}
+          onChange={onChange}
+          response={response}
+        />
       ) : (
         <textarea
+          aria-labelledby={promptId}
+          className="textarea runAnswer"
           maxLength={2000}
           onChange={(event) => onChange(event.target.value)}
           placeholder="Enter response"
@@ -222,7 +439,36 @@ function AuditQuestion({
           value={response}
         />
       )}
-    </div>
+    </li>
+  );
+}
+
+function ResponseChoices({
+  labelledBy,
+  onChange,
+  response,
+}: {
+  labelledBy: string;
+  onChange: (response: string) => void;
+  response: string;
+}) {
+  return (
+    <fieldset
+      aria-labelledby={labelledBy}
+      className="segmented segmentedFill runChoices"
+    >
+      {checkResponses.map((value) => (
+        <button
+          aria-pressed={response === value}
+          data-tone={choiceTone[value]}
+          key={value}
+          onClick={() => onChange(value)}
+          type="button"
+        >
+          {value === "na" ? "N/A" : formatLabel(value)}
+        </button>
+      ))}
+    </fieldset>
   );
 }
 
@@ -245,20 +491,21 @@ function IssuePanel({
   const [showForm, setShowForm] = useState(false);
   const [issueError, setIssueError] = useState<string>();
   return (
-    <section className="auditIssues">
-      <div className="sectionHeading">
-        <div>
-          <h2>Issues</h2>
-          <p>Track follow-up work discovered during this audit.</p>
-        </div>
-        <button
+    <PageSection
+      actions={
+        <Button
+          aria-expanded={showForm}
+          icon={showForm ? "close" : "add"}
           onClick={() => setShowForm((current) => !current)}
-          type="button"
+          variant={showForm ? "ghost" : "secondary"}
         >
-          {showForm ? "Cancel" : "+ Raise issue"}
-        </button>
-      </div>
-      {issueError && <div className="errorBanner">{issueError}</div>}
+          {showForm ? "Cancel" : "Raise issue"}
+        </Button>
+      }
+      description="Track follow-up work discovered during this audit."
+      title="Issues"
+    >
+      {issueError && <Banner tone="danger">{issueError}</Banner>}
       {showForm && (
         <IssueForm
           auditId={auditId}
@@ -272,13 +519,15 @@ function IssuePanel({
           responses={responses}
         />
       )}
-      <IssueList
-        issues={issues}
-        members={members}
-        onChange={onChange}
-        onError={setIssueError}
-      />
-    </section>
+      {(issues.length > 0 || !showForm) && (
+        <IssueList
+          issues={issues}
+          members={members}
+          onChange={onChange}
+          onError={setIssueError}
+        />
+      )}
+    </PageSection>
   );
 }
 
@@ -332,8 +581,23 @@ function IssueForm({
   }
 
   return (
-    <div className="auditIssueForm">
-      {error && <div className="errorBanner">{error}</div>}
+    <Card
+      description="Link the issue to a checklist item and assign follow-up."
+      footer={
+        <Button
+          busy={busy}
+          className="runIssueSubmit"
+          disabled={!itemId || !title.trim()}
+          icon="add"
+          onClick={() => void submit()}
+          variant="primary"
+        >
+          {busy ? "Creating…" : "Create issue"}
+        </Button>
+      }
+      title="New issue"
+    >
+      {error && <Banner tone="danger">{error}</Banner>}
       <IssueTextFields
         description={description}
         itemId={itemId}
@@ -347,11 +611,6 @@ function IssueForm({
         responses={responses}
         title={title}
       />
-      <IssueImagePicker
-        files={images}
-        onChange={setImages}
-        onError={setError}
-      />
       <IssueAssignmentFields
         assignedTo={assignedTo}
         members={members}
@@ -359,15 +618,12 @@ function IssueForm({
         onPriorityChange={setPriority}
         priority={priority}
       />
-      <button
-        className="primaryButton"
-        disabled={busy || !itemId || !title.trim()}
-        onClick={() => void submit()}
-        type="button"
-      >
-        {busy ? "Creating…" : "Create issue"}
-      </button>
-    </div>
+      <IssueImagePicker
+        files={images}
+        onChange={setImages}
+        onError={setError}
+      />
+    </Card>
   );
 }
 
@@ -392,9 +648,9 @@ function IssueTextFields({
 }) {
   return (
     <>
-      <label className="field">
-        <span>Checklist item</span>
+      <Field label="Checklist item">
         <select
+          className="select"
           onChange={(event) => onItemChange(event.target.value)}
           value={itemId}
         >
@@ -405,25 +661,25 @@ function IssueTextFields({
             </option>
           ))}
         </select>
-      </label>
-      <label className="field">
-        <span>Issue title</span>
+      </Field>
+      <Field label="Title">
         <input
+          className="input"
           maxLength={300}
           onChange={(event) => onTitleChange(event.target.value)}
           value={title}
         />
-      </label>
-      <label className="field auditIssueDescription">
-        <span>Issue description</span>
+      </Field>
+      <Field label="Description" optional>
         <textarea
+          className="textarea"
           maxLength={2000}
           onChange={(event) => onDescriptionChange(event.target.value)}
           placeholder="Describe the problem, evidence, and expected follow-up."
           rows={3}
           value={description}
         />
-      </label>
+      </Field>
     </>
   );
 }
@@ -438,37 +694,51 @@ function IssueImagePicker({
   onError: (error: string | undefined) => void;
 }) {
   return (
-    <>
-      <label className="field auditIssueImagesField">
-        <span>Images</span>
-        <input
-          accept={acceptedImageTypes.join(",")}
-          multiple
-          onChange={(event) => {
-            const selected = appendIssueImageSelection(
-              files,
-              Array.from(event.target.files ?? []),
-            );
-            if (typeof selected === "string") {
-              onError(selected);
+    <fieldset className="fieldset runImagePicker">
+      <legend>
+        Images <span className="fieldOptional">Optional</span>
+      </legend>
+      <div className="runImagePickerControls">
+        <label
+          className={buttonClass({
+            className: "runFilePicker",
+            size: "sm",
+          })}
+        >
+          <Icon name="image" size={16} />
+          Add images
+          <input
+            accept={acceptedImageTypes.join(",")}
+            className="srOnly"
+            multiple
+            onChange={(event) => {
+              const selected = appendIssueImageSelection(
+                files,
+                Array.from(event.target.files ?? []),
+              );
+              if (typeof selected === "string") {
+                onError(selected);
+                event.target.value = "";
+                return;
+              }
+              onError(undefined);
+              onChange(selected);
               event.target.value = "";
-              return;
-            }
-            onError(undefined);
-            onChange(selected);
-            event.target.value = "";
-          }}
-          type="file"
-        />
-        <small>Up to 10 JPEG, PNG, GIF, or WebP images; 10 MB each.</small>
-      </label>
+            }}
+            type="file"
+          />
+        </label>
+        <span className="fieldHint">
+          Up to 10 JPEG, PNG, GIF, or WebP images; 10 MB each.
+        </span>
+      </div>
       <SelectedIssueImages
         files={files}
         onRemove={(file) =>
           onChange(files.filter((candidate) => candidate !== file))
         }
       />
-    </>
+    </fieldset>
   );
 }
 
@@ -486,10 +756,10 @@ function IssueAssignmentFields({
   priority: string;
 }) {
   return (
-    <>
-      <label className="field">
-        <span>Priority</span>
+    <div className="formRow">
+      <Field label="Priority">
         <select
+          className="select"
           onChange={(event) => onPriorityChange(event.target.value)}
           value={priority}
         >
@@ -498,10 +768,10 @@ function IssueAssignmentFields({
           <option value="high">High</option>
           <option value="critical">Critical</option>
         </select>
-      </label>
-      <label className="field">
-        <span>Assignee</span>
+      </Field>
+      <Field label="Assignee">
         <select
+          className="select"
           onChange={(event) => onAssignedToChange(event.target.value)}
           value={assignedTo}
         >
@@ -512,8 +782,8 @@ function IssueAssignmentFields({
             </option>
           ))}
         </select>
-      </label>
-    </>
+      </Field>
+    </div>
   );
 }
 
@@ -528,19 +798,27 @@ function IssueList({
   onChange: () => Promise<void>;
   onError: (error: string | undefined) => void;
 }) {
-  if (!issues.length) return <p className="auditNoIssues">No issues raised.</p>;
+  if (!issues.length) {
+    return (
+      <EmptyState compact icon="issues" title="No issues raised">
+        Raise an issue for anything that needs follow-up after this audit.
+      </EmptyState>
+    );
+  }
   return (
-    <div className="auditIssueList">
-      {issues.map((issue) => (
-        <IssueCard
-          issue={issue}
-          key={issue.id}
-          members={members}
-          onChange={onChange}
-          onError={onError}
-        />
-      ))}
-    </div>
+    <Card flush>
+      <ul className="rowList">
+        {issues.map((issue) => (
+          <IssueCard
+            issue={issue}
+            key={issue.id}
+            members={members}
+            onChange={onChange}
+            onError={onError}
+          />
+        ))}
+      </ul>
+    </Card>
   );
 }
 
@@ -562,13 +840,20 @@ function IssueCard({
   });
 
   return (
-    <article>
-      <span className={`auditPriority ${issue.priority}`}>
-        {issue.priority}
-      </span>
-      <div>
-        <h3>{issue.title}</h3>
-        {issue.description && <p>{issue.description}</p>}
+    <li className="row runIssue">
+      <div className="rowMain runIssueMain">
+        <div className="cluster">
+          <Badge tone={priorityTones[issue.priority] ?? "neutral"}>
+            {formatLabel(issue.priority)}
+          </Badge>
+          <Badge dot tone={issue.status === "open" ? "warning" : "success"}>
+            {issue.status === "open" ? "Open" : "Resolved"}
+          </Badge>
+        </div>
+        <h3 className="runIssueTitle">{issue.title}</h3>
+        {issue.description && (
+          <p className="runIssueDescription">{issue.description}</p>
+        )}
         <IssueImages
           busy={busy}
           issue={issue}
@@ -582,7 +867,7 @@ function IssueCard({
         members={members}
         onUpdate={update}
       />
-    </article>
+    </li>
   );
 }
 
@@ -604,10 +889,11 @@ function IssueCardActions({
     Boolean(issue.assignedTo) &&
     !members.some((member) => member.id === issue.assignedTo);
   return (
-    <div className="auditIssueActions">
-      <label>
+    <div className="rowActions runIssueActions">
+      <label className="runAssignee">
         <span>Assignee</span>
         <select
+          className="select inputSm runAssigneeSelect"
           disabled={busy}
           onChange={(event) =>
             void onUpdate({ assignedTo: event.target.value || null })
@@ -628,17 +914,18 @@ function IssueCardActions({
           ))}
         </select>
       </label>
-      <button
+      <Button
         disabled={busy}
+        icon={issue.status === "open" ? "check" : "refresh"}
         onClick={() =>
           void onUpdate({
             status: issue.status === "open" ? "resolved" : "open",
           })
         }
-        type="button"
+        size="sm"
       >
         {issue.status === "open" ? "Resolve" : "Reopen"}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -771,40 +1058,51 @@ function IssueImages({
   onRemove: (imageId: string) => Promise<void>;
 }) {
   return (
-    <div className="auditIssueImages">
+    <div className="runIssueImages">
       {issue.images.length > 0 && (
-        <div className="auditIssueImageGrid">
+        <ul className="runThumbs">
           {issue.images.map((image) => (
-            <div key={image.id}>
+            <li className="runThumb" key={image.id}>
               <a
+                className="runThumbLink"
                 href={auditIssueImageUrl(issue.id, image.id)}
                 rel="noreferrer"
                 target="_blank"
               >
                 <img
                   alt={image.filename}
+                  className="runThumbImage"
                   decoding="async"
                   loading="lazy"
                   src={auditIssueImageUrl(issue.id, image.id, "thumbnail")}
                 />
               </a>
-              <button
+              <Button
                 aria-label={`Remove ${image.filename}`}
+                className="runThumbRemove"
                 disabled={busy}
+                icon="close"
+                iconOnly
                 onClick={() => void onRemove(image.id)}
-                type="button"
-              >
-                Remove
-              </button>
-            </div>
+                size="sm"
+              />
+            </li>
           ))}
-        </div>
+        </ul>
       )}
       {issue.images.length < maxIssueImages && (
-        <label className="auditIssueAttachButton">
-          + Attach images
+        <label
+          className={buttonClass({
+            className: "runFilePicker runAttach",
+            size: "sm",
+            variant: "ghost",
+          })}
+        >
+          <Icon name="attachment" size={16} />
+          Attach images
           <input
             accept={acceptedImageTypes.join(",")}
+            className="srOnly"
             disabled={busy}
             multiple
             onChange={(event) => {
@@ -829,17 +1127,59 @@ function SelectedIssueImages({
 }) {
   if (files.length === 0) return null;
   return (
-    <div className="auditSelectedImages">
+    <ul className="runThumbs">
       {files.map((file) => (
-        <div key={issueImageSelectionKey(file)}>
-          <span title={file.name}>{file.name}</span>
-          <button onClick={() => onRemove(file)} type="button">
-            Remove
-          </button>
-        </div>
+        <SelectedIssueImage
+          file={file}
+          key={issueImageSelectionKey(file)}
+          onRemove={() => onRemove(file)}
+        />
       ))}
-    </div>
+    </ul>
   );
+}
+
+function SelectedIssueImage({
+  file,
+  onRemove,
+}: {
+  file: File;
+  onRemove: () => void;
+}) {
+  const preview = useObjectUrl(file);
+  return (
+    <li className="runThumb">
+      {preview ? (
+        <img alt="" className="runThumbImage" src={preview} />
+      ) : (
+        <span className="runThumbImage runThumbPlaceholder">
+          <Icon name="image" />
+        </span>
+      )}
+      <span className="runThumbName" title={file.name}>
+        {file.name}
+      </span>
+      <Button
+        aria-label={`Remove ${file.name}`}
+        className="runThumbRemove"
+        icon="close"
+        iconOnly
+        onClick={onRemove}
+        size="sm"
+      />
+    </li>
+  );
+}
+
+/** A preview URL for a picked file, released when the file leaves the form. */
+function useObjectUrl(file: File) {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    const next = URL.createObjectURL(file);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [file]);
+  return url;
 }
 
 function RunLoading({
@@ -850,21 +1190,53 @@ function RunLoading({
   onBack: () => void;
 }) {
   return (
-    <section className="content auditStandaloneState">
-      {error ? (
-        <div className="errorBanner">{error}</div>
-      ) : (
-        <p>Loading audit…</p>
-      )}
-      <button className="textButton" onClick={onBack} type="button">
-        Return to audits
-      </button>
-    </section>
+    <Page>
+      <PageHeader
+        back={<RunBackButton onBack={onBack} />}
+        eyebrow="Audit"
+        title={error ? "Audit unavailable" : "Audit"}
+      />
+      <PageBody>
+        {error ? (
+          <Banner
+            actions={
+              <Button onClick={onBack} size="sm">
+                Return to audits
+              </Button>
+            }
+            tone="danger"
+          >
+            {error}
+          </Banner>
+        ) : (
+          <LoadingState label="Loading audit…" />
+        )}
+      </PageBody>
+    </Page>
   );
 }
 
 function allItems(definition: AuditDefinition) {
   return definition.sections.flatMap((section) => section.items);
+}
+
+/** Answered, failed, and required-remaining counts shown above the checklist. */
+export function progressFor(
+  definition: AuditDefinition,
+  responses: Record<string, string>,
+) {
+  const items = allItems(definition);
+  const unanswered = items.filter((item) => !isAnswered(responses[item.id]));
+  return {
+    answered: items.length - unanswered.length,
+    failed: items.filter((item) => responses[item.id] === "fail").length,
+    requiredLeft: unanswered.filter((item) => item.required).length,
+    total: items.length,
+  };
+}
+
+function isAnswered(response: string | undefined) {
+  return Boolean(response?.trim());
 }
 
 function validateImageFiles(files: File[], availableSlots: number) {
@@ -915,8 +1287,10 @@ function issueImageSelectionKey(file: File) {
   ]);
 }
 
-function titleCase(value: string) {
-  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+    new Date(value),
+  );
 }
 
 function messageFrom(cause: unknown) {

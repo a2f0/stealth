@@ -1,0 +1,13 @@
+---
+/* The brand lockup, matching the client's React <Logo>. */
+import { productName } from "@tearleads/ui/brand";
+---
+
+<a
+  aria-label={`${productName} home`}
+  class="brand siteBrand"
+  href="/"
+>
+  <span aria-hidden="true" class="brandMark">T</span>
+  <span>{productName}</span>
+</a>

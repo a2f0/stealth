@@ -1,0 +1,279 @@
+/* Finance: institution connections, account cards, and transaction history. */
+
+/* Connections share columns so statuses and actions line up. */
+.financeConnections {
+  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+}
+
+.financeConnection {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+}
+
+.financeConnectionStatus {
+  justify-self: start;
+}
+
+.financeInstitutionMark {
+  color: var(--color-lime);
+  background: var(--color-ink);
+}
+
+/* Account cards double as the transaction filter. */
+.financeAccountGrid {
+  --grid-min: 15rem;
+}
+
+/* The name row absorbs spare height so balances line up across a row. */
+.financeAccount {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr auto auto;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-5);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.financeAccountHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 1.5rem;
+}
+
+.financeAccountInstitution {
+  min-width: 0;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.financeAccountCheck {
+  display: grid;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--radius-full);
+  place-items: center;
+  color: var(--color-ink);
+  background: var(--color-lime);
+}
+
+.financeAccountName {
+  margin-top: var(--space-1);
+  font-size: var(--text-base);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.financeAccountBalance {
+  margin-top: var(--space-3);
+  font-size: var(--text-2xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: var(--tracking-tighter);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.financeAccountMeta {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Transactions share one set of columns through subgrid so dates, badges,
+ * and amounts line up from row to row.
+ */
+.financeTransactions {
+  grid-template-columns:
+    max-content minmax(0, 1fr) max-content max-content
+    max-content;
+}
+
+.financeTransaction {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  gap: var(--space-2) var(--space-5);
+}
+
+.financeTransactionDate {
+  min-width: 3.5rem;
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.financeTransactionStatus {
+  --cluster-gap: var(--space-1-5);
+
+  justify-content: flex-end;
+}
+
+.financeAmount {
+  justify-self: end;
+  color: var(--color-text);
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.financeAmountCredit {
+  color: var(--color-green-strong);
+}
+
+/* Pull the ghost button's padding out so its label aligns with the amounts. */
+.financeTransactionAction {
+  justify-self: end;
+  margin-inline-end: calc(var(--space-3) * -1);
+}
+
+/* The annotation form opens inline beneath its transaction. */
+.financeAnnotation {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+
+.financeAnnotationHeader,
+.financeAnnotationFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* Lists stack by their own width, which the sidebar decides, not the viewport's. */
+.financeListCard .cardFlush {
+  container-type: inline-size;
+}
+
+@container (max-width: 44rem) {
+  .financeConnections {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Let the metadata use the full width under the name and status. */
+  .financeConnection {
+    grid-template-areas:
+      "mark name status"
+      "mark meta meta"
+      ". actions actions";
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: var(--space-0-5);
+  }
+
+  .financeConnectionMain {
+    display: contents;
+  }
+
+  .financeInstitutionMark {
+    grid-area: mark;
+    align-self: start;
+  }
+
+  .financeConnectionName {
+    grid-area: name;
+  }
+
+  .financeConnectionMeta {
+    grid-area: meta;
+  }
+
+  .financeConnectionStatus {
+    grid-area: status;
+  }
+
+  .financeConnectionActions {
+    grid-area: actions;
+    margin-top: var(--space-3);
+  }
+
+  .financeTransactions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Name and amount lead; metadata gets the full width beneath them. */
+  .financeTransaction {
+    grid-template-areas:
+      "name name amount"
+      "meta meta meta"
+      "date status action";
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: var(--space-0-5) var(--space-3);
+  }
+
+  .financeTransactionMain {
+    display: contents;
+  }
+
+  .financeTransactionName {
+    grid-area: name;
+  }
+
+  .financeTransactionMeta {
+    grid-area: meta;
+  }
+
+  .financeTransactionDate {
+    grid-area: date;
+    min-width: 0;
+    margin-top: var(--space-2);
+  }
+
+  .financeTransactionStatus {
+    grid-area: status;
+    justify-content: flex-start;
+    margin-top: var(--space-2);
+  }
+
+  .financeAmount {
+    grid-area: amount;
+  }
+
+  .financeTransactionAction {
+    grid-area: action;
+    margin-top: var(--space-2);
+  }
+
+  .financeAnnotation {
+    margin-top: var(--space-3);
+    padding: var(--space-4);
+  }
+}
+
+@media (max-width: 720px) {
+  /* Two account tiles per row keep the balances scannable on phones. */
+  .financeAccountGrid {
+    --grid-min: 9.5rem;
+    --grid-gap: var(--space-3);
+  }
+
+  .financeAccount {
+    padding: var(--space-4);
+  }
+
+  .financeAccountBalance {
+    font-size: var(--text-xl);
+  }
+}

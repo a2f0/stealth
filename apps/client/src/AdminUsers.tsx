@@ -1,4 +1,17 @@
 import {
+  Avatar,
+  Badge,
+  type BadgeTone,
+  Banner,
+  Button,
+  EmptyState,
+  LoadingState,
+  Page,
+  PageBody,
+  PageHeader,
+  PageSection,
+} from "@tearleads/ui/react";
+import {
   type Dispatch,
   type SetStateAction,
   useCallback,
@@ -13,6 +26,7 @@ import {
   restoreAdminOrganization,
 } from "./api";
 import { authClient } from "./authClient";
+import { countLabel } from "./labels";
 
 interface ListedUser {
   banned?: boolean | null | undefined;
@@ -32,6 +46,12 @@ interface UserListing {
 interface AdminOrganizationAction {
   organizationId: string;
   type: "delete" | "restore";
+}
+
+interface OrganizationActions {
+  action: AdminOrganizationAction | undefined;
+  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
+  onRestore: (organization: AdminOrganization) => Promise<void>;
 }
 
 export function AdminUsers() {
@@ -72,32 +92,21 @@ export function AdminUsers() {
   }, [loadUsers]);
 
   return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Administration</p>
-          <h1>Users</h1>
-        </div>
-        <button
-          className="primaryButton"
-          disabled={busy}
-          onClick={() => void loadUsers()}
-          type="button"
-        >
-          {busy ? "Loading…" : "Refresh"}
-        </button>
-      </header>
-
-      <section className="content">
-        {error && <div className="errorBanner">{error}</div>}
-        {lifecycle.error && (
-          <div className="errorBanner">{lifecycle.error}</div>
-        )}
-        {lifecycle.notice && (
-          <div aria-live="polite" className="successBanner pageBanner">
-            {lifecycle.notice}
-          </div>
-        )}
+    <Page>
+      <PageHeader
+        actions={
+          <Button busy={busy} icon="refresh" onClick={() => void loadUsers()}>
+            {busy ? "Loading…" : "Refresh"}
+          </Button>
+        }
+        description="Every account and organization on the platform."
+        eyebrow="Administration"
+        title="Users"
+      />
+      <PageBody>
+        {error && <Banner tone="danger">{error}</Banner>}
+        {lifecycle.error && <Banner tone="danger">{lifecycle.error}</Banner>}
+        {lifecycle.notice && <Banner tone="success">{lifecycle.notice}</Banner>}
         <UserSection
           busy={busy}
           hasError={Boolean(error)}
@@ -107,12 +116,13 @@ export function AdminUsers() {
         />
         <OrganizationSection
           action={lifecycle.action}
+          busy={busy}
           onMarkForDeletion={lifecycle.markForDeletion}
           onRestore={lifecycle.restore}
           organizations={organizations}
         />
-      </section>
-    </>
+      </PageBody>
+    </Page>
   );
 }
 
@@ -158,7 +168,7 @@ function useAdminOrganizationLifecycle(
   const restore = async (organization: AdminOrganization) => {
     if (
       !window.confirm(
-        `Undelete ${organization.name}? Existing members who do not have another default organization will regain access.`,
+        `Restore ${organization.name}? Existing members who do not have another default organization will regain access.`,
       )
     ) {
       return;
@@ -207,44 +217,55 @@ function UserSection({
   page: number;
 }) {
   return (
-    <section>
-      <div className="sectionHeading">
-        <h2>All users</h2>
-        <span>{listing?.total ?? 0} accounts</span>
-      </div>
+    <PageSection
+      actions={
+        <span className="sectionCount">
+          {countLabel(listing?.total ?? 0, "account", "accounts")}
+        </span>
+      }
+      title="All users"
+    >
       {listing && listing.users.length > 0 ? (
-        <>
+        <div className="stack stackMd">
           <UserTable users={listing.users} />
           <Pagination
             onPageChange={onPageChange}
             page={page}
             total={listing.total}
           />
-        </>
-      ) : !hasError ? (
-        <AdminEmptyState busy={busy} />
-      ) : null}
-    </section>
+        </div>
+      ) : hasError ? null : busy ? (
+        <LoadingState label="Loading users…" />
+      ) : (
+        <EmptyState compact icon="organization" title="No users found." />
+      )}
+    </PageSection>
   );
 }
 
 function OrganizationSection({
   action,
+  busy,
   onMarkForDeletion,
   onRestore,
   organizations,
-}: {
-  action: AdminOrganizationAction | undefined;
-  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
-  onRestore: (organization: AdminOrganization) => Promise<void>;
+}: OrganizationActions & {
+  busy: boolean;
   organizations?: AdminOrganization[] | undefined;
 }) {
   return (
-    <section className="adminSection">
-      <div className="sectionHeading">
-        <h2>Organizations</h2>
-        <span>{organizations?.length ?? 0} organizations</span>
-      </div>
+    <PageSection
+      actions={
+        <span className="sectionCount">
+          {countLabel(
+            organizations?.length ?? 0,
+            "organization",
+            "organizations",
+          )}
+        </span>
+      }
+      title="Organizations"
+    >
       {organizations && organizations.length > 0 ? (
         <OrganizationTable
           action={action}
@@ -253,12 +274,15 @@ function OrganizationSection({
           organizations={organizations}
         />
       ) : organizations ? (
-        <div className="emptyState compactEmptyState">
-          <div className="emptyGlyph">◇</div>
-          <h3>No organizations found.</h3>
-        </div>
+        <EmptyState
+          compact
+          icon="organization"
+          title="No organizations found."
+        />
+      ) : busy ? (
+        <LoadingState label="Loading organizations…" />
       ) : null}
-    </section>
+    </PageSection>
   );
 }
 
@@ -267,24 +291,23 @@ function OrganizationTable({
   onMarkForDeletion,
   onRestore,
   organizations,
-}: {
-  action: AdminOrganizationAction | undefined;
-  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
-  onRestore: (organization: AdminOrganization) => Promise<void>;
-  organizations: AdminOrganization[];
-}) {
+}: OrganizationActions & { organizations: AdminOrganization[] }) {
   return (
-    <div className="userTableWrap">
-      <table className="userTable organizationTable">
+    <div className="tableWrap">
+      <table className="table adminOrganizationTable">
         <thead>
           <tr>
-            <th>Organization</th>
-            <th>Owner</th>
-            <th>Members</th>
-            <th>Status</th>
-            <th>Marked by</th>
-            <th>Created</th>
-            <th>Action</th>
+            <th scope="col">Organization</th>
+            <th scope="col">Owner</th>
+            <th className="adminNumeric" scope="col">
+              Members
+            </th>
+            <th scope="col">Status</th>
+            <th scope="col">Marked by</th>
+            <th scope="col">Created</th>
+            <th scope="col">
+              <span className="srOnly">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -308,48 +331,40 @@ function OrganizationTableRow({
   onMarkForDeletion,
   onRestore,
   organization,
-}: {
-  action: AdminOrganizationAction | undefined;
-  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
-  onRestore: (organization: AdminOrganization) => Promise<void>;
-  organization: AdminOrganization;
-}) {
+}: OrganizationActions & { organization: AdminOrganization }) {
   return (
     <tr>
       <td>
-        <strong>{organization.name}</strong>
-        <span>{organization.slug}</span>
+        <div className="adminIdentityText adminOrganization">
+          <span className="adminOrganizationName">{organization.name}</span>
+          <span className="adminSlug mono">{organization.slug}</span>
+        </div>
       </td>
-      <td className="tableIdentity">
-        <strong>{organization.ownerName ?? "—"}</strong>
-        <span>{organization.ownerEmail ?? "No default owner"}</span>
-      </td>
-      <td>{organization.memberCount}</td>
       <td>
-        <span
-          className={`userStatus ${organization.deletedAt ? "banned" : "verified"}`}
-        >
-          {organization.deletedAt
-            ? `Pending deletion · ${formatDate(organization.deletedAt)}`
-            : "Active"}
-        </span>
-      </td>
-      <td className="tableIdentity">
-        {organization.deletedAt ? (
-          <>
-            <strong>{organization.deletedByName ?? "Unknown"}</strong>
-            <span>
-              {organization.deletedByEmail ??
-                organization.deletedByUserId ??
-                "Not recorded"}
-            </span>
-          </>
+        {organization.ownerName || organization.ownerEmail ? (
+          <Identity
+            detail={
+              organization.ownerName
+                ? (organization.ownerEmail ?? undefined)
+                : undefined
+            }
+            name={organization.ownerName || organization.ownerEmail || ""}
+          />
         ) : (
-          "—"
+          <span className="textSubtle">No default owner</span>
         )}
       </td>
-      <td>{formatDate(organization.createdAt)}</td>
+      <td className="adminNumeric tabular">{organization.memberCount}</td>
       <td>
+        <OrganizationStatus deletedAt={organization.deletedAt} />
+      </td>
+      <td>
+        <DeletedBy organization={organization} />
+      </td>
+      <td className="adminDate tabular">
+        {formatDate(organization.createdAt)}
+      </td>
+      <td className="adminActions">
         <OrganizationActionButton
           action={action}
           onMarkForDeletion={onMarkForDeletion}
@@ -361,78 +376,152 @@ function OrganizationTableRow({
   );
 }
 
+function OrganizationStatus({
+  deletedAt,
+}: {
+  deletedAt: AdminOrganization["deletedAt"];
+}) {
+  if (!deletedAt) {
+    return (
+      <Badge dot tone="success">
+        Active
+      </Badge>
+    );
+  }
+  return (
+    <div className="adminStatus">
+      <Badge dot tone="danger">
+        Pending deletion
+      </Badge>
+      <span className="textXs textSubtle tabular">
+        Since {formatDate(deletedAt)}
+      </span>
+    </div>
+  );
+}
+
+function DeletedBy({ organization }: { organization: AdminOrganization }) {
+  if (!organization.deletedAt) {
+    return <span className="textSubtle">—</span>;
+  }
+  return (
+    <Identity
+      detail={
+        organization.deletedByEmail ??
+        organization.deletedByUserId ??
+        "Not recorded"
+      }
+      name={organization.deletedByName ?? "Unknown"}
+    />
+  );
+}
+
 function OrganizationActionButton({
   action,
   onMarkForDeletion,
   onRestore,
   organization,
-}: {
-  action: AdminOrganizationAction | undefined;
-  onMarkForDeletion: (organization: AdminOrganization) => Promise<void>;
-  onRestore: (organization: AdminOrganization) => Promise<void>;
-  organization: AdminOrganization;
-}) {
+}: OrganizationActions & { organization: AdminOrganization }) {
   if (organization.deletedAt) {
     const restoring =
       action?.organizationId === organization.id && action.type === "restore";
     return (
-      <button
-        className="primaryButton tableActionButton"
+      <Button
+        busy={restoring}
         disabled={action !== undefined}
+        icon="restore"
         onClick={() => void onRestore(organization)}
-        type="button"
+        size="sm"
       >
-        {restoring ? "Restoring…" : "Undelete"}
-      </button>
+        {restoring ? "Restoring…" : "Restore"}
+      </Button>
     );
   }
   const deleting =
     action?.organizationId === organization.id && action.type === "delete";
   return (
-    <button
-      className="dangerButton tableActionButton"
+    <Button
+      busy={deleting}
       disabled={action !== undefined}
+      icon="trash"
       onClick={() => void onMarkForDeletion(organization)}
-      type="button"
+      size="sm"
+      variant="danger"
     >
       {deleting ? "Marking…" : "Mark for deletion"}
-    </button>
+    </Button>
   );
 }
 
 function UserTable({ users }: { users: ListedUser[] }) {
   return (
-    <div className="userTableWrap">
-      <table className="userTable">
+    <div className="tableWrap">
+      <table className="table adminUsersTable">
         <thead>
           <tr>
-            <th>User</th>
-            <th>Status</th>
-            <th>Role</th>
-            <th>Joined</th>
+            <th scope="col">User</th>
+            <th scope="col">Status</th>
+            <th scope="col">Role</th>
+            <th scope="col">Joined</th>
           </tr>
         </thead>
         <tbody>
-          {users.map((user) => (
-            <tr key={user.id}>
-              <td>
-                <strong>{user.name}</strong>
-                <span>{user.email}</span>
-              </td>
-              <td>
-                <span className={`userStatus ${statusFor(user).className}`}>
-                  {statusFor(user).label}
-                </span>
-              </td>
-              <td>
-                <span className="roleBadge">{user.role ?? "user"}</span>
-              </td>
-              <td>{formatDate(user.createdAt)}</td>
-            </tr>
-          ))}
+          {users.map((user) => {
+            const status = statusFor(user);
+            return (
+              <tr key={user.id}>
+                <td>
+                  <Identity avatar detail={user.email} name={user.name} />
+                </td>
+                <td>
+                  <Badge dot tone={status.tone}>
+                    {status.label}
+                  </Badge>
+                </td>
+                <td>
+                  <RoleBadge role={user.role ?? "user"} />
+                </td>
+                <td className="adminDate tabular">
+                  {formatDate(user.createdAt)}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function Identity({
+  avatar = false,
+  detail,
+  name,
+}: {
+  avatar?: boolean;
+  detail?: string | undefined;
+  name: string;
+}) {
+  return (
+    <div className="adminIdentity">
+      {avatar && <Avatar name={name} size="sm" />}
+      <div className="adminIdentityText">
+        <span className="adminIdentityName">{name}</span>
+        {detail && <span className="adminIdentityDetail">{detail}</span>}
+      </div>
+    </div>
+  );
+}
+
+function RoleBadge({ role }: { role: string }) {
+  const roles = role
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return (
+    <Badge tone={roles.includes("admin") ? "info" : "neutral"}>
+      {roles.map(capitalize).join(", ")}
+    </Badge>
   );
 }
 
@@ -448,43 +537,40 @@ function Pagination({
   const start = page * adminUserPageSize + 1;
   const end = Math.min((page + 1) * adminUserPageSize, total);
   return (
-    <div className="pagination">
-      <span>
+    <nav aria-label="User pages" className="cluster clusterBetween">
+      <span className="textSm textSubtle tabular">
         {start}–{end} of {total}
       </span>
-      <div>
-        <button
+      <div className="cluster">
+        <Button
           disabled={page === 0}
+          icon="arrowLeft"
           onClick={() => onPageChange(page - 1)}
-          type="button"
+          size="sm"
         >
           Previous
-        </button>
-        <button
+        </Button>
+        <Button
           disabled={end >= total}
+          iconEnd="arrowRight"
           onClick={() => onPageChange(page + 1)}
-          type="button"
+          size="sm"
         >
           Next
-        </button>
+        </Button>
       </div>
-    </div>
+    </nav>
   );
 }
 
-function AdminEmptyState({ busy }: { busy: boolean }) {
-  return (
-    <div className="emptyState compactEmptyState">
-      <div className="emptyGlyph">◎</div>
-      <h3>{busy ? "Loading users…" : "No users found."}</h3>
-    </div>
-  );
+function statusFor(user: ListedUser): { label: string; tone: BadgeTone } {
+  if (user.banned) return { label: "Banned", tone: "danger" };
+  if (user.emailVerified) return { label: "Verified", tone: "success" };
+  return { label: "Unverified", tone: "warning" };
 }
 
-function statusFor(user: ListedUser) {
-  if (user.banned) return { className: "banned", label: "Banned" };
-  if (user.emailVerified) return { className: "verified", label: "Verified" };
-  return { className: "pending", label: "Unverified" };
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function formatDate(value: Date | number | string) {

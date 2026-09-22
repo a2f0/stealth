@@ -1,0 +1,390 @@
+/* Audit home: template collections and recent runs. */
+.auditCollections {
+  display: grid;
+  gap: var(--space-10);
+}
+
+.auditCollection {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.auditCollectionHeading {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-0-5);
+}
+
+.auditCollectionTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 650;
+}
+
+.auditTemplateGrid {
+  --grid-min: 24rem;
+}
+
+.auditTemplateCard {
+  display: flex;
+  flex-direction: column;
+}
+
+.auditTemplateBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6) var(--space-6);
+}
+
+.auditTemplateName {
+  margin-top: var(--space-1);
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-snug);
+}
+
+.auditTemplateDescription {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.auditTemplateMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-4);
+  margin-top: auto;
+  padding-top: var(--space-2);
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.auditTemplateStat {
+  --cluster-gap: var(--space-1-5);
+
+  flex-wrap: nowrap;
+}
+
+.auditTemplateFooter {
+  gap: var(--space-2);
+}
+
+.auditRunRow {
+  display: grid;
+  grid-template-areas: "main stats arrow";
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.auditRunRow > .rowMain {
+  grid-area: main;
+}
+
+.auditRunStats {
+  display: grid;
+  grid-area: stats;
+  grid-template-columns: 7rem 7.5rem 5.5rem;
+  align-items: center;
+  justify-items: start;
+  gap: var(--space-4);
+}
+
+.auditRunStat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.auditRunArrow {
+  grid-area: arrow;
+  color: var(--color-text-subtle);
+  transition:
+    color var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+
+.auditRunRow:hover .auditRunArrow {
+  color: var(--color-text);
+  transform: translateX(2px);
+}
+
+/* Center "Load more" instead of the footer's default end alignment. */
+.auditRunCard .cardFooter > :only-child {
+  margin-inline: auto;
+}
+
+/* Stats move under the title by the list's own width, which the resizable
+ * sidebar decides, not the viewport's. */
+.auditRunCard .cardFlush {
+  container-type: inline-size;
+}
+
+@container (max-width: 40rem) {
+  .auditRunRow {
+    grid-template-areas:
+      "main arrow"
+      "stats stats";
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .auditRunStats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+}
+
+/* Template builder. */
+.auditVersionControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.auditVersionPicker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.auditVersionLabel {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.auditVersionSelect {
+  width: 17rem;
+  max-width: 100%;
+}
+
+.auditBack {
+  margin-left: calc(var(--space-2) * -1);
+  padding-inline: var(--space-2);
+}
+
+.auditBuilderFields {
+  display: grid;
+  gap: var(--space-8);
+}
+
+.auditSectionCard {
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.auditSectionHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-sunken);
+}
+
+.auditSectionNumber {
+  display: inline-grid;
+  min-width: 2rem;
+  height: 1.5rem;
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  place-items: center;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.auditSectionTitle {
+  margin-left: calc(var(--space-2) * -1);
+  padding-inline: var(--space-2);
+  border-color: transparent;
+  background: transparent;
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: var(--tracking-tight);
+}
+
+.auditSectionTitle:focus {
+  background: var(--color-surface);
+}
+
+.auditQuestion {
+  display: grid;
+  grid-template-areas: "number prompt controls remove";
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-6);
+}
+
+.auditQuestionNumber {
+  display: flex;
+  grid-area: number;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: var(--control-height-md);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.auditQuestionPrompt {
+  grid-area: prompt;
+  min-height: var(--control-height-md);
+  padding-block: var(--space-2);
+  field-sizing: content;
+  resize: vertical;
+}
+
+.auditDescriptionInput {
+  max-height: 16rem;
+  field-sizing: content;
+}
+
+.auditQuestionControls {
+  display: flex;
+  grid-area: controls;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--control-height-md);
+}
+
+.auditQuestionRemove {
+  grid-area: remove;
+  margin-top: calc((var(--control-height-md) - var(--control-height-sm)) / 2);
+}
+
+.auditResponseType {
+  width: 11rem;
+}
+
+.auditRequired {
+  align-items: center;
+  white-space: nowrap;
+}
+
+.auditRemoveButton {
+  --button-fg: var(--color-text-subtle);
+}
+
+.auditRemoveButton:hover:not(:disabled) {
+  --button-bg-hover: var(--color-danger-bg);
+
+  color: var(--color-danger-fg);
+}
+
+.auditQuestionEmpty {
+  padding-block: var(--space-6);
+}
+
+.auditSectionFooter {
+  padding: var(--space-3) var(--space-4) var(--space-4) var(--space-6);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.auditAddButton {
+  --button-bg: transparent;
+  --button-fg: var(--color-text-muted);
+
+  border-style: dashed;
+}
+
+.auditBuilderState {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .auditTemplateBody {
+    padding: var(--space-4) var(--space-4) var(--space-5);
+  }
+
+  .auditTemplateActions {
+    flex: 1 1 100%;
+    flex-wrap: nowrap;
+  }
+
+  .auditTemplateActions > .button {
+    flex: 1 1 0;
+  }
+
+  .auditTemplateStart {
+    flex: 1 1 100%;
+  }
+
+  .auditVersionControls,
+  .auditVersionPicker {
+    width: 100%;
+  }
+
+  .auditVersionSelect {
+    flex: 1 1 0;
+    width: 100%;
+  }
+
+  .auditVersionControls > .button {
+    width: 100%;
+  }
+
+  .auditSectionHeader {
+    padding-left: var(--space-4);
+  }
+
+  .auditQuestion {
+    padding-left: var(--space-4);
+  }
+
+  /* 16px keeps iOS Safari from zooming when the title is edited. */
+  .auditSectionTitle {
+    font-size: 1rem;
+  }
+
+  .auditSectionFooter {
+    padding-left: var(--space-4);
+  }
+}
+
+/* Narrow section cards stack each question's controls under its prompt. */
+@container (max-width: 48rem) {
+  .auditQuestion {
+    grid-template-areas:
+      "number prompt remove"
+      ". controls controls";
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .auditQuestionControls {
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .auditResponseType {
+    flex: 0 1 16rem;
+    width: auto;
+    min-width: 0;
+  }
+}
+
+/* Sibling dividers come last so the plain rules above never outrank them. */
+.auditQuestion + .auditQuestion {
+  border-top: 1px solid var(--color-border-subtle);
+}

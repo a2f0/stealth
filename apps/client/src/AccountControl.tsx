@@ -1,3 +1,4 @@
+import { Avatar, Icon } from "@tearleads/ui/react";
 import { useEffect, useRef, useState } from "react";
 import type { AccountSession } from "./accountSessions";
 
@@ -54,43 +55,39 @@ export function AccountControl({
   }
 
   return (
-    <div className="accountBlock">
-      <span className="accountAvatar">{initialsFor(user.name)}</span>
-      <span className="accountIdentity">
-        <strong>{user.name}</strong>
-        <span>{user.email}</span>
-      </span>
-      <div className="accountMenu" ref={menu}>
-        <button
-          aria-expanded={open}
-          aria-haspopup="menu"
-          aria-label="Account menu"
-          className="accountMenuButton"
-          disabled={Boolean(busy)}
-          onClick={toggleMenu}
-          ref={trigger}
-          type="button"
-        >
-          ⋮
-        </button>
-        {open && (
-          <AccountMenu
-            accounts={accounts}
-            activeSessionToken={activeSessionToken}
-            busy={busy}
-            error={error ?? loadError}
-            onAddAccount={onAddAccount}
-            onSecurity={() => {
-              setOpen(false);
-              onSecurity();
-            }}
-            onSignOut={() => run(onSignOut, "sign-out")}
-            onSwitchAccount={(token) =>
-              run(() => onSwitchAccount(token), token)
-            }
-          />
-        )}
-      </div>
+    <div className="accountControl" ref={menu}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`Account menu for ${user.name}`}
+        className="accountTrigger"
+        disabled={Boolean(busy)}
+        onClick={toggleMenu}
+        ref={trigger}
+        type="button"
+      >
+        <Avatar name={user.name} />
+        <span className="accountIdentity">
+          <strong className="truncate">{user.name}</strong>
+          <span className="truncate">{user.email}</span>
+        </span>
+        <Icon className="accountTriggerIcon" name="more" size={18} />
+      </button>
+      {open && (
+        <AccountMenu
+          accounts={accounts}
+          activeSessionToken={activeSessionToken}
+          busy={busy}
+          error={error ?? loadError}
+          onAddAccount={onAddAccount}
+          onSecurity={() => {
+            setOpen(false);
+            onSecurity();
+          }}
+          onSignOut={() => run(onSignOut, "sign-out")}
+          onSwitchAccount={(token) => run(() => onSwitchAccount(token), token)}
+        />
+      )}
     </div>
   );
 }
@@ -115,8 +112,8 @@ function AccountMenu({
   onSwitchAccount: (token: string) => Promise<void>;
 }) {
   return (
-    <div className="accountMenuPopover" role="menu">
-      <p className="accountMenuLabel">Accounts</p>
+    <div className="popover accountMenu" role="menu">
+      <p className="menuLabel">Accounts</p>
       {error && (
         <p className="accountMenuError" role="alert">
           {error}
@@ -128,56 +125,59 @@ function AccountMenu({
           return (
             <button
               aria-checked={active}
-              className={`accountChoice${active ? " active" : ""}`}
+              className="accountChoice"
               disabled={Boolean(busy) || active}
               key={account.user.id}
               onClick={() => void onSwitchAccount(account.token)}
               role="menuitemradio"
               type="button"
             >
-              <span className="accountChoiceAvatar">
-                {initialsFor(account.user.name)}
-              </span>
-              <span className="accountChoiceIdentity">
-                <strong>{account.user.name}</strong>
-                <small>{account.user.email}</small>
+              <Avatar name={account.user.name} size="sm" />
+              <span className="accountIdentity">
+                <strong className="truncate">{account.user.name}</strong>
+                <span className="truncate">{account.user.email}</span>
               </span>
               <span className="accountChoiceStatus">
-                {busy === account.token ? "…" : active ? "✓" : ""}
+                {busy === account.token ? (
+                  <span aria-hidden="true" className="spinner" />
+                ) : (
+                  active && <Icon label="Active account" name="check" />
+                )}
               </span>
             </button>
           );
         })}
       </div>
-      <div className="accountMenuActions">
-        <button
-          className="accountMenuItem"
-          disabled={Boolean(busy)}
-          onClick={onSecurity}
-          role="menuitem"
-          type="button"
-        >
-          <span aria-hidden="true">⌾</span> Account security
-        </button>
-        <button
-          className="accountMenuItem"
-          disabled={Boolean(busy)}
-          onClick={onAddAccount}
-          role="menuitem"
-          type="button"
-        >
-          <span aria-hidden="true">＋</span> Add another account
-        </button>
-        <button
-          className="accountMenuItem accountSignOut"
-          disabled={Boolean(busy)}
-          onClick={() => void onSignOut()}
-          role="menuitem"
-          type="button"
-        >
-          {busy === "sign-out" ? "Signing out…" : "Sign out of this account"}
-        </button>
-      </div>
+      <hr className="menuSeparator" />
+      <button
+        className="menuItem"
+        disabled={Boolean(busy)}
+        onClick={onSecurity}
+        role="menuitem"
+        type="button"
+      >
+        <Icon name="security" /> Account security
+      </button>
+      <button
+        className="menuItem"
+        disabled={Boolean(busy)}
+        onClick={onAddAccount}
+        role="menuitem"
+        type="button"
+      >
+        <Icon name="userAdd" /> Add another account
+      </button>
+      <hr className="menuSeparator" />
+      <button
+        className="menuItem"
+        disabled={Boolean(busy)}
+        onClick={() => void onSignOut()}
+        role="menuitem"
+        type="button"
+      >
+        <Icon name="signOut" />
+        {busy === "sign-out" ? "Signing out…" : "Sign out of this account"}
+      </button>
     </div>
   );
 }
@@ -200,6 +200,8 @@ function useAccountMenuDismissal(
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // Handled here; the phone navigation panel must not also close.
+        event.preventDefault();
         close();
         trigger.current?.focus();
       }
@@ -211,17 +213,6 @@ function useAccountMenuDismissal(
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [close, menu, open, trigger]);
-}
-
-function initialsFor(name: string) {
-  return (
-    name
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase())
-      .join("") || "?"
-  );
 }
 
 function messageFrom(cause: unknown) {

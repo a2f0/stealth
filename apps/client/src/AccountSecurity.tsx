@@ -1,3 +1,13 @@
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  Field,
+  Page,
+  PageBody,
+  PageHeader,
+} from "@tearleads/ui/react";
 import { QRCodeSVG } from "qrcode.react";
 import { type FormEvent, useState } from "react";
 import { authClient } from "./authClient";
@@ -200,61 +210,103 @@ function AccountSecurityPage({
   const busy =
     enrollment.action !== undefined || maintenance.action !== undefined;
   return (
-    <>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Account settings</p>
-          <h1>Security</h1>
-        </div>
-      </header>
-      <section className="content accountSecurityContent">
-        {error && (
-          <div aria-live="polite" className="errorBanner pageBanner">
-            {error}
-          </div>
-        )}
-        {notice && (
-          <div aria-live="polite" className="successBanner pageBanner">
-            {notice}
-          </div>
-        )}
-        <div className="accountSecurityGrid">
-          {enrollment.recoveryCodes ? (
-            <RecoveryCodesCard
-              acknowledged={enrollment.acknowledged}
-              codes={enrollment.recoveryCodes}
-              onAcknowledged={enrollment.setAcknowledged}
-              onDone={enrollment.finishRecoveryCodes}
-            />
-          ) : enrollment.setup ? (
-            <AuthenticatorSetupCard
-              busy={busy}
-              code={enrollment.code}
-              onCode={enrollment.setCode}
-              onSubmit={enrollment.verifyEnrollment}
-              setup={enrollment.setup}
-            />
-          ) : twoFactorEnabled ? (
-            <EnabledSecurityCards
-              action={maintenance.action}
-              disablePassword={maintenance.disablePassword}
-              onDisable={maintenance.disable}
-              onDisablePassword={maintenance.setDisablePassword}
-              onRegenerate={maintenance.regenerateCodes}
-              onRegeneratePassword={maintenance.setRegeneratePassword}
-              regeneratePassword={maintenance.regeneratePassword}
-            />
-          ) : (
-            <EnableSecurityCard
-              busy={busy}
-              onPassword={enrollment.setEnablePassword}
-              onSubmit={enrollment.beginEnrollment}
-              password={enrollment.enablePassword}
-            />
-          )}
-        </div>
-      </section>
-    </>
+    <Page narrow>
+      <PageHeader
+        description="Protect your account with a second step at sign-in."
+        eyebrow="Account settings"
+        title="Security"
+      />
+      <PageBody>
+        {error && <Banner tone="danger">{error}</Banner>}
+        {notice && <Banner tone="success">{notice}</Banner>}
+        <SecurityContent
+          busy={busy}
+          enrollment={enrollment}
+          maintenance={maintenance}
+          twoFactorEnabled={twoFactorEnabled}
+        />
+      </PageBody>
+    </Page>
+  );
+}
+
+function SecurityContent({
+  busy,
+  enrollment,
+  maintenance,
+  twoFactorEnabled,
+}: {
+  busy: boolean;
+  enrollment: ReturnType<typeof useMfaEnrollment>;
+  maintenance: ReturnType<typeof useMfaMaintenance>;
+  twoFactorEnabled: boolean;
+}) {
+  if (enrollment.recoveryCodes) {
+    return (
+      <RecoveryCodesCard
+        acknowledged={enrollment.acknowledged}
+        codes={enrollment.recoveryCodes}
+        onAcknowledged={enrollment.setAcknowledged}
+        onDone={enrollment.finishRecoveryCodes}
+      />
+    );
+  }
+  if (enrollment.setup) {
+    return (
+      <AuthenticatorSetupCard
+        busy={busy}
+        code={enrollment.code}
+        onCode={enrollment.setCode}
+        onSubmit={enrollment.verifyEnrollment}
+        setup={enrollment.setup}
+      />
+    );
+  }
+  if (twoFactorEnabled) {
+    return (
+      <EnabledSecurityCards
+        action={maintenance.action}
+        disablePassword={maintenance.disablePassword}
+        onDisable={maintenance.disable}
+        onDisablePassword={maintenance.setDisablePassword}
+        onRegenerate={maintenance.regenerateCodes}
+        onRegeneratePassword={maintenance.setRegeneratePassword}
+        regeneratePassword={maintenance.regeneratePassword}
+      />
+    );
+  }
+  return (
+    <EnableSecurityCard
+      busy={busy}
+      onPassword={enrollment.setEnablePassword}
+      onSubmit={enrollment.beginEnrollment}
+      password={enrollment.enablePassword}
+    />
+  );
+}
+
+function PasswordField({
+  busy,
+  onChange,
+  value,
+}: {
+  busy: boolean;
+  onChange: (password: string) => void;
+  value: string;
+}) {
+  return (
+    <Field label="Current password">
+      <input
+        autoComplete="current-password"
+        className="input"
+        disabled={busy}
+        maxLength={128}
+        onChange={(event) => onChange(event.target.value)}
+        required
+        type="password"
+        value={value}
+      />
+    </Field>
   );
 }
 
@@ -270,34 +322,25 @@ function EnableSecurityCard({
   password: string;
 }) {
   return (
-    <form className="settingsCard" onSubmit={(event) => void onSubmit(event)}>
-      <div>
-        <h2>Authenticator app</h2>
-        <p>
-          Add a second step to sign-in using 1Password, Authy, Google
-          Authenticator, or another TOTP app.
-        </p>
-      </div>
-      <label className="field">
-        <span>Current password</span>
-        <input
-          autoComplete="current-password"
-          disabled={busy}
-          maxLength={128}
-          onChange={(event) => onPassword(event.target.value)}
-          required
-          type="password"
-          value={password}
-        />
-      </label>
-      <button
-        className="primaryButton settingsSubmit"
-        disabled={busy || !password}
-        type="submit"
-      >
-        {busy ? "Starting setup…" : "Set up authenticator app"}
-      </button>
-    </form>
+    <Card
+      actions={<Badge dot>Not enabled</Badge>}
+      description="Add a second step to sign-in using 1Password, Authy, Google Authenticator, or another TOTP app."
+      footer={
+        <Button
+          busy={busy}
+          disabled={!password}
+          icon="shield"
+          type="submit"
+          variant="primary"
+        >
+          {busy ? "Starting setup…" : "Set up authenticator app"}
+        </Button>
+      }
+      onSubmit={(event) => void onSubmit(event)}
+      title="Authenticator app"
+    >
+      <PasswordField busy={busy} onChange={onPassword} value={password} />
+    </Card>
   );
 }
 
@@ -316,56 +359,65 @@ function AuthenticatorSetupCard({
 }) {
   const secret = totpSecret(setup.totpURI);
   return (
-    <form
-      className="settingsCard authenticatorSetupCard"
+    <Card
+      actions={
+        <Badge dot tone="warning">
+          Pending verification
+        </Badge>
+      }
+      description="Scan the QR code, then enter the six-digit code your app generates. MFA will not turn on until the code is verified."
+      footer={
+        <Button
+          busy={busy}
+          disabled={code.replace(/\D/g, "").length !== 6}
+          icon="check"
+          type="submit"
+          variant="primary"
+        >
+          {busy ? "Verifying…" : "Verify and enable MFA"}
+        </Button>
+      }
       onSubmit={(event) => void onSubmit(event)}
+      title="Connect your authenticator"
     >
-      <div>
-        <h2>Connect your authenticator</h2>
-        <p>
-          Scan the QR code, then enter the six-digit code your app generates.
-          MFA will not turn on until the code is verified.
-        </p>
-      </div>
       <div className="totpSetup">
-        <div className="totpQrCode">
+        <div className="totpQrTile">
           <QRCodeSVG
             aria-label="Authenticator setup QR code"
             level="M"
             marginSize={2}
-            size={190}
+            size={176}
             title="Authenticator setup QR code"
             value={setup.totpURI}
           />
         </div>
-        {secret && (
-          <div className="totpManualCode">
-            <span>Can’t scan it? Enter this key manually</span>
-            <code>{formatSecret(secret)}</code>
-          </div>
-        )}
+        <div className="totpSetupFields">
+          {secret && (
+            <div className="totpManualKey">
+              <p className="totpManualLabel">
+                Can’t scan it? Enter this key manually
+              </p>
+              <code className="codeChip totpSecret">
+                {formatSecret(secret)}
+              </code>
+            </div>
+          )}
+          <Field label="Authentication code">
+            <input
+              autoComplete="one-time-code"
+              className="input totpCodeInput"
+              disabled={busy}
+              inputMode="numeric"
+              maxLength={8}
+              onChange={(event) => onCode(event.target.value)}
+              pattern="[0-9 ]{6,8}"
+              required
+              value={code}
+            />
+          </Field>
+        </div>
       </div>
-      <label className="field">
-        <span>Authentication code</span>
-        <input
-          autoComplete="one-time-code"
-          disabled={busy}
-          inputMode="numeric"
-          maxLength={8}
-          onChange={(event) => onCode(event.target.value)}
-          pattern="[0-9 ]{6,8}"
-          required
-          value={code}
-        />
-      </label>
-      <button
-        className="primaryButton settingsSubmit"
-        disabled={busy || code.replace(/\D/g, "").length !== 6}
-        type="submit"
-      >
-        {busy ? "Verifying…" : "Verify and enable MFA"}
-      </button>
-    </form>
+    </Card>
   );
 }
 
@@ -392,54 +444,47 @@ function RecoveryCodesCard({
   }
 
   return (
-    <section className="settingsCard recoveryCodesCard">
-      <div>
-        <h2>Save your recovery codes</h2>
-        <p>
-          Each code works once if you lose your authenticator. Keep them in a
-          password manager or another secure place.
-        </p>
-      </div>
+    <Card
+      description="Each code works once if you lose your authenticator. Keep them in a password manager or another secure place."
+      footer={
+        <>
+          <label className="check">
+            <input
+              checked={acknowledged}
+              onChange={(event) => onAcknowledged(event.target.checked)}
+              type="checkbox"
+            />
+            <span>I saved these recovery codes somewhere secure.</span>
+          </label>
+          <Button disabled={!acknowledged} onClick={onDone} variant="primary">
+            Done
+          </Button>
+        </>
+      }
+      title="Save your recovery codes"
+    >
       <fieldset className="recoveryCodeGrid">
         <legend className="srOnly">Recovery codes</legend>
         {codes.map((code) => (
           <code key={code}>{code}</code>
         ))}
       </fieldset>
-      <div className="securityButtonRow">
-        <button
-          className="primaryButton"
-          onClick={() => void copyCodes()}
-          type="button"
-        >
+      <div className="cluster">
+        <Button icon="copy" onClick={() => void copyCodes()} size="sm">
           Copy codes
-        </button>
-        <button
-          className="securitySecondaryButton"
+        </Button>
+        <Button
+          icon="download"
           onClick={() => downloadRecoveryCodes(codes)}
-          type="button"
+          size="sm"
         >
           Download
-        </button>
-        {copyNotice && <small aria-live="polite">{copyNotice}</small>}
+        </Button>
+        <span aria-live="polite" className="recoveryCopyNotice">
+          {copyNotice}
+        </span>
       </div>
-      <label className="securityAcknowledgement">
-        <input
-          checked={acknowledged}
-          onChange={(event) => onAcknowledged(event.target.checked)}
-          type="checkbox"
-        />
-        <span>I saved these recovery codes somewhere secure.</span>
-      </label>
-      <button
-        className="primaryButton settingsSubmit"
-        disabled={!acknowledged}
-        onClick={onDone}
-        type="button"
-      >
-        Done
-      </button>
-    </section>
+    </Card>
   );
 }
 
@@ -460,84 +505,84 @@ function EnabledSecurityCards({
   onRegeneratePassword: (password: string) => void;
   regeneratePassword: string;
 }) {
-  const busy = action !== undefined;
   return (
-    <>
-      <section className="settingsCard securityStatusCard">
-        <div>
-          <h2>Authenticator app</h2>
-          <p>
-            MFA is on. Sign-ins require a code from your authenticator or one
-            unused recovery code.
-          </p>
-        </div>
-        <span className="securityStatus">
-          <span className="statusDot" /> Enabled
-        </span>
-      </section>
-      <form
-        className="settingsCard"
-        onSubmit={(event) => void onRegenerate(event)}
-      >
-        <div>
-          <h2>Recovery codes</h2>
-          <p>
-            Generate a new set if your saved codes are lost or may have been
-            exposed. This immediately invalidates the old set.
-          </p>
-        </div>
-        <label className="field">
-          <span>Current password</span>
-          <input
-            autoComplete="current-password"
-            disabled={busy}
-            maxLength={128}
-            onChange={(event) => onRegeneratePassword(event.target.value)}
-            required
-            type="password"
-            value={regeneratePassword}
-          />
-        </label>
-        <button
-          className="primaryButton settingsSubmit"
-          disabled={busy || !regeneratePassword}
+    <div className="stack stackLg">
+      <Card
+        actions={
+          <Badge dot tone="success">
+            Enabled
+          </Badge>
+        }
+        description="MFA is on. Sign-ins require a code from your authenticator or one unused recovery code."
+        title="Authenticator app"
+      />
+      <MaintenanceCard
+        action={action}
+        description="Generate a new set if your saved codes are lost or may have been exposed. This immediately invalidates the old set."
+        kind="regenerate"
+        onPassword={onRegeneratePassword}
+        onSubmit={onRegenerate}
+        password={regeneratePassword}
+        title="Recovery codes"
+      />
+      <MaintenanceCard
+        action={action}
+        description="This removes the authenticator secret and every recovery code from your account."
+        kind="disable"
+        onPassword={onDisablePassword}
+        onSubmit={onDisable}
+        password={disablePassword}
+        title="Disable MFA"
+      />
+    </div>
+  );
+}
+
+const maintenanceButtons = {
+  disable: { busyLabel: "Disabling…", label: "Disable MFA" },
+  regenerate: { busyLabel: "Generating…", label: "Generate new codes" },
+} as const;
+
+function MaintenanceCard({
+  action,
+  description,
+  kind,
+  onPassword,
+  onSubmit,
+  password,
+  title,
+}: {
+  action: SecurityAction | undefined;
+  description: string;
+  kind: "disable" | "regenerate";
+  onPassword: (password: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  password: string;
+  title: string;
+}) {
+  const busy = action !== undefined;
+  const destructive = kind === "disable";
+  const button = maintenanceButtons[kind];
+  return (
+    <Card
+      className={destructive ? "cardDanger" : undefined}
+      description={description}
+      footer={
+        <Button
+          busy={action === kind}
+          disabled={busy || !password}
+          icon={destructive ? undefined : "refresh"}
           type="submit"
+          variant={destructive ? "danger" : "secondary"}
         >
-          {action === "regenerate" ? "Generating…" : "Generate new codes"}
-        </button>
-      </form>
-      <form
-        className="settingsCard"
-        onSubmit={(event) => void onDisable(event)}
-      >
-        <div>
-          <h2>Disable MFA</h2>
-          <p>
-            This removes the authenticator secret and every recovery code from
-            your account.
-          </p>
-        </div>
-        <label className="field">
-          <span>Current password</span>
-          <input
-            autoComplete="current-password"
-            disabled={busy}
-            maxLength={128}
-            onChange={(event) => onDisablePassword(event.target.value)}
-            required
-            type="password"
-            value={disablePassword}
-          />
-        </label>
-        <button
-          className="dangerButton settingsSubmit"
-          disabled={busy || !disablePassword}
-          type="submit"
-        >
-          {action === "disable" ? "Disabling…" : "Disable MFA"}
-        </button>
-      </form>
-    </>
+          {action === kind ? button.busyLabel : button.label}
+        </Button>
+      }
+      onSubmit={(event) => void onSubmit(event)}
+      title={title}
+    >
+      <PasswordField busy={busy} onChange={onPassword} value={password} />
+    </Card>
   );
 }
 
