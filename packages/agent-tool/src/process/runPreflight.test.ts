@@ -5,7 +5,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -18,6 +20,7 @@ import {
 import {
   buildPreflightEnvironment,
   buildPreflightSandboxProfile,
+  mountPreflightDependencies,
   parsePreflightPaths,
   runPreflight,
 } from "./runPreflight";
@@ -39,6 +42,75 @@ function assertExternalServerReachable(host: string, port: number) {
       socket.destroy(new Error("External test address was not reachable."));
     });
   });
+}
+
+/**
+ * A Bun-style workspace: apps/web links @scope/lib to packages/lib and an
+ * installed @scope/dep into the root store.
+ */
+function createWorkspaceFixture(repositoryRoot: string) {
+  const library = path.join(repositoryRoot, "packages", "lib");
+  const store = path.join(repositoryRoot, "node_modules", ".store", "dep");
+  const scope = path.join(
+    repositoryRoot,
+    "apps",
+    "web",
+    "node_modules",
+    "@scope",
+  );
+  mkdirSync(library, { recursive: true });
+  mkdirSync(store, { recursive: true });
+  mkdirSync(scope, { recursive: true });
+  writeFileSync(
+    path.join(library, "package.json"),
+    `${JSON.stringify({ main: "index.ts", name: "@scope/lib" })}\n`,
+  );
+  writeFileSync(
+    path.join(library, "index.ts"),
+    'export const library = "workspace library";\n',
+  );
+  writeFileSync(
+    path.join(store, "package.json"),
+    `${JSON.stringify({ main: "index.js", name: "@scope/dep" })}\n`,
+  );
+  writeFileSync(
+    path.join(store, "index.js"),
+    'export const dependency = "installed dependency";\n',
+  );
+  symlinkSync("../../../../packages/lib", path.join(scope, "lib"));
+  symlinkSync("../../../../node_modules/.store/dep", path.join(scope, "dep"));
+  return { library, scope, store };
+}
+
+function commitFixture(repositoryRoot: string) {
+  const git = resolveTrustedExecutable("git", process.env, repositoryRoot);
+  if (git === null) throw new Error("Trusted Git is required for this test.");
+  const invokeGit = (arguments_: readonly string[]) =>
+    execFileSync(git.executable, arguments_, {
+      cwd: repositoryRoot,
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+      stdio: "ignore",
+    });
+  invokeGit(["init", "--quiet"]);
+  invokeGit(["-c", "core.hooksPath=/dev/null", "add", "--all"]);
+  invokeGit([
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "user.name=Preflight Test",
+    "-c",
+    "user.email=preflight-test@localhost",
+    "commit",
+    "--quiet",
+    "--no-gpg-sign",
+    "--no-verify",
+    "-m",
+    "fixture",
+  ]);
 }
 
 test("preflight strips credentials and contributor-controlled process options", () => {
@@ -269,35 +341,7 @@ test.skipIf(
           `}\n`,
       );
 
-      const git = resolveTrustedExecutable("git", process.env, repositoryRoot);
-      if (git === null)
-        throw new Error("Trusted Git is required for this test.");
-      const invokeGit = (arguments_: readonly string[]) =>
-        execFileSync(git.executable, arguments_, {
-          cwd: repositoryRoot,
-          env: {
-            ...process.env,
-            GIT_CONFIG_GLOBAL: "/dev/null",
-            GIT_CONFIG_NOSYSTEM: "1",
-          },
-          stdio: "ignore",
-        });
-      invokeGit(["init", "--quiet"]);
-      invokeGit(["-c", "core.hooksPath=/dev/null", "add", "--all"]);
-      invokeGit([
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "user.name=Preflight Test",
-        "-c",
-        "user.email=preflight-test@localhost",
-        "commit",
-        "--quiet",
-        "--no-gpg-sign",
-        "--no-verify",
-        "-m",
-        "fixture",
-      ]);
+      commitFixture(repositoryRoot);
 
       expect(runPreflight(repositoryRoot, "attack")).toBe(0);
       expect(existsSync(ignoredFile)).toBe(false);
@@ -318,6 +362,98 @@ test.skipIf(
       ).toThrow("writable storage limit");
     } finally {
       if (hostLoopbackServer.listening) hostLoopbackServer.close();
+      rmSync(repositoryRoot, { force: true, recursive: true });
+    }
+  },
+  20_000,
+);
+
+test("preflight mounts workspace links to the snapshot copy", () => {
+  const temporaryRoot = mkdtempSync(
+    path.join(tmpdir(), "agent-tool-preflight-mount-"),
+  );
+  const repositoryRoot = path.join(temporaryRoot, "repo");
+  const checkoutRoot = path.join(temporaryRoot, "checkout");
+  try {
+    const { library, scope, store } = createWorkspaceFixture(repositoryRoot);
+    // A workspace link whose package is absent from the snapshot stays put.
+    mkdirSync(path.join(repositoryRoot, "packages", "gone"), {
+      recursive: true,
+    });
+    symlinkSync("../../../../packages/gone", path.join(scope, "gone"));
+    const snapshotLibrary = path.join(checkoutRoot, "packages", "lib");
+    mkdirSync(snapshotLibrary, { recursive: true });
+    writeFileSync(path.join(snapshotLibrary, "index.ts"), "snapshot\n");
+
+    const readonlyPaths = mountPreflightDependencies(
+      repositoryRoot,
+      checkoutRoot,
+    );
+    const mountedScope = path.join(
+      checkoutRoot,
+      "apps",
+      "web",
+      "node_modules",
+      "@scope",
+    );
+
+    expect(realpathSync(path.join(mountedScope, "lib"))).toBe(
+      realpathSync(snapshotLibrary),
+    );
+    expect(realpathSync(path.join(mountedScope, "dep"))).toBe(
+      realpathSync(store),
+    );
+    expect(realpathSync(path.join(mountedScope, "gone"))).toBe(
+      realpathSync(path.join(repositoryRoot, "packages", "gone")),
+    );
+    expect(readonlyPaths).toContain(
+      realpathSync(path.join(repositoryRoot, "apps", "web", "node_modules")),
+    );
+    expect(readonlyPaths).toContain(
+      realpathSync(path.join(repositoryRoot, "node_modules")),
+    );
+    expect(readonlyPaths).not.toContain(realpathSync(library));
+  } finally {
+    rmSync(temporaryRoot, { force: true, recursive: true });
+  }
+});
+
+test.skipIf(
+  process.platform !== "darwin" ||
+    Reflect.get(process.env, "TEARLEADS_PREFLIGHT_OFFLINE") === "1",
+)(
+  "preflight resolves workspace packages without exposing their source",
+  () => {
+    const repositoryRoot = mkdtempSync(
+      path.join(tmpdir(), "agent-tool-preflight-workspace-"),
+    );
+    try {
+      const { library } = createWorkspaceFixture(repositoryRoot);
+      writeFileSync(path.join(repositoryRoot, ".gitignore"), "node_modules\n");
+      writeFileSync(
+        path.join(repositoryRoot, "package.json"),
+        `${JSON.stringify({
+          name: "preflight-workspace-test",
+          private: true,
+          scripts: { imports: "bun apps/web/imports.ts" },
+        })}\n`,
+      );
+      writeFileSync(
+        path.join(repositoryRoot, "apps", "web", "imports.ts"),
+        `import { writeFileSync } from "node:fs";\n` +
+          `import { dependency } from "@scope/dep";\n` +
+          `import { library } from "@scope/lib";\n` +
+          `if (library !== "workspace library") throw new Error(library);\n` +
+          `if (dependency !== "installed dependency") throw new Error(dependency);\n` +
+          `try { writeFileSync(${JSON.stringify(path.join(library, "index.ts"))}, "poisoned\\n"); } catch {}\n`,
+      );
+      commitFixture(repositoryRoot);
+
+      expect(runPreflight(repositoryRoot, "imports")).toBe(0);
+      expect(readFileSync(path.join(library, "index.ts"), "utf8")).toBe(
+        'export const library = "workspace library";\n',
+      );
+    } finally {
       rmSync(repositoryRoot, { force: true, recursive: true });
     }
   },
