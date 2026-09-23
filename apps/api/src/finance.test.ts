@@ -872,6 +872,9 @@ async function createFixture(options?: { pendingTransition?: boolean }) {
     "0006_scope_objects_to_organizations.sql",
     "0025_classify_objects.sql",
     "0002_create_inbound_emails.sql",
+    // 0011's organization triggers reference 0010's groups; newer SQLite
+    // rejects 0012's table rename while any trigger names a missing table.
+    "0010_create_organization_groups.sql",
     "0011_soft_delete_organizations.sql",
     "0012_scope_inbound_emails_to_organizations.sql",
     "0016_soft_delete_inbound_emails.sql",
