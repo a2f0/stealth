@@ -223,24 +223,20 @@ function AuthenticatedWorkspace({
   verificationNotice: string | undefined;
   workspace: ReturnType<typeof useWorkspaceOrganizations>;
 }) {
-  if (workspace.isPending) return <LoadingScreen />;
-  if (pathname === "/admin" && !hasRole(session.user.role, "admin")) {
-    return <AdminAccessDenied onNavigate={() => navigate("/")} />;
-  }
-  if (organizationPathRequiresAccess(pathname) && access.isPending) {
-    return <LoadingScreen />;
-  }
-  if (
-    isFinancePath(pathname) &&
-    !access.twoFactorRequirement &&
-    !access.can("finance")
-  ) {
-    return <FeatureAccessDenied onNavigate={() => navigate("/")} />;
-  }
+  const blocked = blockedWorkspaceContent(
+    access,
+    navigate,
+    pathname,
+    session,
+    workspace,
+  );
+  if (blocked) return blocked;
   const library = (
     <Library
       initialNotice={verificationNotice}
+      onNavigate={navigate}
       onResendVerification={() => resendVerification(session.user.email)}
+      pathname={pathname}
       user={session.user}
     />
   );
@@ -303,6 +299,31 @@ function AuthenticatedWorkspace({
       )}
     </WorkspaceShell>
   );
+}
+
+/** A loading or access-denied screen when the path can't be shown yet. */
+function blockedWorkspaceContent(
+  access: ReturnType<typeof useOrganizationAccess>,
+  navigate: (pathname: string) => void,
+  pathname: string,
+  session: AuthenticatedSession,
+  workspace: ReturnType<typeof useWorkspaceOrganizations>,
+) {
+  if (workspace.isPending) return <LoadingScreen />;
+  if (pathname === "/admin" && !hasRole(session.user.role, "admin")) {
+    return <AdminAccessDenied onNavigate={() => navigate("/")} />;
+  }
+  if (organizationPathRequiresAccess(pathname) && access.isPending) {
+    return <LoadingScreen />;
+  }
+  if (
+    isFinancePath(pathname) &&
+    !access.twoFactorRequirement &&
+    !access.can("finance")
+  ) {
+    return <FeatureAccessDenied onNavigate={() => navigate("/")} />;
+  }
+  return undefined;
 }
 
 function OrganizationTwoFactorRequired({
@@ -489,7 +510,11 @@ function contentForPath(
     return <Finance onNavigate={navigate} pathname={pathname} />;
   }
   if (pathname === "/businesses") return <Businesses />;
-  if (pathname === "/inbox") return <Inbox />;
+  if (pathname === "/inbox") {
+    return (
+      <Inbox canAccessFinance={access.can("finance")} onNavigate={navigate} />
+    );
+  }
   if (pathname === "/admin") return <AdminUsers />;
   if (pathname === "/account/security") {
     return (

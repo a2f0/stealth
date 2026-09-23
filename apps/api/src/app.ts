@@ -15,6 +15,7 @@ import { billing, handleStripeWebhook, syncOrganizationSeats } from "./billing";
 import { businesses } from "./businesses";
 import { finance } from "./finance";
 import { inbox } from "./inbox";
+import { libraryFolders } from "./libraryFolders";
 import { objects } from "./objects";
 import { organizationGroups, requireCapability } from "./organizationGroups";
 import { organizationSettings } from "./organizationSettings";
@@ -84,6 +85,7 @@ app.get("/api", (context) =>
       businesses: "/api/businesses",
       finance: "/api/finance",
       inbox: "/api/inbox",
+      libraryFolders: "/api/library/folders",
       objects: "/api/objects",
       organizationGroups: "/api/organization-groups",
       organizationSettings: "/api/organization-settings",
@@ -146,6 +148,10 @@ app.use("/api/organization-settings/people", requireOrganization);
 app.use("/api/organization-settings/people/*", requireOrganization);
 app.use("/api/organization-settings/current", requireOrganization);
 app.route("/api/organization-settings", organizationSettings);
+
+app.use("/api/library/folders", requireAuth, requireOrganization);
+app.use("/api/library/folders/*", requireAuth, requireOrganization);
+app.route("/api/library/folders", libraryFolders);
 
 app.use("/api/objects", requireAuth, requireOrganization);
 app.use("/api/objects/*", requireAuth, requireOrganization);

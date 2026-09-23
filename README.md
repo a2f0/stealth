@@ -91,6 +91,29 @@ DMARC policy are isolated under `auth.tearleads.de`; Google Workspace remains
 responsible for mail at the apex. The deployment script uploads the auth secret
 to the Worker but never places it in Wrangler configuration or Terraform state.
 
+## Library folders and inbox links
+
+Library documents can be organized into flat, organization-scoped folders,
+each opened at `/library/<folder-id>`. A document lives in at most one folder;
+deleting a folder returns its documents to the library root.
+
+Inbox messages can be linked to library folders and to imported finance
+transactions. Links live in one polymorphic table, `inbound_email_links`,
+whose `target_type` is `library_folder` or `finance_transaction`. A
+polymorphic reference cannot carry a foreign key, so database triggers remove
+links when their folder or transaction is deleted, and purging an email
+cascades to its links. An email in Trash keeps its links but is hidden from
+folders and transactions until it is restored, and links to transactions that
+Plaid has since removed are hidden. Creating, removing, or seeing transaction
+links requires the Finance capability. A folder lists its linked emails, and a
+transaction shows its linked emails in the Finance transaction list.
+
+PDF and image attachments preview in the inbox. PDFs are rendered in the
+browser with [PDF.js](https://mozilla.github.io/pdf.js/), which loads on the
+first preview; the client build copies its image decoders, colour profiles,
+character maps, and standard fonts to `/pdfjs/`. Only raster image formats are
+previewed, so SVG attachments download instead.
+
 ## Audits and checklists
 
 Authenticated users can build organization-scoped checklist templates at

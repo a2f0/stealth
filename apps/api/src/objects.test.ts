@@ -19,6 +19,7 @@ interface ObjectListResponse {
     contentType: string;
     createdAt: string;
     filename: string;
+    folderId: string | null;
     id: string;
     objectKey: string;
     size: number;
@@ -44,6 +45,7 @@ describe("organization uploads", () => {
       objects: [
         {
           filename: "legacy.txt",
+          folderId: null,
           id: "legacy-object",
           objectKey: "uploads/legacy-object/legacy.txt",
           contentType: "text/plain",
@@ -161,6 +163,7 @@ async function createFixture() {
   await applyMigration(database, "0006_scope_objects_to_organizations.sql");
   await applyMigration(database, "0025_classify_objects.sql");
   await applyMigration(database, "0030_queue_deleted_objects.sql");
+  await applyMigration(database, "0035_create_library_folders.sql");
   database
     .query(
       `INSERT INTO objects

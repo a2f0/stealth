@@ -9,21 +9,31 @@ import {
   PageBody,
   PageHeader,
 } from "@tearleads/ui/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AttachmentPreviewTile } from "./AttachmentPreview";
 import {
   deleteInboundEmail,
   getInboundEmail,
   type InboundEmailDetail,
+  type InboundEmailLink,
   type InboundEmailSummary,
   type InboxFolder,
   inboundAttachmentUrl,
   listInboundEmails,
   restoreInboundEmail,
 } from "./api";
-import { countLabel } from "./labels";
+import { EmailLinks } from "./EmailLinks";
+import { selectEmailId } from "./inboxSelection";
+import { countLabel, formatBytes } from "./labels";
+import { previewKindFor } from "./previewKind";
 
-export function Inbox() {
-  return <InboxView model={useInboxModel()} />;
+interface InboxContext {
+  canAccessFinance: boolean;
+  onNavigate: (pathname: string) => void;
+}
+
+export function Inbox(context: InboxContext) {
+  return <InboxView context={context} model={useInboxModel()} />;
 }
 
 function useInboxModel() {
@@ -46,6 +56,7 @@ function useInboxMessages(folder: InboxFolder) {
   const [loadingList, setLoadingList] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState(false);
   const [error, setError] = useState<string>();
+  const { openedByLink, pending } = useLinkedEmailId();
 
   const refresh = useCallback(async () => {
     setLoadingList(true);
@@ -53,19 +64,19 @@ function useInboxMessages(folder: InboxFolder) {
     try {
       const listing = await listInboundEmails(folder);
       const nextEmails = listing.emails;
+      const requested = pending.current;
+      pending.current = undefined;
       setEmails(nextEmails);
       setInboundAddress(listing.address);
       setSelectedId((current) =>
-        nextEmails.some(({ id }) => id === current)
-          ? current
-          : nextEmails[0]?.id,
+        selectEmailId(nextEmails, current, requested, openedByLink),
       );
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
       setLoadingList(false);
     }
-  }, [folder]);
+  }, [folder, openedByLink, pending]);
 
   useEffect(() => {
     setEmails([]);
@@ -109,6 +120,23 @@ function useInboxMessages(folder: InboxFolder) {
     setDetail,
     setSelectedId,
   };
+}
+
+/**
+ * The message named by `?email=`. The first listing consumes `pending`, and
+ * the query is removed so later reloads open the inbox normally.
+ */
+function useLinkedEmailId() {
+  const [openedByLink] = useState(
+    () => new URLSearchParams(window.location.search).get("email") ?? undefined,
+  );
+  const pending = useRef(openedByLink);
+  useEffect(() => {
+    if (window.location.search) {
+      window.history.replaceState(window.history.state, "", "/inbox");
+    }
+  }, []);
+  return { openedByLink, pending };
 }
 
 function useInboxActions(messages: ReturnType<typeof useInboxMessages>) {
@@ -162,7 +190,13 @@ function useInboxActions(messages: ReturnType<typeof useInboxMessages>) {
 type InboxMessages = ReturnType<typeof useInboxMessages>;
 type InboxActions = ReturnType<typeof useInboxActions>;
 
-function InboxView({ model }: { model: ReturnType<typeof useInboxModel> }) {
+function InboxView({
+  context,
+  model,
+}: {
+  context: InboxContext;
+  model: ReturnType<typeof useInboxModel>;
+}) {
   const { actions, folder, messages, selectFolder } = model;
   const error = actions.error ?? messages.error;
   return (
@@ -186,7 +220,12 @@ function InboxView({ model }: { model: ReturnType<typeof useInboxModel> }) {
               Deleted messages are permanently removed after 30 days.
             </Banner>
           )}
-          <InboxPanes actions={actions} folder={folder} messages={messages} />
+          <InboxPanes
+            actions={actions}
+            context={context}
+            folder={folder}
+            messages={messages}
+          />
         </div>
       </PageBody>
     </Page>
@@ -255,10 +294,12 @@ function InboxToolbar({
 
 function InboxPanes({
   actions,
+  context,
   folder,
   messages,
 }: {
   actions: InboxActions;
+  context: InboxContext;
   folder: InboxFolder;
   messages: InboxMessages;
 }) {
@@ -281,10 +322,18 @@ function InboxPanes({
         selectedId={messages.selectedId}
       />
       <MessageDetail
+        context={context}
         email={messages.detail}
         folder={folder}
         loading={messages.loadingMessage}
         onDelete={actions.moveToTrash}
+        onLinksChange={(emailId, update) =>
+          messages.setDetail((current) =>
+            current?.id === emailId
+              ? { ...current, links: update(current.links) }
+              : current,
+          )
+        }
         onRestore={actions.restore}
         unavailable={Boolean(messages.error && messages.selectedId)}
         working={messages.detail?.id === actions.workingId}
@@ -378,18 +427,25 @@ function MessageListItem({
 }
 
 function MessageDetail({
+  context,
   email,
   folder,
   loading,
   onDelete,
+  onLinksChange,
   onRestore,
   unavailable,
   working,
 }: {
+  context: InboxContext;
   email?: InboundEmailDetail | undefined;
   folder: InboxFolder;
   loading: boolean;
   onDelete: (email: InboundEmailDetail) => Promise<void>;
+  onLinksChange: (
+    emailId: string,
+    update: (links: InboundEmailLink[]) => InboundEmailLink[],
+  ) => void;
   onRestore: (email: InboundEmailDetail) => Promise<void>;
   unavailable: boolean;
   working: boolean;
@@ -430,6 +486,15 @@ function MessageDetail({
           <dt>Received</dt>
           <dd>{formatDateTime(email.receivedAt)}</dd>
         </dl>
+        <EmailLinks
+          canAccessFinance={context.canAccessFinance}
+          editable={folder === "inbox"}
+          emailId={email.id}
+          key={email.id}
+          links={email.links}
+          onChange={(update) => onLinksChange(email.id, update)}
+          onNavigate={context.onNavigate}
+        />
       </header>
       <pre className="inboxBody">{readableBody(email)}</pre>
       {email.attachments.length > 0 && (
@@ -510,28 +575,63 @@ function AttachmentList({
   email: InboundEmailDetail;
   folder: InboxFolder;
 }) {
+  const previews = email.attachments.flatMap((attachment) => {
+    const kind = previewKindFor(attachment);
+    return kind ? [{ attachment, kind }] : [];
+  });
+  const others = email.attachments.filter(
+    (attachment) => !previewKindFor(attachment),
+  );
   return (
     <section className="inboxAttachments">
       <h3 className="inboxAttachmentsTitle">
         Attachments
         <span className="sectionCount">{email.attachments.length}</span>
       </h3>
-      <div className="inboxAttachmentList">
-        {email.attachments.map((attachment) => (
-          <a
-            className="inboxAttachment"
-            href={inboundAttachmentUrl(email.id, attachment.id, folder)}
-            key={attachment.id}
-          >
-            <Icon name="attachment" size={16} />
-            <span className="inboxAttachmentName">{attachment.filename}</span>
-            <span className="inboxAttachmentSize">
-              {formatBytes(attachment.size)}
-            </span>
-          </a>
-        ))}
-      </div>
+      {previews.length > 0 && (
+        <div className="inboxPreviewGrid">
+          {previews.map(({ attachment, kind }) => (
+            <AttachmentPreviewTile
+              attachment={attachment}
+              key={attachment.id}
+              kind={kind}
+              url={inboundAttachmentUrl(email.id, attachment.id, folder)}
+            />
+          ))}
+        </div>
+      )}
+      {others.length > 0 && (
+        <AttachmentChips attachments={others} email={email} folder={folder} />
+      )}
     </section>
+  );
+}
+
+function AttachmentChips({
+  attachments,
+  email,
+  folder,
+}: {
+  attachments: InboundEmailDetail["attachments"];
+  email: InboundEmailDetail;
+  folder: InboxFolder;
+}) {
+  return (
+    <div className="inboxAttachmentList">
+      {attachments.map((attachment) => (
+        <a
+          className="inboxAttachment"
+          href={inboundAttachmentUrl(email.id, attachment.id, folder)}
+          key={attachment.id}
+        >
+          <Icon name="attachment" size={16} />
+          <span className="inboxAttachmentName">{attachment.filename}</span>
+          <span className="inboxAttachmentSize">
+            {formatBytes(attachment.size)}
+          </span>
+        </a>
+      ))}
+    </div>
   );
 }
 
@@ -566,12 +666,6 @@ function formatDateTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function messageFrom(cause: unknown) {

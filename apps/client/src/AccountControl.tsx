@@ -1,6 +1,7 @@
 import { Avatar, Icon } from "@tearleads/ui/react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { AccountSession } from "./accountSessions";
+import { useMenuDismissal } from "./useMenuDismissal";
 
 interface AccountControlProps {
   accounts: AccountSession[];
@@ -30,7 +31,7 @@ export function AccountControl({
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  useAccountMenuDismissal(open, menu, trigger, () => setOpen(false));
+  useMenuDismissal(open, menu, trigger, () => setOpen(false));
 
   async function run(action: () => Promise<void>, busyKey: string) {
     setBusy(busyKey);
@@ -180,39 +181,6 @@ function AccountMenu({
       </button>
     </div>
   );
-}
-
-function useAccountMenuDismissal(
-  open: boolean,
-  menu: React.RefObject<HTMLDivElement | null>,
-  trigger: React.RefObject<HTMLButtonElement | null>,
-  close: () => void,
-) {
-  useEffect(() => {
-    if (!open) return;
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !menu.current?.contains(event.target)
-      ) {
-        close();
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        // Handled here; the phone navigation panel must not also close.
-        event.preventDefault();
-        close();
-        trigger.current?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", closeOnOutsideClick);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsideClick);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [close, menu, open, trigger]);
 }
 
 function messageFrom(cause: unknown) {

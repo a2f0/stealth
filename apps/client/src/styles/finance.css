@@ -117,6 +117,42 @@
   white-space: nowrap;
 }
 
+/* Inbox emails, such as receipts, linked to the transaction. */
+.financeTransactionEmails {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1-5);
+}
+
+.financeEmailChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 16rem;
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background-color var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease);
+}
+
+.financeEmailChip:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.financeEmailChip > .icon {
+  flex: none;
+}
+
 /* Each transaction's single expense category, chosen inline. */
 .financeTransactionCategory {
   min-width: 0;
@@ -231,6 +267,7 @@
     grid-template-areas:
       "name name amount"
       "meta meta meta"
+      "emails emails emails"
       "category category category"
       "date status action";
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -247,6 +284,10 @@
 
   .financeTransactionMeta {
     grid-area: meta;
+  }
+
+  .financeTransactionEmails {
+    grid-area: emails;
   }
 
   .financeTransactionCategory {

@@ -278,6 +278,17 @@ async function createFixture() {
       "2026-08-19T12:00:00.000Z",
     );
   await applyMigration(database, "0016_soft_delete_inbound_emails.sql");
+  for (const migration of [
+    "0001_create_objects.sql",
+    "0006_scope_objects_to_organizations.sql",
+    "0025_classify_objects.sql",
+    "0007_create_finance.sql",
+    "0009_retain_finance_history.sql",
+    "0035_create_library_folders.sql",
+    "0036_create_inbound_email_links.sql",
+  ]) {
+    await applyMigration(database, migration);
+  }
 
   const objects = new Map([
     [rawObjectKey, new TextEncoder().encode(rawEmail)],

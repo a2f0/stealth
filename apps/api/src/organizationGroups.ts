@@ -218,7 +218,7 @@ async function listUserCapabilities(
   return result.results.map(({ capability }) => capability);
 }
 
-async function userHasCapability(
+export async function userHasCapability(
   database: D1Database,
   organizationId: string,
   userId: string,

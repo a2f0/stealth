@@ -1,3 +1,44 @@
+.folderGrid {
+  --grid-min: 13.5rem;
+}
+
+.folderCard {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  color: inherit;
+  text-decoration: none;
+}
+
+.folderCardIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-md);
+  color: var(--color-green-deep);
+  background: var(--color-lime-wash);
+}
+
+.folderCardText {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.folderCardText strong {
+  font-size: var(--text-base);
+  font-weight: 650;
+}
+
+.folderCardText span {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+}
+
 .fileGrid {
   --grid-min: 13.5rem;
 }
@@ -54,21 +95,57 @@
   font-size: var(--text-sm);
 }
 
-.fileDelete {
+.fileActions {
+  display: flex;
   position: absolute;
   top: var(--space-2);
   right: var(--space-2);
-  box-shadow: var(--shadow-xs);
+  gap: var(--space-1);
   opacity: 0;
 }
 
-.fileCard:hover .fileDelete,
-.fileCard:focus-within .fileDelete {
+.fileActions > .button {
+  box-shadow: var(--shadow-xs);
+}
+
+/* The card clips overflow, so the menu stays inside it and scrolls. */
+.fileMoveMenu {
+  position: absolute;
+  top: calc(var(--space-2) + var(--control-height-sm) + var(--space-1));
+  right: var(--space-2);
+  left: var(--space-2);
+  z-index: var(--z-popover);
+  min-width: 0;
+  max-height: calc(100% - var(--control-height-sm) - var(--space-5));
+  overflow-y: auto;
+}
+
+/* Linked emails in a folder. */
+.folderEmail {
+  flex-wrap: nowrap;
+}
+
+.folderEmailIcon {
+  color: var(--color-text-subtle);
+}
+
+.folderEmailLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.folderEmailLink:hover .rowTitle {
+  text-decoration: underline;
+}
+
+.fileCard:hover .fileActions,
+.fileCard:focus-within .fileActions,
+.fileActions[data-open] {
   opacity: 1;
 }
 
 @media (hover: none) {
-  .fileDelete {
+  .fileActions {
     opacity: 1;
   }
 }

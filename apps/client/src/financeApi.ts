@@ -1,3 +1,4 @@
+import type { LinkedEmail } from "./api";
 import { apiUrl } from "./config";
 
 export interface FinanceConnection {
@@ -36,10 +37,22 @@ export interface FinanceTransaction {
   /** The transaction's single expense category, if one is assigned. */
   expenseCategoryId: string | null;
   id: string;
+  /** Inbox emails, such as receipts, linked to this transaction. */
+  linkedEmails: LinkedEmail[];
   merchantName: string | null;
   name: string;
   paymentChannel: string | null;
   pending: boolean;
+  transactionDate: string;
+}
+
+export interface FinanceTransactionMatch {
+  accountName: string;
+  amount: number;
+  currencyCode: string | null;
+  id: string;
+  merchantName: string | null;
+  name: string;
   transactionDate: string;
 }
 
@@ -146,6 +159,17 @@ export function updateFinanceTransactionAnnotation(
     `/transactions/${encodeURIComponent(id)}/annotation`,
     { body: JSON.stringify(input), method: "PATCH" },
   );
+}
+
+/** Finds transactions by name, merchant, or amount; recent ones when empty. */
+export async function searchFinanceTransactions(query: string) {
+  const search = query.trim()
+    ? `?${new URLSearchParams({ q: query.trim() })}`
+    : "";
+  const body = await request<{ transactions: FinanceTransactionMatch[] }>(
+    `/transactions${search}`,
+  );
+  return body.transactions;
 }
 
 export function setTransactionCategory(id: string, categoryId: string | null) {

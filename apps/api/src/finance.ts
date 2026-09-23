@@ -11,6 +11,8 @@ import {
 import type { FinanceContext, FinanceEnv } from "./financeContext";
 import { expenseReport } from "./financeReports";
 import { type PlaidItemRow, syncPlaidItem } from "./financeSync";
+import { searchTransactions } from "./financeTransactionSearch";
+import { listLinkedEmails, toLinkedEmail } from "./inboundEmailLinks";
 import { PlaidApiError, type PlaidRequest, plaidRequest } from "./plaid";
 import { decryptToken, encryptToken } from "./plaidCrypto";
 import type { Bindings } from "./types";
@@ -109,6 +111,7 @@ export function createFinanceRouter(requestPlaid: PlaidRequest = plaidRequest) {
     disconnectConnection(context, requestPlaid),
   );
   finance.delete("/connections/:id/data", deleteConnectionData);
+  finance.get("/transactions", searchTransactions);
   finance.patch("/transactions/:id/annotation", updateTransactionAnnotation);
   finance.put("/transactions/:id/category", assignTransactionCategory);
   finance.get("/categories", listCategories);
@@ -130,18 +133,29 @@ export function createFinanceRouter(requestPlaid: PlaidRequest = plaidRequest) {
 
 async function financeListing(context: FinanceContext) {
   const organizationId = context.get("organizationId");
-  const [connections, accounts, transactions, categories] = await Promise.all([
-    listConnections(context.env.DB, organizationId),
-    listAccounts(context.env.DB, organizationId),
-    listTransactions(context.env.DB, organizationId),
-    listExpenseCategories(context.env.DB, organizationId),
-  ]);
+  const [connections, accounts, transactions, categories, linkedEmails] =
+    await Promise.all([
+      listConnections(context.env.DB, organizationId),
+      listAccounts(context.env.DB, organizationId),
+      listTransactions(context.env.DB, organizationId),
+      listExpenseCategories(context.env.DB, organizationId),
+      listLinkedEmails(context.env.DB, organizationId, "finance_transaction"),
+    ]);
+  const emailsByTransaction = Map.groupBy(
+    linkedEmails,
+    ({ target_id }) => target_id,
+  );
   return context.json({
     accounts: accounts.map(toAccount),
     categories,
     configured: isConfigured(context.env),
     connections: connections.map(toConnection),
-    transactions: transactions.map(toTransaction),
+    transactions: transactions.map((row) =>
+      toTransaction(
+        row,
+        (emailsByTransaction.get(row.id) ?? []).map(toLinkedEmail),
+      ),
+    ),
   });
 }
 
@@ -501,7 +515,10 @@ function toAccount(row: AccountRow) {
   };
 }
 
-function toTransaction(row: TransactionRow) {
+function toTransaction(
+  row: TransactionRow,
+  linkedEmails: ReturnType<typeof toLinkedEmail>[],
+) {
   return {
     accountId: row.account_id,
     accountName: row.account_name,
@@ -517,6 +534,7 @@ function toTransaction(row: TransactionRow) {
     currencyCode: row.currency_code,
     expenseCategoryId: row.annotation_expense_category_id,
     id: row.id,
+    linkedEmails,
     merchantName: row.merchant_name,
     name: row.name,
     paymentChannel: row.payment_channel,

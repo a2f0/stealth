@@ -21,6 +21,7 @@ export interface Bindings {
 }
 
 interface StoredObject {
+  folderId: string | null;
   id: string;
   objectKey: string;
   filename: string;
@@ -30,6 +31,7 @@ interface StoredObject {
 }
 
 export interface StoredObjectRow {
+  folder_id: string | null;
   id: string;
   object_key: string;
   filename: string;
@@ -40,6 +42,7 @@ export interface StoredObjectRow {
 
 export function toStoredObject(row: StoredObjectRow): StoredObject {
   return {
+    folderId: row.folder_id,
     id: row.id,
     objectKey: row.object_key,
     filename: row.filename,
