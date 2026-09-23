@@ -13,6 +13,7 @@ import {
 } from "./authMiddleware";
 import { billing, handleStripeWebhook, syncOrganizationSeats } from "./billing";
 import { businesses } from "./businesses";
+import { contracts } from "./contracts";
 import { equipment } from "./equipment";
 import { finance } from "./finance";
 import { inbox } from "./inbox";
@@ -20,6 +21,7 @@ import { libraryFolders } from "./libraryFolders";
 import { objects } from "./objects";
 import { organizationGroups, requireCapability } from "./organizationGroups";
 import { organizationSettings } from "./organizationSettings";
+import { signing } from "./signing";
 import type { Bindings } from "./types";
 
 const app = new Hono<{
@@ -84,6 +86,7 @@ app.get("/api", (context) =>
       audits: "/api/audits",
       billing: "/api/billing",
       businesses: "/api/businesses",
+      contracts: "/api/contracts",
       equipment: "/api/equipment",
       finance: "/api/finance",
       inbox: "/api/inbox",
@@ -92,6 +95,7 @@ app.get("/api", (context) =>
       organizationGroups: "/api/organization-groups",
       organizationSettings: "/api/organization-settings",
       session: "/api/me",
+      signing: "/api/signing/:token",
       health: "/health",
     },
   }),
@@ -116,6 +120,13 @@ app.route("/api/audits", audits);
 app.use("/api/businesses", requireAuth, requireOrganization);
 app.use("/api/businesses/*", requireAuth, requireOrganization);
 app.route("/api/businesses", businesses);
+
+app.use("/api/contracts", requireAuth, requireOrganization);
+app.use("/api/contracts/*", requireAuth, requireOrganization);
+app.route("/api/contracts", contracts);
+
+// Signers reach these through emailed links; the token is the credential.
+app.route("/api/signing", signing);
 
 app.use("/api/equipment", requireAuth, requireOrganization);
 app.use("/api/equipment/*", requireAuth, requireOrganization);

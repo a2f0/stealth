@@ -21,6 +21,7 @@ import {
 import { useAccountSessions } from "./accountSessions";
 import { authClient } from "./authClient";
 import { Businesses } from "./Businesses";
+import { Contracts } from "./Contracts";
 import { Equipment } from "./Equipment";
 import { Finance } from "./Finance";
 import { isFinancePath } from "./financePages";
@@ -36,9 +37,14 @@ import {
   resolveActiveOrganizationId,
   type WorkspaceOrganization,
 } from "./organizationState";
+import { SigningPage } from "./SigningPage";
 import { useOrganizationAccess } from "./useOrganizationAccess";
 import { hasRole, WorkspaceShell, type WorkspaceUser } from "./WorkspaceShell";
-import { isEquipmentPath } from "./workspacePaths";
+import {
+  isContractsPath,
+  isEquipmentPath,
+  signingTokenForPath,
+} from "./workspacePaths";
 
 export function App() {
   const { data: session, error, isPending, refetch } = authClient.useSession();
@@ -74,6 +80,10 @@ export function App() {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, [verification.shouldClear]);
+
+  // Signers open these from emailed links, signed in or not.
+  const signingToken = signingTokenForPath(pathname);
+  if (signingToken) return <SigningPage token={signingToken} />;
 
   if (isPending) {
     return <LoadingScreen />;
@@ -512,6 +522,9 @@ function contentForPath(
     return <Finance onNavigate={navigate} pathname={pathname} />;
   }
   if (pathname === "/businesses") return <Businesses />;
+  if (isContractsPath(pathname)) {
+    return <Contracts onNavigate={navigate} pathname={pathname} />;
+  }
   if (isEquipmentPath(pathname)) {
     return <Equipment onNavigate={navigate} pathname={pathname} />;
   }
@@ -567,6 +580,7 @@ function activePageFor(pathname: string) {
   }
   if (isFinancePath(pathname)) return "finance" as const;
   if (pathname === "/businesses") return "businesses" as const;
+  if (isContractsPath(pathname)) return "contracts" as const;
   if (isEquipmentPath(pathname)) return "equipment" as const;
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;

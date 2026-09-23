@@ -1,11 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import {
+  contractIdForPath,
+  contractPath,
   equipmentIdForPath,
   equipmentPath,
   inboxEmailPath,
+  isContractsPath,
   isEquipmentPath,
   libraryFolderIdForPath,
   libraryPath,
+  signingTokenForPath,
 } from "./workspacePaths";
 
 describe("workspace paths", () => {
@@ -29,6 +33,25 @@ describe("workspace paths", () => {
     expect(isEquipmentPath("/equipment")).toBe(true);
     expect(isEquipmentPath("/equipment/abc")).toBe(true);
     expect(isEquipmentPath("/equipments")).toBe(false);
+  });
+
+  it("round-trips contract paths", () => {
+    expect(contractPath()).toBe("/contracts");
+    expect(contractPath("contract/1")).toBe("/contracts/contract%2F1");
+    expect(contractIdForPath(contractPath("contract/1"))).toBe("contract/1");
+    expect(contractIdForPath("/contracts")).toBeUndefined();
+    expect(contractIdForPath("/contracts/a/b")).toBeUndefined();
+    expect(isContractsPath("/contracts/abc")).toBe(true);
+    expect(isContractsPath("/contractsx")).toBe(false);
+  });
+
+  it("recognises public signing links", () => {
+    const token = `${"A".repeat(40)}_-9`;
+    expect(signingTokenForPath(`/sign/${token}`)).toBe(token);
+    expect(signingTokenForPath(`/sign/${token}/`)).toBe(token);
+    expect(signingTokenForPath(`/sign/${token}x`)).toBeUndefined();
+    expect(signingTokenForPath("/sign/short")).toBeUndefined();
+    expect(signingTokenForPath(`/sign/${token}/document`)).toBeUndefined();
   });
 
   it("opens a message in the inbox", () => {
