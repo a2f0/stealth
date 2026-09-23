@@ -19,6 +19,7 @@ import {
 import {
   type Dispatch,
   type FormEvent,
+  type MouseEvent,
   type SetStateAction,
   useCallback,
   useEffect,
@@ -26,10 +27,13 @@ import {
   useState,
 } from "react";
 import { websiteUrl } from "./config";
+import { FinanceCategories } from "./FinanceCategories";
+import { FinanceReports } from "./FinanceReports";
 import {
   createPlaidLinkToken,
   deleteFinanceConnectionData,
   disconnectFinanceConnection,
+  type ExpenseCategory,
   exchangePlaidPublicToken,
   type FinanceAccount,
   type FinanceConnection,
@@ -37,15 +41,24 @@ import {
   type FinanceTransaction,
   type FinanceTransactionAnnotationInput,
   getFinanceData,
+  setTransactionCategory,
   syncFinanceConnection,
   updateFinanceTransactionAnnotation,
 } from "./financeApi";
+import { formatMoney } from "./financeFormat";
+import { type FinancePage, financePageFor, financePages } from "./financePages";
 import { filterTransactionsByAccount } from "./financeTransactions";
 import { countLabel, formatLabel } from "./labels";
 
 const linkTokenStorageKey = "tearleads.plaid.linkToken";
 
-export function Finance() {
+export function Finance({
+  onNavigate,
+  pathname,
+}: {
+  onNavigate: (pathname: string) => void;
+  pathname: string;
+}) {
   const [data, setData] = useState<FinanceData>();
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>();
@@ -68,13 +81,67 @@ export function Finance() {
       data={data}
       error={error}
       notice={notice}
+      onAnnotate={actions.annotate}
+      onCategorize={categorizeTransaction(setData, setError)}
       onConnect={plaid.connect}
       onDeleteData={actions.deleteData}
       onDisconnect={actions.disconnect}
-      onAnnotate={actions.annotate}
+      onNavigate={onNavigate}
+      onReload={load}
       onSync={actions.sync}
+      page={financePageFor(pathname)}
     />
   );
+}
+
+/**
+ * Assigns a transaction's single expense category right away, updating the
+ * list and category counts optimistically and restoring them on failure.
+ */
+function categorizeTransaction(
+  setData: Dispatch<SetStateAction<FinanceData | undefined>>,
+  setError: Dispatch<SetStateAction<string | undefined>>,
+) {
+  return async (transaction: FinanceTransaction, categoryId: string | null) => {
+    const previous = transaction.expenseCategoryId;
+    if (previous === categoryId) return;
+    setError(undefined);
+    setData((current) =>
+      withCategory(current, transaction.id, previous, categoryId),
+    );
+    try {
+      await setTransactionCategory(transaction.id, categoryId);
+    } catch (cause) {
+      setData((current) =>
+        withCategory(current, transaction.id, categoryId, previous),
+      );
+      setError(messageFrom(cause));
+    }
+  };
+}
+
+function withCategory(
+  data: FinanceData | undefined,
+  transactionId: string,
+  from: string | null,
+  to: string | null,
+): FinanceData | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    categories: data.categories.map((category) => {
+      const change =
+        (category.id === to ? 1 : 0) - (category.id === from ? 1 : 0);
+      return change
+        ? { ...category, transactionCount: category.transactionCount + change }
+        : category;
+    }),
+    transactions: data.transactions.map((transaction) =>
+      transaction.id === transactionId
+        ? { ...transaction, expenseCategoryId: to }
+        : transaction,
+    ),
+  };
 }
 
 function financeActions(
@@ -137,30 +204,73 @@ function financeActions(
 
 const setupNoticeId = "finance-setup-notice";
 
-function FinanceView({
-  busy,
-  data,
-  error,
-  notice,
-  onConnect,
-  onDeleteData,
-  onDisconnect,
-  onAnnotate,
-  onSync,
-}: {
+interface OverviewHandlers {
   busy: boolean;
-  data: FinanceData | undefined;
-  error: string | undefined;
-  notice: string | undefined;
-  onConnect: () => Promise<void>;
-  onDeleteData: (connection: FinanceConnection) => Promise<void>;
-  onDisconnect: (connection: FinanceConnection) => Promise<void>;
   onAnnotate: (
     transaction: FinanceTransaction,
     input: FinanceTransactionAnnotationInput,
   ) => Promise<void>;
+  onCategorize: (
+    transaction: FinanceTransaction,
+    categoryId: string | null,
+  ) => Promise<void>;
+  onConnect: () => Promise<void>;
+  onDeleteData: (connection: FinanceConnection) => Promise<void>;
+  onDisconnect: (connection: FinanceConnection) => Promise<void>;
+  onNavigate: (pathname: string) => void;
   onSync: (id: string) => Promise<void>;
+}
+
+function FinanceView({
+  data,
+  error,
+  notice,
+  onReload,
+  page,
+  ...handlers
+}: OverviewHandlers & {
+  data: FinanceData | undefined;
+  error: string | undefined;
+  notice: string | undefined;
+  onReload: () => Promise<void>;
+  page: FinancePage;
 }) {
+  const unconfigured = data?.configured === false;
+  return (
+    <Page>
+      <FinanceHeader
+        busy={handlers.busy}
+        onConnect={handlers.onConnect}
+        onNavigate={handlers.onNavigate}
+        page={page}
+        unconfigured={unconfigured}
+      />
+      <PageBody>
+        <FinanceNotices
+          error={error}
+          notice={notice}
+          overview={page === "overview"}
+          unconfigured={unconfigured}
+        />
+        {page === "reports" && (
+          <FinanceReports onNavigate={handlers.onNavigate} />
+        )}
+        {page === "categories" && (
+          <FinanceCategories
+            categories={data?.categories}
+            onChanged={onReload}
+          />
+        )}
+        {page === "overview" && <FinanceOverview data={data} {...handlers} />}
+      </PageBody>
+    </Page>
+  );
+}
+
+function FinanceOverview({
+  data,
+  ...handlers
+}: OverviewHandlers & { data: FinanceData | undefined }) {
   const [selectedAccountId, setSelectedAccountId] = useState<string>();
   const [selectedTransactionId, setSelectedTransactionId] = useState<string>();
   const selectedAccount = data?.accounts.find(
@@ -170,81 +280,88 @@ function FinanceView({
     data?.transactions,
     selectedAccount?.id,
   );
-  const unconfigured = data?.configured === false;
-
   return (
-    <Page>
-      <FinanceHeader
-        busy={busy}
-        onConnect={onConnect}
-        unconfigured={unconfigured}
+    <>
+      <Connections
+        busy={handlers.busy}
+        connections={data?.connections}
+        onConnect={handlers.onConnect}
+        onDeleteData={handlers.onDeleteData}
+        onDisconnect={handlers.onDisconnect}
+        onSync={handlers.onSync}
       />
-      <PageBody>
-        <FinanceNotices
-          error={error}
-          notice={notice}
-          unconfigured={unconfigured}
-        />
-        <Connections
-          busy={busy}
-          connections={data?.connections}
-          onConnect={onConnect}
-          onDeleteData={onDeleteData}
-          onDisconnect={onDisconnect}
-          onSync={onSync}
-        />
-        <AccountGrid
-          accounts={data?.accounts}
-          onSelect={(accountId) =>
-            setSelectedAccountId((current) =>
-              current === accountId ? undefined : accountId,
-            )
-          }
-          selectedAccountId={selectedAccount?.id}
-        />
-        <TransactionHistory
-          accountName={selectedAccount?.name}
-          busy={busy}
-          onAnnotate={onAnnotate}
-          onClearFilter={() => setSelectedAccountId(undefined)}
-          onSelectAnnotation={(transactionId) =>
-            setSelectedTransactionId((current) =>
-              current === transactionId ? undefined : transactionId,
-            )
-          }
-          selectedTransactionId={selectedTransactionId}
-          transactions={transactions}
-        />
-      </PageBody>
-    </Page>
+      <AccountGrid
+        accounts={data?.accounts}
+        onSelect={(accountId) =>
+          setSelectedAccountId((current) =>
+            current === accountId ? undefined : accountId,
+          )
+        }
+        selectedAccountId={selectedAccount?.id}
+      />
+      <TransactionHistory
+        accountName={selectedAccount?.name}
+        busy={handlers.busy}
+        categories={data?.categories ?? []}
+        onAnnotate={handlers.onAnnotate}
+        onCategorize={handlers.onCategorize}
+        onClearFilter={() => setSelectedAccountId(undefined)}
+        onNavigate={handlers.onNavigate}
+        onSelectAnnotation={(transactionId) =>
+          setSelectedTransactionId((current) =>
+            current === transactionId ? undefined : transactionId,
+          )
+        }
+        selectedTransactionId={selectedTransactionId}
+        transactions={transactions}
+      />
+    </>
   );
 }
 
 function FinanceHeader({
   busy,
   onConnect,
+  onNavigate,
+  page,
   unconfigured,
 }: {
   busy: boolean;
   onConnect: () => Promise<void>;
+  onNavigate: (pathname: string) => void;
+  page: FinancePage;
   unconfigured: boolean;
 }) {
   return (
     <PageHeader
       actions={
-        <Button
-          aria-describedby={unconfigured ? setupNoticeId : undefined}
-          busy={busy}
-          disabled={unconfigured}
-          icon="add"
-          onClick={() => void onConnect()}
-          variant="primary"
-        >
-          {busy ? "Working…" : "Connect bank"}
-        </Button>
+        page === "overview" && (
+          <Button
+            aria-describedby={unconfigured ? setupNoticeId : undefined}
+            busy={busy}
+            disabled={unconfigured}
+            icon="add"
+            onClick={() => void onConnect()}
+            variant="primary"
+          >
+            {busy ? "Working…" : "Connect bank"}
+          </Button>
+        )
       }
-      description="Balances and transactions from your connected institutions, ready for your team to review and annotate."
+      description="Balances and transactions from your connected institutions, ready for your team to review, categorize, and report on."
       eyebrow="Connected accounts"
+      tabs={financePages.map((item) => (
+        <a
+          aria-current={page === item.page ? "page" : undefined}
+          className="tab"
+          href={item.path}
+          key={item.path}
+          onClick={(event) => handleNavigation(event, item.path, onNavigate)}
+        >
+          {item.label}
+        </a>
+      ))}
+      tabsLabel="Finance sections"
       title="Finance"
     />
   );
@@ -253,18 +370,22 @@ function FinanceHeader({
 function FinanceNotices({
   error,
   notice,
+  overview,
   unconfigured,
 }: {
   error: string | undefined;
   notice: string | undefined;
+  /** Setup and data-handling notices belong with the connections. */
+  overview: boolean;
   unconfigured: boolean;
 }) {
+  if (!error && !notice && !overview) return null;
   return (
     <div className="stack stackMd">
       {error && <Banner tone="danger">{error}</Banner>}
       {notice && <Banner tone="success">{notice}</Banner>}
-      {unconfigured && <FinanceSetupNotice />}
-      <FinanceDataNotice />
+      {overview && unconfigured && <FinanceSetupNotice />}
+      {overview && <FinanceDataNotice />}
     </div>
   );
 }
@@ -586,9 +707,14 @@ function AccountCard({
 
 interface AnnotationHandlers {
   busy: boolean;
+  categories: ExpenseCategory[];
   onAnnotate: (
     transaction: FinanceTransaction,
     input: FinanceTransactionAnnotationInput,
+  ) => Promise<void>;
+  onCategorize: (
+    transaction: FinanceTransaction,
+    categoryId: string | null,
   ) => Promise<void>;
   onSelectAnnotation: (transactionId: string) => void;
   selectedTransactionId: string | undefined;
@@ -597,11 +723,13 @@ interface AnnotationHandlers {
 function TransactionHistory({
   accountName,
   onClearFilter,
+  onNavigate,
   transactions,
   ...handlers
 }: AnnotationHandlers & {
   accountName: string | undefined;
   onClearFilter: () => void;
+  onNavigate: (pathname: string) => void;
   transactions: FinanceTransaction[] | undefined;
 }) {
   return (
@@ -628,6 +756,20 @@ function TransactionHistory({
       }
       title="Transactions"
     >
+      {Boolean(transactions?.length) && !handlers.categories.length && (
+        <Banner
+          actions={
+            <Button onClick={() => onNavigate("/finance/categories")} size="sm">
+              Set up categories
+            </Button>
+          }
+          announce={false}
+          icon="layers"
+          title="Sort spending into expense categories"
+        >
+          Give each transaction a category to see totals by category in Reports.
+        </Banner>
+      )}
       <TransactionContent
         accountName={accountName}
         transactions={transactions}
@@ -679,13 +821,16 @@ function TransactionContent({
 
 function TransactionRow({
   busy,
+  categories,
   onAnnotate,
+  onCategorize,
   onSelectAnnotation,
   selectedTransactionId,
   transaction,
 }: AnnotationHandlers & { transaction: FinanceTransaction }) {
   const expanded = selectedTransactionId === transaction.id;
   const formId = `annotation-${transaction.id}`;
+  const title = transaction.merchantName ?? transaction.name;
   return (
     <li className="row financeTransaction">
       <time
@@ -695,12 +840,32 @@ function TransactionRow({
         {formatDate(transaction.transactionDate)}
       </time>
       <div className="rowMain financeTransactionMain">
-        <span className="rowTitle financeTransactionName">
-          {transaction.merchantName ?? transaction.name}
-        </span>
+        <span className="rowTitle financeTransactionName">{title}</span>
         <span className="rowMeta financeTransactionMeta">
-          {transaction.accountName} · {category(transaction)}
+          {transactionMeta(transaction)}
         </span>
+      </div>
+      <div className="financeTransactionCategory">
+        {categories.length > 0 && (
+          <select
+            aria-label={`Expense category for ${title}`}
+            className={cx(
+              "select inputSm",
+              !transaction.expenseCategoryId && "financeCategoryUnset",
+            )}
+            onChange={(event) =>
+              void onCategorize(transaction, event.target.value || null)
+            }
+            value={transaction.expenseCategoryId ?? ""}
+          >
+            <option value="">Uncategorized</option>
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
       <div className="cluster financeTransactionStatus">
         {transaction.pending && <Badge tone="warning">Pending</Badge>}
@@ -754,9 +919,6 @@ function TransactionAnnotationForm({
   onSave: (input: FinanceTransactionAnnotationInput) => Promise<void>;
   transaction: FinanceTransaction;
 }) {
-  const [categoryOverride, setCategoryOverride] = useState(
-    transaction.annotation.categoryOverride ?? "",
-  );
   const [labels, setLabels] = useState(
     transaction.annotation.labels.join(", "),
   );
@@ -769,7 +931,6 @@ function TransactionAnnotationForm({
     setSaving(true);
     try {
       await onSave({
-        categoryOverride: categoryOverride.trim() || null,
         labels: labels
           .split(",")
           .map((label) => label.trim())
@@ -796,27 +957,14 @@ function TransactionAnnotationForm({
         </Button>
       </div>
       <div className="formGrid">
-        <div className="formRow">
-          <Field label="Category override">
-            <input
-              className="input"
-              maxLength={100}
-              onChange={(event) => setCategoryOverride(event.target.value)}
-              placeholder={formatLabel(
-                transaction.categoryPrimary ?? "Uncategorized",
-              )}
-              value={categoryOverride}
-            />
-          </Field>
-          <Field label="Labels">
-            <input
-              className="input"
-              onChange={(event) => setLabels(event.target.value)}
-              placeholder="tax, travel, follow up"
-              value={labels}
-            />
-          </Field>
-        </div>
+        <Field label="Labels">
+          <input
+            className="input"
+            onChange={(event) => setLabels(event.target.value)}
+            placeholder="tax, travel, follow up"
+            value={labels}
+          />
+        </Field>
         <Field label="Note">
           <textarea
             className="textarea"
@@ -896,12 +1044,11 @@ function syncTime(connection: FinanceConnection) {
     : "not synced yet";
 }
 
-function category(transaction: FinanceTransaction) {
-  return formatLabel(
-    transaction.annotation.categoryOverride ??
-      transaction.categoryPrimary ??
-      "Uncategorized",
-  );
+/** The account, plus the bank's own category as context when it has one. */
+function transactionMeta(transaction: FinanceTransaction) {
+  return transaction.categoryPrimary
+    ? `${transaction.accountName} · ${formatLabel(transaction.categoryPrimary)}`
+    : transaction.accountName;
 }
 
 function connectionTone(status: string): BadgeTone {
@@ -913,10 +1060,7 @@ function connectionTone(status: string): BadgeTone {
 function hasAnnotation(transaction: FinanceTransaction) {
   const annotation = transaction.annotation;
   return Boolean(
-    annotation.note ||
-      annotation.categoryOverride ||
-      annotation.labels.length ||
-      annotation.reviewed,
+    annotation.note || annotation.labels.length || annotation.reviewed,
   );
 }
 
@@ -927,13 +1071,22 @@ function formatDate(value: string) {
   }).format(new Date(`${value}T12:00:00`));
 }
 
-function formatMoney(value: number | null, currency: string | null) {
-  if (value === null) return "—";
-  return new Intl.NumberFormat(undefined, {
-    currency: currency ?? "USD",
-    currencyDisplay: "narrowSymbol",
-    style: "currency",
-  }).format(value);
+function handleNavigation(
+  event: MouseEvent<HTMLAnchorElement>,
+  pathname: string,
+  onNavigate: (pathname: string) => void,
+) {
+  if (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return;
+  }
+  event.preventDefault();
+  onNavigate(pathname);
 }
 
 function messageFrom(cause: unknown) {

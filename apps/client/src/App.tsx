@@ -22,6 +22,7 @@ import { useAccountSessions } from "./accountSessions";
 import { authClient } from "./authClient";
 import { Businesses } from "./Businesses";
 import { Finance } from "./Finance";
+import { isFinancePath } from "./financePages";
 import { Inbox } from "./Inbox";
 import { Library } from "./Library";
 import { OrganizationInvitation } from "./OrganizationInvitation";
@@ -230,7 +231,7 @@ function AuthenticatedWorkspace({
     return <LoadingScreen />;
   }
   if (
-    pathname === "/finance" &&
+    isFinancePath(pathname) &&
     !access.twoFactorRequirement &&
     !access.can("finance")
   ) {
@@ -484,7 +485,9 @@ function contentForPath(
       />
     );
   }
-  if (pathname === "/finance") return <Finance />;
+  if (isFinancePath(pathname)) {
+    return <Finance onNavigate={navigate} pathname={pathname} />;
+  }
   if (pathname === "/businesses") return <Businesses />;
   if (pathname === "/inbox") return <Inbox />;
   if (pathname === "/admin") return <AdminUsers />;
@@ -532,7 +535,7 @@ function activePageFor(pathname: string) {
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return "audits" as const;
   }
-  if (pathname === "/finance") return "finance" as const;
+  if (isFinancePath(pathname)) return "finance" as const;
   if (pathname === "/businesses") return "businesses" as const;
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
