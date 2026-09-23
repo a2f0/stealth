@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -50,7 +56,7 @@ describe("materializeTrackedCheckout", () => {
         listedTreeish = treeish;
         return Buffer.from("120000 blob abc123 10\tlink\0");
       },
-      readBlob: () => Buffer.from("../../.env"),
+      writeBlob: (_repositoryRoot, _oid, fd) => writeSync(fd, "../../.env"),
     };
 
     try {
@@ -70,7 +76,7 @@ describe("materializeTrackedCheckout", () => {
     const filePath = "src/line\nbreak.ts";
     const reader: TrackedCheckoutReader = {
       listTree: () => Buffer.from(`100644 blob abc123 11\t${filePath}\0`),
-      readBlob: () => Buffer.from("export {};\n"),
+      writeBlob: (_repositoryRoot, _oid, fd) => writeSync(fd, "export {};\n"),
     };
 
     try {
@@ -78,6 +84,23 @@ describe("materializeTrackedCheckout", () => {
       expect(readFileSync(path.join(checkout, filePath), "utf8")).toBe(
         "export {};\n",
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a blob whose written size does not match the tree", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-tool-short-blob-"));
+    const checkout = path.join(root, "checkout");
+    const reader: TrackedCheckoutReader = {
+      listTree: () => Buffer.from("100644 blob abc123 11\tsrc/a.ts\0"),
+      writeBlob: (_repositoryRoot, _oid, fd) => writeSync(fd, "export"),
+    };
+
+    try {
+      expect(() =>
+        materializeTrackedCheckout("/unused", checkout, "HEAD", reader),
+      ).toThrow('"src/a.ts": expected 11 bytes, wrote 6');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -92,9 +115,9 @@ describe("materializeTrackedCheckout", () => {
         Buffer.from(
           "100644 blob abc123 6\tone.txt\0" + "100644 blob def456 6\ttwo.txt\0",
         ),
-      readBlob: () => {
+      writeBlob: (_repositoryRoot, _oid, fd) => {
         blobReads += 1;
-        return Buffer.from("123456");
+        writeSync(fd, "123456");
       },
     };
 
@@ -137,9 +160,9 @@ describe("materializeTrackedCheckout", () => {
     const root = mkdtempSync(path.join(tmpdir(), "agent-tool-path-bytes-"));
     const checkout = path.join(root, "checkout");
     let blobReads = 0;
-    const readBlob = () => {
+    const writeBlob = (_repositoryRoot: string, _oid: string, fd: number) => {
       blobReads += 1;
-      return Buffer.from("x");
+      writeSync(fd, "x");
     };
     const invalidReader: TrackedCheckoutReader = {
       listTree: () =>
@@ -147,7 +170,7 @@ describe("materializeTrackedCheckout", () => {
           Buffer.from("100644 blob abc123 1\tinvalid-"),
           Buffer.from([0xff, 0]),
         ]),
-      readBlob,
+      writeBlob,
     };
     const collisionReader: TrackedCheckoutReader = {
       listTree: () =>
@@ -155,7 +178,7 @@ describe("materializeTrackedCheckout", () => {
           "100644 blob abc123 1\tsrc/caf\u00e9.ts\0" +
             "100644 blob def456 1\tsrc/cafe\u0301.ts\0",
         ),
-      readBlob,
+      writeBlob,
     };
 
     try {

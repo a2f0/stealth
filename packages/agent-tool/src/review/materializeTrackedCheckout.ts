@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import {
   assertNoMaterializedPathCollisions,
@@ -29,7 +36,8 @@ const DEFAULT_TRACKED_CHECKOUT_LIMITS: TrackedCheckoutLimits = {
 
 export interface TrackedCheckoutReader {
   readonly listTree: (repositoryRoot: string, treeish: string) => Buffer;
-  readonly readBlob: (repositoryRoot: string, oid: string) => Buffer;
+  /** Write a blob's exact bytes to `fd`, a freshly created regular file. */
+  readonly writeBlob: (repositoryRoot: string, oid: string, fd: number) => void;
 }
 
 const gitReader: TrackedCheckoutReader = {
@@ -43,13 +51,16 @@ const gitReader: TrackedCheckoutReader = {
       },
     );
   },
-  readBlob(repositoryRoot, oid) {
-    return execFileSync(
+  // Git writes straight into the destination file rather than through a
+  // captured stdout pipe: on loaded CI runners, Bun's synchronous capture
+  // intermittently returned output whose length did not match the blob.
+  writeBlob(repositoryRoot, oid, fd) {
+    execFileSync(
       toolExecutable("git"),
       ["-C", repositoryRoot, "cat-file", "blob", oid],
       {
         env: toolEnvironment(),
-        maxBuffer: MAX_BUFFER_BYTES,
+        stdio: ["ignore", fd, "pipe"],
       },
     );
   },
@@ -188,15 +199,21 @@ export function materializeTrackedCheckout(
       continue;
     }
 
-    const contents = reader.readBlob(repositoryRoot, entry.oid);
-    if (contents.byteLength !== entry.size) {
-      throw new Error(
-        `Tracked blob size changed while materializing ${JSON.stringify(entry.filePath)}.`,
-      );
-    }
-    // Mode 120000 is a Git symlink. Always materialize it as a regular file.
+    // Mode 120000 is a Git symlink. Always materialize it as a regular file;
+    // `wx` also refuses to write through anything already at the destination.
     const executable = entry.mode === "100755";
-    writeFileSync(destination, contents, { mode: executable ? 0o755 : 0o644 });
+    const fd = openSync(destination, "wx", executable ? 0o755 : 0o644);
+    try {
+      reader.writeBlob(repositoryRoot, entry.oid, fd);
+      const written = fstatSync(fd).size;
+      if (written !== entry.size) {
+        throw new Error(
+          `Tracked blob size changed while materializing ${JSON.stringify(entry.filePath)}: expected ${entry.size} bytes, wrote ${written}.`,
+        );
+      }
+    } finally {
+      closeSync(fd);
+    }
     chmodSync(destination, executable ? 0o755 : 0o644);
   }
 }
