@@ -39,7 +39,8 @@ interface LinkedEmailRow {
 
 /**
  * The records an email is linked to. Finance links are only visible to
- * members of a group with the Finance capability.
+ * members of a group with the Finance capability, and, like the Finance
+ * listing, hide transactions that Plaid has since removed.
  */
 export async function listEmailLinks(
   context: LinkContext,
@@ -205,6 +206,7 @@ async function emailLinkRows(
          ON link.target_type = 'finance_transaction'
         AND txn.id = link.target_id
         AND txn.organization_id = link.organization_id
+        AND txn.source_status = 'active'
        WHERE link.email_id = ? AND link.organization_id = ?
        ORDER BY link.created_at ASC, link.rowid ASC`,
     )

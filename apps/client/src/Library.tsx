@@ -124,17 +124,22 @@ export function Library({
         {unavailable ? (
           <EmptyState
             actions={
-              <Button
-                icon="arrowLeft"
-                onClick={() => onNavigate(libraryPath())}
-              >
-                Back to the library
-              </Button>
+              <>
+                <Button icon="refresh" onClick={() => void data.refresh()}>
+                  Try again
+                </Button>
+                <Button
+                  icon="arrowLeft"
+                  onClick={() => onNavigate(libraryPath())}
+                >
+                  Back to the library
+                </Button>
+              </>
             }
             icon="folder"
             title="This folder isn’t available"
           >
-            It may have been deleted.
+            It may have been deleted, or it couldn’t be loaded.
           </EmptyState>
         ) : (
           <LibraryContent
@@ -152,7 +157,9 @@ export function Library({
 
 /**
  * The folders, the files at the root or in the open folder, and that
- * folder's linked emails. Stale responses from a previous folder are dropped.
+ * folder's linked emails. Stale responses from a previous folder are dropped,
+ * and `refresh` always reloads the folder open now, so an action that finishes
+ * after navigation cannot repaint the previous folder.
  */
 function useLibraryData(folderId: string | undefined) {
   const [folders, setFolders] = useState<LibraryFolder[]>();
@@ -179,14 +186,17 @@ function useLibraryData(folderId: string | undefined) {
     }
   }, [folderId]);
 
+  const latestRefresh = useRef(refresh);
   useEffect(() => {
+    latestRefresh.current = refresh;
     setObjects(undefined);
     setDetail(undefined);
     setError(undefined);
     void refresh();
   }, [refresh]);
+  const refreshCurrent = useCallback(() => latestRefresh.current(), []);
 
-  return { detail, error, folders, objects, refresh };
+  return { detail, error, folders, objects, refresh: refreshCurrent };
 }
 
 function useLibraryActions(
@@ -370,7 +380,18 @@ function LibraryContent({
   onUpload: () => void;
 }) {
   if (!data.objects || !data.folders || (folderId && !data.detail)) {
-    return <LoadingState label="Loading library…" />;
+    if (!data.error) return <LoadingState label="Loading library…" />;
+    return (
+      <EmptyState
+        actions={
+          <Button icon="refresh" onClick={() => void data.refresh()}>
+            Try again
+          </Button>
+        }
+        icon="error"
+        title="The library couldn’t load"
+      />
+    );
   }
   const destinations = [
     ...(folderId ? [{ id: null, name: "Library (no folder)" }] : []),

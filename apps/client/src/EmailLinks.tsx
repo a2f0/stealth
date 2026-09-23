@@ -33,7 +33,8 @@ export function EmailLinks({
   editable: boolean;
   emailId: string;
   links: InboundEmailLink[];
-  onChange: (links: InboundEmailLink[]) => void;
+  /** Receives an update so results that finish out of order compose. */
+  onChange: (update: (links: InboundEmailLink[]) => InboundEmailLink[]) => void;
   onNavigate: (pathname: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
@@ -44,7 +45,10 @@ export function EmailLinks({
     setError(undefined);
     try {
       const created = await linkInboundEmail(emailId, target);
-      onChange([...links.filter(({ id }) => id !== created.id), created]);
+      onChange((current) => [
+        ...current.filter(({ id }) => id !== created.id),
+        created,
+      ]);
       setAdding(false);
     } catch (cause) {
       setError(messageFrom(cause));
@@ -56,7 +60,7 @@ export function EmailLinks({
     setError(undefined);
     try {
       await unlinkInboundEmail(emailId, link.id);
-      onChange(links.filter(({ id }) => id !== link.id));
+      onChange((current) => current.filter(({ id }) => id !== link.id));
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -88,6 +92,7 @@ export function EmailLinks({
         <ul className="emailLinkList">
           {links.map((link) => (
             <EmailLinkChip
+              disabled={Boolean(workingId)}
               editable={editable}
               key={link.id}
               link={link}
@@ -120,12 +125,15 @@ export function EmailLinks({
 }
 
 function EmailLinkChip({
+  disabled,
   editable,
   link,
   onNavigate,
   onUnlink,
   working,
 }: {
+  /** One unlink at a time, so each chip's busy state stays accurate. */
+  disabled: boolean;
   editable: boolean;
   link: InboundEmailLink;
   onNavigate: (pathname: string) => void;
@@ -152,6 +160,7 @@ function EmailLinkChip({
           aria-label={`Unlink ${label}`}
           busy={working}
           className="emailLinkRemove"
+          disabled={disabled}
           icon="close"
           iconOnly
           onClick={onUnlink}

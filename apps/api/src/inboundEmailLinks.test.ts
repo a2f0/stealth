@@ -234,6 +234,36 @@ describe("inbound email links", () => {
     expect(remaining()).toEqual([
       { email_id: "email-1", target_type: "library_folder" },
     ]);
+    fixture.database
+      .query("DELETE FROM library_folders WHERE id = 'folder-1'")
+      .run();
+    expect(remaining()).toEqual([]);
+  });
+
+  it("hides links to transactions Plaid has removed", async () => {
+    const fixture = await createFixture();
+    const financeMember = fixture.as("finance-user");
+    await financeMember.json("POST", "/api/inbox/email-1/links", {
+      targetId: "txn-1",
+      targetType: "finance_transaction",
+    });
+    fixture.database
+      .query(
+        "UPDATE plaid_transactions SET source_status = 'removed' WHERE id = 'txn-1'",
+      )
+      .run();
+    expect(await linksFor(financeMember, "email-1")).toEqual([]);
+
+    fixture.database
+      .query(
+        "UPDATE plaid_transactions SET source_status = 'active' WHERE id = 'txn-1'",
+      )
+      .run();
+    expect(
+      (await linksFor(financeMember, "email-1")).map(
+        ({ targetId }) => targetId,
+      ),
+    ).toEqual(["txn-1"]);
   });
 });
 

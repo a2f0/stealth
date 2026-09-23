@@ -23,6 +23,7 @@ import {
   restoreInboundEmail,
 } from "./api";
 import { EmailLinks } from "./EmailLinks";
+import { selectEmailId } from "./inboxSelection";
 import { countLabel, formatBytes } from "./labels";
 import { previewKindFor } from "./previewKind";
 
@@ -55,7 +56,7 @@ function useInboxMessages(folder: InboxFolder) {
   const [loadingList, setLoadingList] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState(false);
   const [error, setError] = useState<string>();
-  const requestedId = useRequestedEmailId();
+  const { openedByLink, pending } = useLinkedEmailId();
 
   const refresh = useCallback(async () => {
     setLoadingList(true);
@@ -63,22 +64,19 @@ function useInboxMessages(folder: InboxFolder) {
     try {
       const listing = await listInboundEmails(folder);
       const nextEmails = listing.emails;
-      const requested = requestedId.current;
-      requestedId.current = undefined;
+      const requested = pending.current;
+      pending.current = undefined;
       setEmails(nextEmails);
       setInboundAddress(listing.address);
-      setSelectedId((current) => {
-        const preferred = requested ?? current;
-        return nextEmails.some(({ id }) => id === preferred)
-          ? preferred
-          : nextEmails[0]?.id;
-      });
+      setSelectedId((current) =>
+        selectEmailId(nextEmails, current, requested, openedByLink),
+      );
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
       setLoadingList(false);
     }
-  }, [folder, requestedId]);
+  }, [folder, openedByLink, pending]);
 
   useEffect(() => {
     setEmails([]);
@@ -125,23 +123,20 @@ function useInboxMessages(folder: InboxFolder) {
 }
 
 /**
- * The message named by `?email=`, consumed by the first listing. The query is
- * removed so later reloads open the inbox normally.
+ * The message named by `?email=`. The first listing consumes `pending`, and
+ * the query is removed so later reloads open the inbox normally.
  */
-function useRequestedEmailId() {
-  const requested = useRef<string | undefined>(undefined);
-  const initialized = useRef(false);
-  if (!initialized.current) {
-    initialized.current = true;
-    requested.current =
-      new URLSearchParams(window.location.search).get("email") ?? undefined;
-  }
+function useLinkedEmailId() {
+  const [openedByLink] = useState(
+    () => new URLSearchParams(window.location.search).get("email") ?? undefined,
+  );
+  const pending = useRef(openedByLink);
   useEffect(() => {
     if (window.location.search) {
       window.history.replaceState(window.history.state, "", "/inbox");
     }
   }, []);
-  return requested;
+  return { openedByLink, pending };
 }
 
 function useInboxActions(messages: ReturnType<typeof useInboxMessages>) {
@@ -332,9 +327,11 @@ function InboxPanes({
         folder={folder}
         loading={messages.loadingMessage}
         onDelete={actions.moveToTrash}
-        onLinksChange={(links) =>
+        onLinksChange={(emailId, update) =>
           messages.setDetail((current) =>
-            current ? { ...current, links } : current,
+            current?.id === emailId
+              ? { ...current, links: update(current.links) }
+              : current,
           )
         }
         onRestore={actions.restore}
@@ -445,7 +442,10 @@ function MessageDetail({
   folder: InboxFolder;
   loading: boolean;
   onDelete: (email: InboundEmailDetail) => Promise<void>;
-  onLinksChange: (links: InboundEmailLink[]) => void;
+  onLinksChange: (
+    emailId: string,
+    update: (links: InboundEmailLink[]) => InboundEmailLink[],
+  ) => void;
   onRestore: (email: InboundEmailDetail) => Promise<void>;
   unavailable: boolean;
   working: boolean;
@@ -492,7 +492,7 @@ function MessageDetail({
           emailId={email.id}
           key={email.id}
           links={email.links}
-          onChange={onLinksChange}
+          onChange={(update) => onLinksChange(email.id, update)}
           onNavigate={context.onNavigate}
         />
       </header>

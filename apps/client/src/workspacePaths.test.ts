@@ -14,6 +14,7 @@ describe("workspace paths", () => {
     expect(libraryFolderIdForPath("/")).toBeUndefined();
     expect(libraryFolderIdForPath("/library")).toBeUndefined();
     expect(libraryFolderIdForPath("/library/a/b")).toBeUndefined();
+    expect(libraryFolderIdForPath("/library/%E0%A4")).toBe("%E0%A4");
   });
 
   it("opens a message in the inbox", () => {

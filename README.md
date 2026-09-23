@@ -101,9 +101,11 @@ Inbox messages can be linked to library folders and to imported finance
 transactions. Links live in one polymorphic table, `inbound_email_links`,
 whose `target_type` is `library_folder` or `finance_transaction`. A
 polymorphic reference cannot carry a foreign key, so database triggers remove
-links when their folder or transaction is deleted, and deleting or purging an
-email cascades to its links. Creating, removing, or seeing transaction links
-requires the Finance capability. A folder lists its linked emails, and a
+links when their folder or transaction is deleted, and purging an email
+cascades to its links. An email in Trash keeps its links but is hidden from
+folders and transactions until it is restored, and links to transactions that
+Plaid has since removed are hidden. Creating, removing, or seeing transaction
+links requires the Finance capability. A folder lists its linked emails, and a
 transaction shows its linked emails in the Finance transaction list.
 
 PDF and image attachments preview in the inbox. PDFs are rendered in the

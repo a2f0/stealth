@@ -5,10 +5,18 @@ export function libraryPath(folderId?: string) {
   return folderId ? `/library/${encodeURIComponent(folderId)}` : "/";
 }
 
-/** The folder id in a `/library/<id>` path, if any. */
+/**
+ * The folder id in a `/library/<id>` path, if any. A malformed escape is kept
+ * as typed, so the page reports an unavailable folder instead of throwing.
+ */
 export function libraryFolderIdForPath(pathname: string) {
-  const match = /^\/library\/([^/]+)\/?$/.exec(pathname);
-  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+  const segment = /^\/library\/([^/]+)\/?$/.exec(pathname)?.[1];
+  if (!segment) return undefined;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 /** Opens one message in the inbox. */

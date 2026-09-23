@@ -26,11 +26,14 @@ function pdfjsAssets(): Plugin {
       server.middlewares.use("/pdfjs", (request, response, next) => {
         const path = decodeURIComponent(request.url?.split("?")[0] ?? "");
         const [directory, file, ...rest] = path.split("/").filter(Boolean);
+        // Only a plain file directly inside an allowed directory; a backslash
+        // is a separator on Windows and could climb out of it.
         if (
           !directory ||
           !directories.includes(directory) ||
           !file ||
           file.startsWith(".") ||
+          file.includes("\\") ||
           rest.length > 0
         ) {
           next();

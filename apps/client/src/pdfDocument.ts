@@ -4,15 +4,23 @@ type Pdfjs = typeof import("pdfjs-dist");
 
 let library: Promise<Pdfjs> | undefined;
 
-/** pdf.js is large, so it and its worker load on the first preview. */
+/**
+ * pdf.js is large, so it and its worker load on the first preview. A failed
+ * load is forgotten so a later preview can retry it.
+ */
 function loadPdfjs() {
   library ??= Promise.all([
     import("pdfjs-dist"),
     import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
-  ]).then(([pdfjs, worker]) => {
-    pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
-    return pdfjs;
-  });
+  ])
+    .then(([pdfjs, worker]) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+      return pdfjs;
+    })
+    .catch((error: unknown) => {
+      library = undefined;
+      throw error;
+    });
   return library;
 }
 

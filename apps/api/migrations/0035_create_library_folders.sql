@@ -19,3 +19,6 @@ ADD COLUMN folder_id TEXT
 
 CREATE INDEX objects_organization_folder_created_at_idx
 ON objects (organization_id, kind, folder_id, created_at DESC);
+
+-- The foreign-key action looks up a deleted folder's documents by folder_id.
+CREATE INDEX objects_folder_idx ON objects (folder_id);
