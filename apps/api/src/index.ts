@@ -5,7 +5,7 @@ import {
   reconcileSubscriptionSeats,
 } from "./billing";
 import { purgeExpiredFreeAuditRuns } from "./billingRetention";
-import { sendContractReminders } from "./contractReminders";
+import { maintainContracts } from "./contractReminders";
 import { purgeDeletedObjects } from "./deletedObjectCleanup";
 import { handleEmail } from "./email";
 import type { Bindings } from "./types";
@@ -24,7 +24,7 @@ export default {
           purgeStripeWebhookReceipts(environment),
         reconcileSubscriptionSeats: () =>
           reconcileSubscriptionSeats(environment),
-        sendContractReminders: () => sendContractReminders(environment),
+        maintainContracts: () => maintainContracts(environment),
       }),
     );
   },
@@ -36,7 +36,7 @@ interface ScheduledMaintenanceTasks {
   purgePendingAuditIssueImages: () => Promise<unknown>;
   purgeStripeWebhookReceipts: () => Promise<unknown>;
   reconcileSubscriptionSeats: () => Promise<unknown>;
-  sendContractReminders: () => Promise<unknown>;
+  maintainContracts: () => Promise<unknown>;
 }
 
 export async function runScheduledMaintenance(
@@ -53,7 +53,7 @@ export async function runScheduledMaintenance(
     tasks.purgePendingAuditIssueImages(),
     tasks.purgeStripeWebhookReceipts(),
     tasks.reconcileSubscriptionSeats(),
-    tasks.sendContractReminders(),
+    tasks.maintainContracts(),
   ]);
   for (const result of results) {
     if (result.status === "rejected") failures.push(result.reason);

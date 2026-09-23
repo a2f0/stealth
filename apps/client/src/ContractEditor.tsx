@@ -1,6 +1,7 @@
 import { Banner, Button, Card, cx, Field, Icon } from "@tearleads/ui/react";
 import {
   type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
   useCallback,
   useEffect,
@@ -14,6 +15,7 @@ import {
   fieldTypes,
   initialsFor,
   localDate,
+  nudgeBox,
   placeNewField,
   recipientTone,
   reminderOptions,
@@ -24,6 +26,7 @@ import {
   type DraftField,
   type DraftInput,
   type DraftRecipient,
+  deleteContract,
   type FieldType,
   saveContractDraft,
   sendContract,
@@ -31,17 +34,27 @@ import {
 
 type Editor = ReturnType<typeof useDraftEditor>;
 
+/** How long after the last edit a draft saves itself. */
+const autosaveDelayMs = 1200;
+const fieldHelpId = "contractFieldHelp";
+
 /** Prepares a draft: details, signers, and fields placed on the document. */
 export function ContractEditor({
   contract,
   onChanged,
+  onDeleted,
 }: {
   contract: ContractDetail;
   onChanged: (contract: ContractDetail) => void;
+  onDeleted: () => void;
 }) {
-  const editor = useDraftEditor(contract, onChanged);
+  const editor = useDraftEditor(contract, onChanged, onDeleted);
   return (
     <div className="contractEditor">
+      <p className="srOnly" id={fieldHelpId}>
+        Arrow keys move the field; hold Shift to move it further. Delete removes
+        it.
+      </p>
       <aside className="contractEditorPanel">
         {editor.error && <Banner tone="danger">{editor.error}</Banner>}
         {editor.notice && <Banner tone="success">{editor.notice}</Banner>}
@@ -66,64 +79,182 @@ export function ContractEditor({
 function useDraftEditor(
   contract: ContractDetail,
   onChanged: (contract: ContractDetail) => void,
+  onDeleted: () => void,
 ) {
   const [draft, setDraft] = useState(() => draftFrom(contract));
   const [dirty, setDirty] = useState(false);
   const [activeKey, setActiveKey] = useState(draft.recipients[0]?.key);
   const [tool, setTool] = useState<FieldType | null>(null);
   const [selectedKey, setSelectedKey] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
+  // Counts edits, so a save marks the draft clean only if nothing changed
+  // while it was in flight.
+  const revision = useRef(0);
+  const pageSizes = useRef(new Map<number, PageSize>());
   const update = useCallback((change: (draft: DraftInput) => DraftInput) => {
+    revision.current += 1;
     setDraft(change);
     setDirty(true);
-    setNotice(undefined);
   }, []);
-
-  async function persist(send: boolean) {
-    setBusy(true);
-    setError(undefined);
-    setNotice(undefined);
-    try {
-      let saved = dirty
-        ? await saveContractDraft(contract.id, draft)
-        : contract;
-      if (dirty) {
-        setDraft(draftFrom(saved));
-        setDirty(false);
-        setActiveKey(saved.recipients[0]?.id);
-        setSelectedKey(undefined);
-      }
-      if (send) saved = await sendContract(contract.id);
-      onChanged(saved);
-      if (!send) setNotice("Draft saved.");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return {
-    activeKey: draft.recipients.some(({ key }) => key === activeKey)
-      ? activeKey
-      : draft.recipients[0]?.key,
-    busy,
+  const saving = useDraftSaving({
+    contract,
     dirty,
     draft,
-    error,
-    notice,
+    onChanged,
+    onDeleted,
+    revision,
+    setDirty,
+  });
+  const active = draft.recipients.some(({ key }) => key === activeKey)
+    ? activeKey
+    : draft.recipients[0]?.key;
+  const fields = fieldActions(update, setSelectedKey);
+  return {
+    ...saving,
     ...recipientActions(draft, update, setActiveKey),
-    ...fieldActions(update, setSelectedKey),
-    save: () => persist(false),
+    ...fields,
+    activeKey: active,
+    dirty,
+    draft,
+    pageCount: contract.document.pageCount,
+    pageSizes: pageSizes.current,
+    /** Keyboard placement: the middle of page 1, then arrow keys and Page. */
+    placeFromKeyboard: (type: FieldType) => {
+      if (!active) return;
+      const page = pageSizes.current.get(1) ?? letterPage;
+      fields.addField({
+        ...placeNewField(type, 1, { x: 0.5, y: 0.5 }, page),
+        key: crypto.randomUUID(),
+        label: null,
+        recipientKey: active,
+        required: true,
+        type,
+      });
+      setTool(null);
+    },
     selectedKey,
-    send: () => persist(true),
     setActiveKey,
     setSelectedKey,
     setTool,
     tool,
     update,
+  };
+}
+
+const letterPage: PageSize = { height: 792, number: 1, width: 612 };
+
+/**
+ * Saves the draft a moment after each edit, when leaving the page, and on
+ * request, and guards against closing the tab with unsaved edits.
+ */
+function useDraftSaving({
+  contract,
+  dirty,
+  draft,
+  onChanged,
+  onDeleted,
+  revision,
+  setDirty,
+}: {
+  contract: ContractDetail;
+  dirty: boolean;
+  draft: DraftInput;
+  onChanged: (contract: ContractDetail) => void;
+  onDeleted: () => void;
+  revision: { current: number };
+  setDirty: (dirty: boolean) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [stalled, setStalled] = useState(false);
+  const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+  const unsaved = useRef<DraftInput | null>(null);
+  const contractId = contract.id;
+  const run = useCallback(async (action: () => Promise<void>) => {
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await action();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save.");
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+  const saveDraft = useCallback(
+    async (value: DraftInput) => {
+      const saving = revision.current;
+      onChanged(await saveContractDraft(contractId, value));
+      if (revision.current !== saving) return false;
+      setDirty(false);
+      return true;
+    },
+    [contractId, onChanged, revision, setDirty],
+  );
+
+  const autosave = dirty && !busy && !stalled && draft.title.trim() !== "";
+  useEffect(() => {
+    if (!autosave) return;
+    const timer = window.setTimeout(() => {
+      void run(async () => {
+        try {
+          await saveDraft(draft);
+        } catch (cause) {
+          // Wait for the next edit rather than retrying a rejected draft.
+          setStalled(true);
+          throw cause;
+        }
+      });
+    }, autosaveDelayMs);
+    return () => window.clearTimeout(timer);
+  }, [autosave, draft, run, saveDraft]);
+  useEffect(() => {
+    unsaved.current = dirty ? draft : null;
+    setStalled(false);
+  }, [dirty, draft]);
+  // Leaving the page saves edits the autosave has not reached yet.
+  useEffect(
+    () => () => {
+      if (unsaved.current) {
+        void saveContractDraft(contractId, unsaved.current).catch(
+          () => undefined,
+        );
+      }
+    },
+    [contractId],
+  );
+  useEffect(() => {
+    if (!dirty && !busy) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy, dirty]);
+
+  return {
+    busy,
+    error,
+    notice,
+    remove: () => {
+      if (!window.confirm(`Delete “${contract.title}”? This can't be undone.`))
+        return;
+      void run(async () => {
+        await deleteContract(contractId);
+        unsaved.current = null;
+        onDeleted();
+      });
+    },
+    save: () =>
+      run(async () => {
+        if (await saveDraft(draft)) setNotice("Draft saved.");
+      }),
+    send: () =>
+      run(async () => {
+        if (dirty && !(await saveDraft(draft))) {
+          setNotice("You edited the draft while it saved. Send it again.");
+          return;
+        }
+        onChanged(await sendContract(contractId));
+      }),
   };
 }
 
@@ -410,9 +541,11 @@ function FieldToolbox({ editor }: { editor: Editor }) {
               aria-pressed={tool === kind.type}
               className="contractTool"
               key={kind.type}
-              onClick={() =>
-                editor.setTool(tool === kind.type ? null : kind.type)
-              }
+              onClick={(event) => {
+                // Keyboard activation has no pointer to place with.
+                if (event.detail === 0) editor.placeFromKeyboard(kind.type);
+                else editor.setTool(tool === kind.type ? null : kind.type);
+              }}
               type="button"
             >
               <Icon name={kind.icon} size={16} />
@@ -423,7 +556,7 @@ function FieldToolbox({ editor }: { editor: Editor }) {
         <p className="contractHint">
           {tool
             ? `Click the document where the ${fieldTypeLabel(tool).toLowerCase()} field goes.`
-            : "Choose a field, then click the document to place it. Drag fields to move them."}
+            : "Choose a field, then click the document to place it. Drag fields to move them, or use the arrow keys."}
         </p>
       </div>
     </Card>
@@ -456,6 +589,25 @@ function SelectedField({ editor }: { editor: Editor }) {
         <p className="contractHint">
           For {owner?.name || "a signer"} on page {field.page}.
         </p>
+        {editor.pageCount > 1 && (
+          <Field label="Page">
+            <select
+              className="select"
+              onChange={(event) =>
+                editor.changeField(field.key, {
+                  page: Number(event.target.value),
+                })
+              }
+              value={field.page}
+            >
+              {pageNumbers(editor.pageCount).map((number) => (
+                <option key={number} value={number}>
+                  Page {number}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         {field.type === "text" && (
           <>
             <Field label="Label" optional>
@@ -492,11 +644,18 @@ function DraftActions({ editor }: { editor: Editor }) {
   return (
     <div className="contractEditorActions">
       <Button
-        busy={editor.busy && editor.dirty}
+        disabled={editor.busy}
+        icon="trash"
+        onClick={editor.remove}
+        variant="ghost"
+      >
+        Delete
+      </Button>
+      <Button
         disabled={editor.busy || !editor.dirty}
         onClick={() => void editor.save()}
       >
-        {editor.dirty ? "Save draft" : "Saved"}
+        {editor.busy ? "Saving…" : editor.dirty ? "Save now" : "Saved"}
       </Button>
       <Button
         busy={editor.busy}
@@ -511,11 +670,18 @@ function DraftActions({ editor }: { editor: Editor }) {
 }
 
 function EditorOverlay({ editor, page }: { editor: Editor; page: PageSize }) {
-  const { activeKey, draft, tool } = editor;
-  function place(event: PointerEvent<HTMLDivElement>) {
+  const { activeKey, draft, pageSizes, tool } = editor;
+  useEffect(() => {
+    pageSizes.set(page.number, page);
+  }, [page, pageSizes]);
+  function hold(event: PointerEvent<HTMLDivElement>) {
+    // Keep the browser from moving focus off the field a click places.
+    if (tool && event.button === 0 && event.target === event.currentTarget)
+      event.preventDefault();
+  }
+  // Placing on click ignores other buttons and touches that scroll.
+  function place(event: MouseEvent<HTMLDivElement>) {
     if (event.target !== event.currentTarget) return;
-    // Keep the browser from moving focus off the field this click places.
-    event.preventDefault();
     if (!tool || !activeKey) {
       editor.setSelectedKey(undefined);
       return;
@@ -541,9 +707,12 @@ function EditorOverlay({ editor, page }: { editor: Editor; page: PageSize }) {
     editor.setTool(null);
   }
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: keyboard users place fields from the toolbox.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users place fields from the toolbox.
     <div
       className={cx("contractOverlayHit", tool && "contractOverlayPlacing")}
-      onPointerDown={place}
+      onClick={place}
+      onPointerDown={hold}
     >
       {draft.fields
         .filter((field) => field.page === page.number)
@@ -606,11 +775,19 @@ function DraftFieldBox({
     if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       editor.removeField(field.key);
+      return;
     }
+    const step = event.shiftKey ? 0.05 : 0.01;
+    const offset = arrowOffsets[event.key];
+    if (!offset) return;
+    event.preventDefault();
+    const box = nudgeBox(field, offset.x * step, offset.y * step);
+    editor.changeField(field.key, { x: box.x, y: box.y });
   }
-  const label = `${fieldTypeLabel(field.type)} for ${owner?.name || "signer"}`;
+  const label = `${fieldTypeLabel(field.type)} for ${owner?.name || "signer"} on page ${field.page}`;
   return (
     <button
+      aria-describedby={fieldHelpId}
       aria-label={label}
       aria-pressed={selected}
       className={cx(
@@ -631,6 +808,17 @@ function DraftFieldBox({
     </button>
   );
 }
+
+function pageNumbers(count: number) {
+  return Array.from({ length: count }, (_, index) => index + 1);
+}
+
+const arrowOffsets: Record<string, { x: number; y: number }> = {
+  ArrowDown: { x: 0, y: 1 },
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 },
+};
 
 function draftFrom(contract: ContractDetail): DraftInput {
   return {

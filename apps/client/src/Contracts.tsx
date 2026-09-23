@@ -261,7 +261,11 @@ function ContractPage({
         {!contract ? (
           !error && <LoadingState label="Loading contract…" />
         ) : contract.status === "draft" ? (
-          <ContractEditor contract={contract} onChanged={setContract} />
+          <ContractEditor
+            contract={contract}
+            onChanged={setContract}
+            onDeleted={() => onNavigate(contractPath())}
+          />
         ) : (
           <ContractSummary
             contract={contract}

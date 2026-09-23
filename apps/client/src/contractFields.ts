@@ -80,6 +80,11 @@ export function clampBox(box: FieldBox): FieldBox {
   };
 }
 
+/** Moves a box by fractions of its page, keeping it on the page. */
+export function nudgeBox(box: FieldBox, dx: number, dy: number): FieldBox {
+  return clampBox({ ...box, x: box.x + dx, y: box.y + dy });
+}
+
 /** Rounds down, so rounding never pushes a box past the page edge. */
 function round(value: number) {
   return Math.floor(value * 10_000) / 10_000;

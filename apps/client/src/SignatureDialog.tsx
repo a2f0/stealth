@@ -36,12 +36,16 @@ export function SignatureDialog({
 
   async function adopt() {
     setError(undefined);
-    if (tab === "draw") {
-      if (!drawing) return setError("Draw your signature in the box.");
-      return onAdopt(drawing);
+    let image = drawing;
+    if (tab === "type") {
+      if (!text.trim()) return setError("Type your name.");
+      image = await renderTyped(text.trim(), mode);
+    } else if (!image) {
+      return setError("Draw your signature in the box.");
     }
-    if (!text.trim()) return setError("Type your name.");
-    onAdopt(await renderTyped(text.trim(), mode));
+    // Closing first returns focus to the field that opened the dialog.
+    dialog.current?.close();
+    onAdopt(image);
   }
 
   const noun = mode === "signature" ? "signature" : "initials";
@@ -129,6 +133,8 @@ function SignaturePad({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const last = useRef<{ x: number; y: number } | null>(null);
+  // A tap without movement draws nothing, so it must not count as a drawing.
+  const drew = useRef(false);
   const size = canvasSizes[mode];
   useEffect(() => {
     const context = canvas.current?.getContext("2d");
@@ -159,15 +165,17 @@ function SignaturePad({
     context.lineTo(next.x, next.y);
     context.stroke();
     last.current = next;
+    drew.current = true;
   }
   function end() {
     if (!last.current) return;
     last.current = null;
-    onChange(canvas.current?.toDataURL("image/png") ?? null);
+    if (drew.current) onChange(canvas.current?.toDataURL("image/png") ?? null);
   }
   function clear() {
     const element = canvas.current;
     element?.getContext("2d")?.clearRect(0, 0, size.width, size.height);
+    drew.current = false;
     onChange(null);
   }
   return (

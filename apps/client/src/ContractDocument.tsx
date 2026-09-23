@@ -99,7 +99,13 @@ function useContractPdf(load: () => Promise<ArrayBuffer>) {
   return state;
 }
 
-/** Renders a page once it nears the viewport, at the width it is shown. */
+/** The widest a page renders in device pixels, to bound canvas memory. */
+const maxCanvasPixels = 2000;
+
+/**
+ * Renders a page while it is near the viewport, at the width it is shown, and
+ * frees its canvas once it is far away so long documents fit in memory.
+ */
 function LazyPageCanvas({
   document,
   pageNumber,
@@ -111,22 +117,32 @@ function LazyPageCanvas({
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     const element = canvas.current;
-    if (!element || visible) return;
+    if (!element) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) setVisible(true);
+        const entry = entries.at(-1);
+        if (entry) setVisible(entry.isIntersecting);
       },
-      { rootMargin: "600px 0px" },
+      { rootMargin: "1200px 0px" },
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [visible]);
+  }, []);
   useEffect(() => {
     const element = canvas.current;
-    if (!element || !visible) return;
+    if (!element) return;
+    if (!visible) {
+      element.width = 0;
+      element.height = 0;
+      return;
+    }
     let active = true;
     let task: RenderTask | undefined;
-    const width = Math.min(element.clientWidth || 800, 1200);
+    const width = Math.min(
+      element.clientWidth || 800,
+      1200,
+      maxCanvasPixels / (window.devicePixelRatio || 1),
+    );
     renderPdfPage(document, pageNumber, element, width)
       .then((started) => {
         task = started;

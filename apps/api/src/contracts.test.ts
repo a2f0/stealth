@@ -5,7 +5,10 @@ import { Hono } from "hono";
 import { degrees, PDFDocument } from "pdf-lib";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
-import { sendContractReminders } from "./contractReminders";
+import {
+  resumeStalledContracts,
+  sendContractReminders,
+} from "./contractReminders";
 import { contracts } from "./contracts";
 import { signing } from "./signing";
 import type { Bindings } from "./types";
@@ -128,10 +131,6 @@ describe("contracts", () => {
     for (const [change, message] of [
       [{ title: "" }, "title"],
       [
-        { recipients: [{ ...signers[0], email: "not-an-email" }] },
-        "valid email",
-      ],
-      [
         {
           recipients: [signers[0], { ...signers[1], email: "SAM@example.com" }],
         },
@@ -175,6 +174,28 @@ describe("contracts", () => {
     );
     expect(unsent.status).toBe(400);
     expect(unsent.body.error).toBe("Place a signature field for Cai Cosigner.");
+
+    // Drafts save half-filled signers; sending needs a name and an email.
+    for (const [signer, message] of [
+      [{ ...signers[1], name: "" }, "Every signer needs a name."],
+      [
+        { ...signers[1], email: "cai@" },
+        "“Cai Cosigner” needs a valid email address.",
+      ],
+    ] as const) {
+      const halfFilled = await fixture.json(
+        "PUT",
+        `/api/contracts/${id}/draft`,
+        draft({ recipients: [signers[0], signer] }),
+      );
+      expect(halfFilled.status).toBe(200);
+      const blocked = await fixture.json<{ error: string }>(
+        "POST",
+        `/api/contracts/${id}/send`,
+      );
+      expect(blocked.status).toBe(400);
+      expect(blocked.body.error).toBe(message);
+    }
     expect(fixture.emails).toEqual([]);
   });
 
@@ -466,11 +487,22 @@ describe("contracts", () => {
     expect(await sendContractReminders(fixture.bindings, later)).toBe(0);
 
     fixture.emails.length = 0;
+    const throttled = await fixture.json<{ error: string }>(
+      "POST",
+      `/api/contracts/${id}/remind`,
+    );
+    expect(throttled.status).toBe(429);
+    fixture.database
+      .query("UPDATE contract_recipients SET last_reminded_at = ?")
+      .run(new Date(Date.now() - 2 * 3_600_000).toISOString());
     const manual = await fixture.json<{ reminded: number }>(
       "POST",
       `/api/contracts/${id}/remind`,
     );
     expect(manual.body.reminded).toBe(2);
+    expect(
+      (await fixture.json("POST", `/api/contracts/${id}/remind`)).status,
+    ).toBe(429);
     await fixture.json("POST", `/api/contracts/${id}/void`, {});
     expect(
       await sendContractReminders(
@@ -478,6 +510,114 @@ describe("contracts", () => {
         new Date(sentAt + 30 * 86_400_000),
       ),
     ).toBe(0);
+  });
+
+  it("finishes a contract whose completion failed after the last signature", async () => {
+    const fixture = await createFixture();
+    const id = await fixture.prepare(solo());
+    await fixture.json("POST", `/api/contracts/${id}/send`);
+    const token = tokenFrom(fixture.emails[0]);
+    fixture.emails.length = 0;
+    fixture.storage.failWrites = true;
+    const signed = await fixture.json<{ completed: boolean; status: string }>(
+      "POST",
+      `/api/signing/${token}/sign`,
+      { consent: true, signature: png },
+    );
+    expect(signed.body).toEqual({ completed: false, status: "signed" });
+    expect(await resumeStalledContracts(fixture.bindings)).toBe(0);
+    expect(await statusOf(fixture, id)).toBe("sent");
+
+    fixture.storage.failWrites = false;
+    expect(await resumeStalledContracts(fixture.bindings)).toBe(1);
+    expect(await statusOf(fixture, id)).toBe("completed");
+    expect(fixture.emails.map(({ to }) => to.email)).toEqual([
+      "sam@example.com",
+      "owner@example.com",
+    ]);
+    expect(await resumeStalledContracts(fixture.bindings)).toBe(0);
+  });
+
+  it("rejects adopted images that could not be stamped", async () => {
+    const fixture = await createFixture();
+    const id = await fixture.prepare(solo());
+    await fixture.json("POST", `/api/contracts/${id}/send`);
+    const token = tokenFrom(fixture.emails[0]);
+    const bytes = Uint8Array.from(atob(png.split(",")[1] ?? ""), (character) =>
+      character.charCodeAt(0),
+    );
+    new DataView(bytes.buffer).setUint32(16, 20_000);
+    const oversized = `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`;
+    const rejected = await fixture.json<{ error: string }>(
+      "POST",
+      `/api/signing/${token}/sign`,
+      { consent: true, signature: oversized },
+    );
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toBe(
+      "The adopted signature could not be read.",
+    );
+    expect(await statusOf(fixture, id)).toBe("sent");
+  });
+
+  it("retires signing links when the auth secret rotates", async () => {
+    const fixture = await createFixture();
+    const id = await fixture.prepare(solo());
+    await fixture.json("POST", `/api/contracts/${id}/send`);
+    const original = tokenFrom(fixture.emails[0]);
+    fixture.bindings.BETTER_AUTH_SECRET =
+      "rotated-secret-rotated-secret-rotated";
+    expect((await fixture.json("GET", `/api/signing/${original}`)).status).toBe(
+      404,
+    );
+
+    fixture.emails.length = 0;
+    fixture.database
+      .query("UPDATE contract_recipients SET notified_at = ?")
+      .run(new Date(Date.now() - 2 * 3_600_000).toISOString());
+    const reminded = await fixture.json<{ reminded: number }>(
+      "POST",
+      `/api/contracts/${id}/remind`,
+    );
+    expect(reminded.body.reminded).toBe(1);
+    const reissued = tokenFrom(fixture.emails[0]);
+    expect(reissued).not.toBe(original);
+    expect((await fixture.json("GET", `/api/signing/${reissued}`)).status).toBe(
+      200,
+    );
+    expect((await fixture.json("GET", `/api/signing/${original}`)).status).toBe(
+      404,
+    );
+  });
+
+  it("stops contract activity when its organization is deleted", async () => {
+    const fixture = await createFixture();
+    const id = await fixture.prepare(draft());
+    await fixture.json("POST", `/api/contracts/${id}/send`);
+    const token = tokenFrom(fixture.emails[0]);
+    fixture.database
+      .query("UPDATE organization SET deletedAt = ? WHERE id = 'org-1'")
+      .run(timestamp);
+    expect((await fixture.json("GET", `/api/signing/${token}`)).status).toBe(
+      404,
+    );
+    expect(
+      await sendContractReminders(
+        fixture.bindings,
+        new Date(Date.now() + 30 * 86_400_000),
+      ),
+    ).toBe(0);
+
+    fixture.database.query("DELETE FROM organization WHERE id = 'org-1'").run();
+    expect(
+      fixture.database
+        .query("SELECT object_key FROM deleted_object_cleanup")
+        .all(),
+    ).toEqual([
+      {
+        object_key: `organizations/org-1/contracts/${id}/original.pdf`,
+      },
+    ]);
   });
 
   it("keeps contracts and signing links within their organization", async () => {
@@ -504,6 +644,22 @@ describe("contracts", () => {
   });
 });
 
+/** One signer with one signature field. */
+function solo() {
+  return draft({ fields: [draft().fields[0]], recipients: [signers[0]] });
+}
+
+async function statusOf(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  id: string,
+) {
+  const detail = await fixture.json<{ contract: Contract }>(
+    "GET",
+    `/api/contracts/${id}`,
+  );
+  return detail.body.contract.status;
+}
+
 function tokenFrom(email: SentEmail | undefined) {
   const token = /\/sign\/([A-Za-z0-9_-]{43})/.exec(email?.text ?? "")?.[1];
   if (!token) throw new Error("No signing link in email.");
@@ -520,6 +676,7 @@ async function createFixture() {
   seed(database);
   const emails: SentEmail[] = [];
   const stored = new Map<string, Uint8Array>();
+  const storage = { failWrites: false };
   const bindings = {
     AUTH_EMAIL_FROM: "security@auth.tearleads.de",
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
@@ -534,7 +691,7 @@ async function createFixture() {
     } as unknown as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.de",
-    STORAGE: storageFor(stored),
+    STORAGE: storageFor(stored, storage),
   } satisfies Bindings;
 
   function as(userId: string, organizationId: string) {
@@ -601,6 +758,7 @@ async function createFixture() {
     bindings,
     database,
     emails,
+    storage,
     prepare: async (body: ReturnType<typeof draft>) => {
       const created = await owner.upload(
         await samplePdf(),
@@ -663,10 +821,13 @@ interface TestStatement {
 
 function toD1(database: Database) {
   return {
+    // D1 runs a batch as one transaction.
     batch: async (statements: TestStatement[]) =>
-      statements.map((statement) => ({
-        meta: { changes: statement.execute().changes },
-      })),
+      database.transaction(() =>
+        statements.map((statement) => ({
+          meta: { changes: statement.execute().changes },
+        })),
+      )(),
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const statement = {
@@ -690,7 +851,10 @@ function toD1(database: Database) {
   } as unknown as D1Database;
 }
 
-function storageFor(stored: Map<string, Uint8Array>) {
+function storageFor(
+  stored: Map<string, Uint8Array>,
+  state: { failWrites: boolean },
+) {
   return {
     delete: async (key: string) => stored.delete(key),
     get: async (key: string) => {
@@ -702,6 +866,7 @@ function storageFor(stored: Map<string, Uint8Array>) {
       };
     },
     put: async (key: string, value: Uint8Array | ArrayBuffer) => {
+      if (state.failWrites) throw new Error("Storage is unavailable.");
       stored.set(
         key,
         new Uint8Array(value instanceof Uint8Array ? value : value),

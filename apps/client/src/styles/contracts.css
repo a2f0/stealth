@@ -329,8 +329,7 @@
   gap: var(--space-5);
   width: min(100%, 60rem);
   margin: 0 auto;
-  padding: var(--space-6) var(--page-gutter)
-    calc(var(--space-24) + var(--space-8));
+  padding: var(--space-6) var(--page-gutter) 0;
 }
 
 .signingIntro {
@@ -385,19 +384,20 @@
   white-space: nowrap;
 }
 
+/* Sticky rather than fixed, so it never covers the end of the document. */
 .signingFooter {
   display: flex;
-  position: fixed;
-  right: 0;
+  position: sticky;
   bottom: 0;
-  left: 0;
   z-index: var(--z-sticky);
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3) var(--space-6);
-  padding: var(--space-4) var(--page-gutter);
-  border-top: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-border);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: var(--color-surface);
   box-shadow: var(--shadow-lg);
 }

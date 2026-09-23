@@ -6,6 +6,7 @@ import {
   initialsFor,
   isOverdue,
   matchesFilter,
+  nudgeBox,
   placeNewField,
   recipientTone,
 } from "./contractFields";
@@ -35,6 +36,15 @@ describe("placeNewField", () => {
       x: 0,
       y: 0.9,
     });
+  });
+});
+
+describe("nudgeBox", () => {
+  it("moves a field by page fractions without leaving the page", () => {
+    const box = { height: 0.1, page: 2, width: 0.2, x: 0.5, y: 0.5 };
+    expect(nudgeBox(box, 0.01, -0.05)).toEqual({ ...box, x: 0.51, y: 0.45 });
+    expect(nudgeBox(box, 0.5, 0.5)).toEqual({ ...box, x: 0.8, y: 0.9 });
+    expect(nudgeBox({ ...box, x: 0.005 }, -0.01, 0).x).toBe(0);
   });
 });
 

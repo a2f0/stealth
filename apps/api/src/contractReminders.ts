@@ -1,4 +1,5 @@
 import {
+  advanceContract,
   type ContractEnvironment,
   findContractById,
   listRecipients,
@@ -6,6 +7,59 @@ import {
 } from "./contractRecords";
 
 const reminderBatchSize = 50;
+const resumeBatchSize = 5;
+
+/** The hourly contract upkeep: finish stalled contracts, then remind. */
+export async function maintainContracts(
+  environment: ContractEnvironment,
+  now = new Date(),
+) {
+  await resumeStalledContracts(environment, now);
+  return sendContractReminders(environment, now);
+}
+
+/**
+ * Finishes what a signature started when it could not: emails the next
+ * sequential signers, or completes a contract everyone has signed. A failure
+ * moves the contract to the back of the queue so one bad document cannot
+ * hold up the rest.
+ */
+export async function resumeStalledContracts(
+  environment: ContractEnvironment,
+  now = new Date(),
+) {
+  const database = environment.DB;
+  const stalled = await database
+    .prepare(
+      `SELECT contract.id FROM contracts AS contract
+       JOIN organization ON organization.id = contract.organization_id
+       WHERE contract.status = 'sent' AND organization.deletedAt IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM contract_recipients
+           WHERE contract_id = contract.id AND status IN ('sent', 'viewed')
+         )
+       ORDER BY contract.updated_at ASC
+       LIMIT ?`,
+    )
+    .bind(resumeBatchSize)
+    .all<{ id: string }>();
+  let resumed = 0;
+  for (const { id } of stalled.results) {
+    try {
+      await advanceContract(environment, id);
+      resumed += 1;
+    } catch (cause) {
+      console.error("A stalled contract could not be resumed.", cause);
+      await database
+        .prepare(
+          `UPDATE contracts SET updated_at = ? WHERE id = ? AND status = 'sent'`,
+        )
+        .bind(now.toISOString(), id)
+        .run();
+    }
+  }
+  return resumed;
+}
 
 /**
  * Reminds signers whose contract's reminder interval has passed since they
@@ -24,7 +78,8 @@ export async function sendContractReminders(
                 AS last_emailed_at
        FROM contract_recipients AS recipient
        JOIN contracts AS contract ON contract.id = recipient.contract_id
-       WHERE contract.status = 'sent'
+       JOIN organization ON organization.id = contract.organization_id
+       WHERE contract.status = 'sent' AND organization.deletedAt IS NULL
          AND contract.reminder_interval_days IS NOT NULL
          AND recipient.status IN ('sent', 'viewed')
          AND julianday(?) - julianday(

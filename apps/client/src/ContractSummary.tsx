@@ -125,6 +125,8 @@ function useSummaryActions(
       run(async () => {
         const result = await remindContract(contract.id);
         onChanged(result.contract);
+        if (result.reminded === 0)
+          throw new Error("No reminder could be delivered. See Activity.");
         return result.reminded === 1
           ? "Reminder sent to 1 signer."
           : `Reminders sent to ${result.reminded} signers.`;

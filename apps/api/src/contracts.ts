@@ -28,6 +28,7 @@ type ContractEnv = {
 type ContractContext = Context<ContractEnv>;
 
 const maxDocumentBytes = 25 * 1024 * 1024;
+const manualReminderGapMs = 60 * 60 * 1000;
 const maxRecipients = 20;
 const maxFields = 500;
 const fieldTypes = ["signature", "initials", "date_signed", "name", "text"];
@@ -221,75 +222,10 @@ contracts.put("/:id/draft", async (context) => {
   );
   if (typeof draft === "string") return context.json({ error: draft }, 400);
   const database = context.env.DB;
-  const now = new Date().toISOString();
-  const recipientIds = new Map(
-    draft.recipients.map((recipient) => [recipient.key, crypto.randomUUID()]),
+  const saved = await database.batch(
+    draftStatements(database, contract, draft, new Date().toISOString()),
   );
-  await database.batch([
-    database
-      .prepare(`DELETE FROM contract_fields WHERE contract_id = ?`)
-      .bind(contract.id),
-    database
-      .prepare(`DELETE FROM contract_recipients WHERE contract_id = ?`)
-      .bind(contract.id),
-    database
-      .prepare(
-        `UPDATE contracts
-         SET title = ?, message = ?, signing_order = ?, due_date = ?,
-             reminder_interval_days = ?, updated_at = ?
-         WHERE id = ? AND organization_id = ? AND status = 'draft'`,
-      )
-      .bind(
-        draft.title,
-        draft.message,
-        draft.signingOrder,
-        draft.dueDate,
-        draft.reminderIntervalDays,
-        now,
-        contract.id,
-        organizationId,
-      ),
-    ...draft.recipients.map((recipient) =>
-      database
-        .prepare(
-          `INSERT INTO contract_recipients
-             (id, contract_id, organization_id, name, email, routing_order,
-              created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          recipientIds.get(recipient.key) ?? "",
-          contract.id,
-          organizationId,
-          recipient.name,
-          recipient.email,
-          draft.signingOrder === "parallel" ? 1 : recipient.routingOrder,
-          now,
-        ),
-    ),
-    ...draft.fields.map((field) =>
-      database
-        .prepare(
-          `INSERT INTO contract_fields
-             (id, contract_id, recipient_id, type, page, x, y, width, height,
-              required, label)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          crypto.randomUUID(),
-          contract.id,
-          recipientIds.get(field.recipientKey) ?? "",
-          field.type,
-          field.page,
-          field.x,
-          field.y,
-          field.width,
-          field.height,
-          field.required ? 1 : 0,
-          field.label,
-        ),
-    ),
-  ]);
+  if (saved[0]?.meta.changes !== 1) return notDraft(context);
   return context.json({ contract: await detailFor(context, contract.id) });
 });
 
@@ -358,12 +294,20 @@ contracts.post("/:id/remind", async (context) => {
   const awaiting = (await listRecipients(database, contract.id)).filter(
     ({ status }) => status === "sent" || status === "viewed",
   );
-  const reminded = await notifyRecipients(
-    context.env,
-    contract,
-    awaiting,
-    true,
-  );
+  // At most one manual reminder an hour per signer, to protect the sender's
+  // reputation and the signers' inboxes.
+  const threshold = Date.now() - manualReminderGapMs;
+  const due = awaiting.filter(({ last_reminded_at, notified_at }) => {
+    const lastEmailed = last_reminded_at ?? notified_at;
+    return !lastEmailed || Date.parse(lastEmailed) <= threshold;
+  });
+  if (awaiting.length > 0 && due.length === 0) {
+    return context.json(
+      { error: "Signers were emailed within the last hour. Try again later." },
+      429,
+    );
+  }
+  const reminded = await notifyRecipients(context.env, contract, due, true);
   return context.json({
     contract: await detailFor(context, contract.id),
     reminded,
@@ -420,7 +364,8 @@ contracts.post("/:id/void", async (context) => {
 });
 
 // Deletes a contract that is not awaiting signatures; its files are queued
-// for the deleted-object cleanup in the same batch.
+// for the deleted-object cleanup in the same batch, under the same condition,
+// so a delete racing a send never queues a live document.
 contracts.delete("/:id", async (context) => {
   const database = context.env.DB;
   const organizationId = context.get("organizationId");
@@ -448,9 +393,17 @@ contracts.delete("/:id", async (context) => {
           `INSERT OR REPLACE INTO deleted_object_cleanup
              (id, organization_id, object_key, deleted_at, cleanup_token,
               cleanup_claimed_at)
-           VALUES (?, ?, ?, ?, NULL, NULL)`,
+           SELECT ?, ?, ?, ?, NULL, NULL FROM contracts
+           WHERE id = ? AND organization_id = ? AND status <> 'sent'`,
         )
-        .bind(`${kind}:${contract.id}`, organizationId, key, now),
+        .bind(
+          `${kind}:${contract.id}`,
+          organizationId,
+          key,
+          now,
+          contract.id,
+          organizationId,
+        ),
     ),
     database
       .prepare(
@@ -593,7 +546,7 @@ function recipientsInput(value: unknown): DraftRecipient[] | string {
     const recipient = recipientInput(item);
     if (typeof recipient === "string") return recipient;
     const email = recipient.email.toLowerCase();
-    if (emails.has(email))
+    if (email && emails.has(email))
       return `${recipient.email} is listed more than once.`;
     emails.add(email);
     recipients.push(recipient);
@@ -610,12 +563,10 @@ function recipientInput(item: unknown): DraftRecipient | string {
   if (typeof key !== "string" || !key || key.length > 100) {
     return "A signer is invalid.";
   }
-  if (!name || name.length > 120) {
-    return "Every signer needs a name of up to 120 characters.";
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
-    return `“${name}” needs a valid email address.`;
-  }
+  // Drafts save as they are edited, so a signer may be half filled in;
+  // sending requires a name and a valid email.
+  if (name.length > 120) return "Signer names can be up to 120 characters.";
+  if (email.length > 254) return "Signer emails can be up to 254 characters.";
   if (
     typeof routingOrder !== "number" ||
     !Number.isInteger(routingOrder) ||
@@ -713,6 +664,9 @@ function rectInput(x: unknown, y: unknown, width: unknown, height: unknown) {
 /** Why a draft cannot be sent yet, if anything. */
 function sendProblem(recipients: RecipientRow[], fields: FieldRow[]) {
   if (recipients.length === 0) return "Add at least one signer.";
+  if (recipients.some(({ name }) => !name)) return "Every signer needs a name.";
+  const unreachable = recipients.find(({ email }) => !validEmail(email));
+  if (unreachable) return `“${unreachable.name}” needs a valid email address.`;
   const unsigned = recipients.find(
     (recipient) =>
       !fields.some(
@@ -721,6 +675,101 @@ function sendProblem(recipients: RecipientRow[], fields: FieldRow[]) {
       ),
   );
   return unsigned ? `Place a signature field for ${unsigned.name}.` : null;
+}
+
+/**
+ * The statements that replace a draft's details, signers, and fields. Each
+ * re-checks that the contract is still a draft, so a save racing a send
+ * cannot replace the recipients who were just emailed.
+ */
+function draftStatements(
+  database: D1Database,
+  contract: ContractRow,
+  draft: Draft,
+  now: string,
+) {
+  const recipientIds = new Map(
+    draft.recipients.map((recipient) => [recipient.key, crypto.randomUUID()]),
+  );
+  const stillDraft = `EXISTS (
+    SELECT 1 FROM contracts WHERE id = ? AND status = 'draft'
+  )`;
+  return [
+    database
+      .prepare(
+        `UPDATE contracts
+         SET title = ?, message = ?, signing_order = ?, due_date = ?,
+             reminder_interval_days = ?, updated_at = ?
+         WHERE id = ? AND organization_id = ? AND status = 'draft'`,
+      )
+      .bind(
+        draft.title,
+        draft.message,
+        draft.signingOrder,
+        draft.dueDate,
+        draft.reminderIntervalDays,
+        now,
+        contract.id,
+        contract.organization_id,
+      ),
+    database
+      .prepare(
+        `DELETE FROM contract_fields WHERE contract_id = ? AND ${stillDraft}`,
+      )
+      .bind(contract.id, contract.id),
+    database
+      .prepare(
+        `DELETE FROM contract_recipients
+         WHERE contract_id = ? AND ${stillDraft}`,
+      )
+      .bind(contract.id, contract.id),
+    ...draft.recipients.map((recipient) =>
+      database
+        .prepare(
+          `INSERT INTO contract_recipients
+             (id, contract_id, organization_id, name, email, routing_order,
+              created_at)
+           SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${stillDraft}`,
+        )
+        .bind(
+          recipientIds.get(recipient.key) ?? "",
+          contract.id,
+          contract.organization_id,
+          recipient.name,
+          recipient.email,
+          draft.signingOrder === "parallel" ? 1 : recipient.routingOrder,
+          now,
+          contract.id,
+        ),
+    ),
+    ...draft.fields.map((field) =>
+      database
+        .prepare(
+          `INSERT INTO contract_fields
+             (id, contract_id, recipient_id, type, page, x, y, width, height,
+              required, label)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${stillDraft}`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          contract.id,
+          recipientIds.get(field.recipientKey) ?? "",
+          field.type,
+          field.page,
+          field.x,
+          field.y,
+          field.width,
+          field.height,
+          field.required ? 1 : 0,
+          field.label,
+          contract.id,
+        ),
+    ),
+  ];
+}
+
+function validEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 async function pdfResponse(

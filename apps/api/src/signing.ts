@@ -1,5 +1,6 @@
 import { type Context, Hono } from "hono";
 import { sendDeclined } from "./contractMail";
+import { isEmbeddablePng } from "./contractPdf";
 import {
   advanceContract,
   type ContractRow,
@@ -12,7 +13,11 @@ import {
   type RecipientRow,
   recordEvent,
 } from "./contractRecords";
-import { isSigningToken, signingTokenHash } from "./contractTokens";
+import {
+  isSigningToken,
+  signingToken,
+  signingTokenHash,
+} from "./contractTokens";
 import type { Bindings } from "./types";
 
 /** Public routes a signer reaches through their emailed link; no account. */
@@ -22,6 +27,13 @@ type SigningContext = Context<SigningEnv>;
 /** Adopted signatures are small PNGs; this bounds what a signer can store. */
 const maxSignatureDataUrlLength = 400_000;
 const maxTextValueLength = 500;
+
+// A signature or decline only lands while the signer still has their turn
+// and the contract is out for signing; bound as [recipientId, contractId].
+const stillSignable = `EXISTS (
+    SELECT 1 FROM contract_recipients
+    WHERE id = ? AND status IN ('sent', 'viewed')
+  ) AND EXISTS (SELECT 1 FROM contracts WHERE id = ? AND status = 'sent')`;
 
 const signing = new Hono<SigningEnv>();
 
@@ -124,45 +136,63 @@ signing.post("/:token/sign", async (context) => {
     return context.json({ error: submission }, 400);
   }
   const { initials, signature, textValues } = submission;
+  for (const image of [signature, initials]) {
+    const bytes = image ? decodePngDataUrl(image) : null;
+    if (image && !(bytes && (await isEmbeddablePng(bytes)))) {
+      return context.json(
+        { error: "The adopted signature could not be read." },
+        400,
+      );
+    }
+  }
   const database = context.env.DB;
   const now = new Date().toISOString();
   const ip = clientIp(context);
   const userAgent = context.req.header("user-agent")?.slice(0, 300) ?? null;
-  // Claims the signature only while the contract is still out for signing,
-  // so a double submit or a concurrent void cannot sign twice.
-  const signed = await database
-    .prepare(
-      `UPDATE contract_recipients
-       SET status = 'signed', signed_at = ?, signed_ip = ?,
-           signed_user_agent = ?, signature_image = ?, initials_image = ?
-       WHERE id = ? AND status IN ('sent', 'viewed')
-         AND EXISTS (
-           SELECT 1 FROM contracts WHERE id = ? AND status = 'sent'
-         )`,
-    )
-    .bind(now, ip, userAgent, signature, initials, recipient.id, contract.id)
-    .run();
-  if (signed.meta.changes !== 1) {
-    return cannotSign(context, contract, recipient);
-  }
-  await database.batch([
+  const guard = [recipient.id, contract.id];
+  // One transaction: the values and event are written first, under the same
+  // condition as the claim, so they land exactly when the signature does and
+  // before anyone can see the signer as signed.
+  const results = await database.batch([
     ...[...textValues].map(([fieldId, value]) =>
       database
         .prepare(
           `UPDATE contract_fields SET value = ?
-           WHERE id = ? AND recipient_id = ?`,
+           WHERE id = ? AND recipient_id = ? AND ${stillSignable}`,
         )
-        .bind(value || null, fieldId, recipient.id),
+        .bind(value || null, fieldId, recipient.id, ...guard),
     ),
-    eventStatement(database, {
-      contractId: contract.id,
-      ip,
-      recipientId: recipient.id,
-      type: "signed",
-      userAgent,
-    }),
+    eventStatement(
+      database,
+      {
+        contractId: contract.id,
+        ip,
+        recipientId: recipient.id,
+        type: "signed",
+        userAgent,
+      },
+      { bindings: guard, sql: stillSignable },
+    ),
+    database
+      .prepare(
+        `UPDATE contract_recipients
+         SET status = 'signed', signed_at = ?, signed_ip = ?,
+             signed_user_agent = ?, signature_image = ?, initials_image = ?
+         WHERE id = ? AND ${stillSignable}`,
+      )
+      .bind(now, ip, userAgent, signature, initials, recipient.id, ...guard),
   ]);
-  const completed = await advanceContract(context.env, contract.id);
+  if (results.at(-1)?.meta.changes !== 1) {
+    return cannotSign(context, contract, recipient);
+  }
+  // The signature is recorded; routing and completion are retried by the
+  // scheduled sweep if they fail here.
+  let completed = false;
+  try {
+    completed = await advanceContract(context.env, contract.id);
+  } catch (cause) {
+    console.error("Contract could not advance after a signature.", cause);
+  }
   return context.json({ completed, status: "signed" });
 });
 
@@ -180,35 +210,43 @@ signing.post("/:token/decline", async (context) => {
   const reason = typeof raw === "string" ? raw.trim().slice(0, 500) : "";
   const database = context.env.DB;
   const now = new Date().toISOString();
-  const declined = await database
-    .prepare(
-      `UPDATE contract_recipients
-       SET status = 'declined', declined_at = ?, decline_reason = ?
-       WHERE id = ? AND status IN ('sent', 'viewed')
-         AND EXISTS (
-           SELECT 1 FROM contracts WHERE id = ? AND status = 'sent'
-         )`,
-    )
-    .bind(now, reason || null, recipient.id, contract.id)
-    .run();
-  if (declined.meta.changes !== 1)
-    return cannotSign(context, contract, recipient);
-  await database.batch([
+  const guard = [recipient.id, contract.id];
+  // One transaction, as with signing: the event, the decline, and the
+  // contract's end all land together or not at all.
+  const results = await database.batch([
+    eventStatement(
+      database,
+      {
+        contractId: contract.id,
+        detail: reason || null,
+        ip: clientIp(context),
+        recipientId: recipient.id,
+        type: "declined",
+        userAgent: context.req.header("user-agent") ?? null,
+      },
+      { bindings: guard, sql: stillSignable },
+    ),
+    database
+      .prepare(
+        `UPDATE contract_recipients
+         SET status = 'declined', declined_at = ?, decline_reason = ?
+         WHERE id = ? AND ${stillSignable}`,
+      )
+      .bind(now, reason || null, recipient.id, ...guard),
     database
       .prepare(
         `UPDATE contracts SET status = 'declined', updated_at = ?
-         WHERE id = ? AND status = 'sent'`,
+         WHERE id = ? AND status = 'sent'
+           AND EXISTS (
+             SELECT 1 FROM contract_recipients
+             WHERE contract_id = contracts.id AND status = 'declined'
+           )`,
       )
       .bind(now, contract.id),
-    eventStatement(database, {
-      contractId: contract.id,
-      detail: reason || null,
-      ip: clientIp(context),
-      recipientId: recipient.id,
-      type: "declined",
-      userAgent: context.req.header("user-agent") ?? null,
-    }),
   ]);
+  if (results[1]?.meta.changes !== 1) {
+    return cannotSign(context, contract, recipient);
+  }
   try {
     await sendDeclined(
       context.env,
@@ -257,18 +295,36 @@ function submissionInput(body: unknown, fields: FieldRow[]) {
   return { initials, signature, textValues };
 }
 
+/**
+ * The recipient a link belongs to. The link must still derive from the
+ * current BETTER_AUTH_SECRET, and its organization must not be deleted.
+ */
 async function findSigner(context: SigningContext, token: string) {
   if (!isSigningToken(token)) return null;
   const recipient = await context.env.DB.prepare(
-    `SELECT id, contract_id, name, email, routing_order, status, token_nonce,
-            notified_at, last_reminded_at, viewed_at, signed_at, signed_ip,
-            signed_user_agent, signature_image, initials_image, declined_at,
-            decline_reason, created_at
-     FROM contract_recipients WHERE token_hash = ?`,
+    `SELECT recipient.id, recipient.contract_id, recipient.name,
+            recipient.email, recipient.routing_order, recipient.status,
+            recipient.token_nonce, recipient.token_hash, recipient.notified_at,
+            recipient.last_reminded_at, recipient.viewed_at,
+            recipient.signed_at, recipient.signed_ip,
+            recipient.signed_user_agent, recipient.signature_image,
+            recipient.initials_image, recipient.declined_at,
+            recipient.decline_reason, recipient.created_at
+     FROM contract_recipients AS recipient
+     JOIN contracts AS contract ON contract.id = recipient.contract_id
+     JOIN organization ON organization.id = contract.organization_id
+     WHERE recipient.token_hash = ? AND organization.deletedAt IS NULL`,
   )
     .bind(await signingTokenHash(token))
     .first<RecipientRow>();
-  if (!recipient) return null;
+  if (!recipient?.token_nonce) return null;
+  // Compared as hashes so timing reveals nothing about the expected token.
+  const expected = await signingToken(
+    context.env.BETTER_AUTH_SECRET,
+    recipient.id,
+    recipient.token_nonce,
+  );
+  if ((await signingTokenHash(expected)) !== recipient.token_hash) return null;
   const contract = await findContractById(
     context.env.DB,
     recipient.contract_id,

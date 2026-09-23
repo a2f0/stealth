@@ -71,6 +71,7 @@ export interface RecipientRow {
   signed_ip: string | null;
   signed_user_agent: string | null;
   status: "declined" | "pending" | "sent" | "signed" | "viewed";
+  token_hash: string | null;
   token_nonce: string | null;
   viewed_at: string | null;
 }
@@ -143,7 +144,7 @@ export async function listRecipients(database: D1Database, contractId: string) {
   const result = await database
     .prepare(
       `SELECT id, contract_id, name, email, routing_order, status, token_nonce,
-              notified_at, last_reminded_at, viewed_at, signed_at, signed_ip,
+              token_hash, notified_at, last_reminded_at, viewed_at, signed_at, signed_ip,
               signed_user_agent, signature_image, initials_image, declined_at,
               decline_reason, created_at
        FROM contract_recipients WHERE contract_id = ?
@@ -183,25 +184,38 @@ export async function listEvents(database: D1Database, contractId: string) {
   return result.results;
 }
 
-export function eventStatement(database: D1Database, event: ContractEvent) {
-  return database
-    .prepare(
-      `INSERT INTO contract_events
+/**
+ * Inserts an audit event; with `when`, only if that SQL condition holds, so
+ * it can share a batch with the change it records.
+ */
+export function eventStatement(
+  database: D1Database,
+  event: ContractEvent,
+  when?: { bindings: unknown[]; sql: string },
+) {
+  const values = [
+    crypto.randomUUID(),
+    event.contractId,
+    event.recipientId ?? null,
+    event.actorUserId ?? null,
+    event.type,
+    event.detail?.slice(0, 500) ?? null,
+    event.ip ?? null,
+    event.userAgent?.slice(0, 300) ?? null,
+    new Date().toISOString(),
+  ];
+  const columns = `INSERT INTO contract_events
          (id, contract_id, recipient_id, actor_user_id, type, detail, ip,
-          user_agent, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      crypto.randomUUID(),
-      event.contractId,
-      event.recipientId ?? null,
-      event.actorUserId ?? null,
-      event.type,
-      event.detail?.slice(0, 500) ?? null,
-      event.ip ?? null,
-      event.userAgent?.slice(0, 300) ?? null,
-      new Date().toISOString(),
-    );
+          user_agent, created_at)`;
+  return when
+    ? database
+        .prepare(
+          `${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${when.sql}`,
+        )
+        .bind(...values, ...when.bindings)
+    : database
+        .prepare(`${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(...values);
 }
 
 export async function recordEvent(database: D1Database, event: ContractEvent) {
@@ -240,20 +254,31 @@ export async function mailFor(
   };
 }
 
-/** The signing link for a recipient who has been sent one. */
+/**
+ * The signing link for a recipient who has been sent one. Links derive from
+ * BETTER_AUTH_SECRET, so after it rotates the stored hash is refreshed and
+ * the re-sent link opens while the old one no longer does.
+ */
 async function recipientLink(
   environment: ContractEnvironment,
-  recipient: Pick<RecipientRow, "id" | "token_nonce">,
+  recipient: Pick<RecipientRow, "id" | "token_hash" | "token_nonce">,
 ) {
   if (!recipient.token_nonce) return null;
-  return signingUrl(
-    environment,
-    await signingToken(
-      environment.BETTER_AUTH_SECRET,
-      recipient.id,
-      recipient.token_nonce,
-    ),
+  const token = await signingToken(
+    environment.BETTER_AUTH_SECRET,
+    recipient.id,
+    recipient.token_nonce,
   );
+  const hash = await signingTokenHash(token);
+  if (hash !== recipient.token_hash) {
+    await environment.DB.prepare(
+      `UPDATE contract_recipients SET token_hash = ?
+       WHERE id = ? AND token_nonce = ?`,
+    )
+      .bind(hash, recipient.id, recipient.token_nonce)
+      .run();
+  }
+  return signingUrl(environment, token);
 }
 
 /**
@@ -272,9 +297,9 @@ export async function notifyRecipients(
   const now = at.toISOString();
   let delivered = 0;
   for (const recipient of recipients) {
-    let nonce = recipient.token_nonce;
-    if (!nonce) {
-      nonce = newTokenNonce();
+    let link: string | null;
+    if (!recipient.token_nonce) {
+      const nonce = newTokenNonce();
       const token = await signingToken(
         environment.BETTER_AUTH_SECRET,
         recipient.id,
@@ -290,18 +315,18 @@ export async function notifyRecipients(
         .bind(nonce, await signingTokenHash(token), now, recipient.id)
         .run();
       if (issued.meta.changes !== 1) continue;
-    } else if (reminder) {
-      await database
-        .prepare(
-          `UPDATE contract_recipients SET last_reminded_at = ? WHERE id = ?`,
-        )
-        .bind(now, recipient.id)
-        .run();
+      link = signingUrl(environment, token);
+    } else {
+      if (reminder) {
+        await database
+          .prepare(
+            `UPDATE contract_recipients SET last_reminded_at = ? WHERE id = ?`,
+          )
+          .bind(now, recipient.id)
+          .run();
+      }
+      link = await recipientLink(environment, recipient);
     }
-    const link = await recipientLink(environment, {
-      id: recipient.id,
-      token_nonce: nonce,
-    });
     if (!link) continue;
     try {
       await sendSigningRequest(environment, mail, recipient, link, reminder);

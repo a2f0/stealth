@@ -1,9 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import { degrees, PDFDocument } from "pdf-lib";
+import {
+  decodePDFRawStream,
+  degrees,
+  PDFArray,
+  PDFDocument,
+  PDFName,
+  type PDFPage,
+  PDFRawStream,
+} from "pdf-lib";
 import {
   type Certificate,
   InvalidPdfError,
   inspectPdf,
+  isEmbeddablePng,
   placeField,
   sha256Hex,
   stampContract,
@@ -99,8 +108,60 @@ describe("stampContract", () => {
     const reloaded = await PDFDocument.load(stamped);
     expect(reloaded.getPageCount()).toBe(3);
     expect(reloaded.getPage(1).getRotation().angle).toBe(90);
+    for (const page of reloaded.getPages().slice(0, 2)) {
+      const operators = contentStreams(page).join("\n");
+      expect(operators).toContain(" Do");
+      expect(operators).toContain(" Tj");
+    }
     expect(await sha256Hex(stamped)).toMatch(/^[0-9a-f]{64}$/);
     expect(await sha256Hex(stamped)).not.toBe(await sha256Hex(original));
+  });
+
+  it("isolates stamps from a page's unbalanced transformation", async () => {
+    const source = await PDFDocument.create();
+    const page = source.addPage([612, 792]);
+    // A producer's flip with no restoring Q would otherwise mirror stamps.
+    page.node.set(
+      PDFName.of("Contents"),
+      source.context.register(
+        source.context.flateStream("1 0 0 -1 0 792 cm 0 0 m 10 10 l S"),
+      ),
+    );
+    const stamped = await stampContract(
+      await source.save(),
+      [{ page: 1, rect, text: "Director" }],
+      certificate,
+    );
+    const streams = contentStreams(
+      (await PDFDocument.load(stamped)).getPage(0),
+    );
+    expect(streams.slice(0, 3).map((stream) => stream.trim())).toEqual([
+      "q",
+      "1 0 0 -1 0 792 cm 0 0 m 10 10 l S",
+      "Q",
+    ]);
+    expect(streams.at(-1)).toContain(" Tj");
+  });
+
+  it("cuts text that cannot fit its box", async () => {
+    const stamped = await stampContract(
+      await samplePdf(),
+      [
+        {
+          page: 1,
+          rect: { height: 0.03, width: 0.1, x: 0.1, y: 0.1 },
+          text: "Chief Executive Officer ".repeat(20),
+        },
+      ],
+      certificate,
+    );
+    const operators = contentStreams(
+      (await PDFDocument.load(stamped)).getPage(0),
+    ).join("\n");
+    const drawn = /<([0-9A-F]+)> Tj/.exec(operators)?.[1] ?? "";
+    // Helvetica codes are one byte, so each character is two hex digits.
+    expect(drawn.length / 2).toBeLessThan(40);
+    expect(drawn.endsWith("85")).toBe(true);
   });
 
   it("continues a long activity log onto more certificate pages", async () => {
@@ -115,6 +176,33 @@ describe("stampContract", () => {
     expect((await PDFDocument.load(stamped)).getPageCount()).toBeGreaterThan(3);
   });
 });
+
+describe("isEmbeddablePng", () => {
+  it("accepts small PNGs and rejects oversized or undecodable ones", async () => {
+    const valid = await pngBytes();
+    expect(await isEmbeddablePng(valid)).toBe(true);
+    const huge = valid.slice();
+    new DataView(huge.buffer).setUint32(16, 20_000);
+    new DataView(huge.buffer).setUint32(20, 20_000);
+    expect(await isEmbeddablePng(huge)).toBe(false);
+    const garbage = Uint8Array.from([...valid.subarray(0, 33), 1, 2, 3, 4, 5]);
+    expect(await isEmbeddablePng(garbage)).toBe(false);
+    expect(await isEmbeddablePng(valid.subarray(0, 20))).toBe(false);
+  });
+});
+
+/** A page's content streams, decoded to their operators. */
+function contentStreams(page: PDFPage) {
+  const contents = page.node.Contents();
+  const refs = contents instanceof PDFArray ? contents.asArray() : [contents];
+  return refs.map((ref) => {
+    const stream = page.doc.context.lookup(ref);
+    if (!(stream instanceof PDFRawStream)) return "";
+    return new TextDecoder("latin1").decode(
+      decodePDFRawStream(stream).decode(),
+    );
+  });
+}
 
 async function samplePdf() {
   const document = await PDFDocument.create();

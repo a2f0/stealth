@@ -162,6 +162,15 @@ function SigningSession({
           {contract.dueDate ? ` · due ${formatDate(contract.dueDate)}` : ""}.
           Complete the highlighted fields, then finish.
         </p>
+        <div>
+          <ButtonLink
+            href={signingDocumentUrl(token)}
+            icon="download"
+            size="sm"
+          >
+            Download the PDF to read
+          </ButtonLink>
+        </div>
       </section>
       {session.error && <Banner tone="danger">{session.error}</Banner>}
       <ContractPages
@@ -342,6 +351,14 @@ function SigningOutcome({ token, view }: { token: string; view: SigningView }) {
     return (
       <EmptyState icon="error" title="You declined to sign">
         We let {contract.senderName ?? contract.organizationName} know.
+      </EmptyState>
+    );
+  }
+  if (recipient.status === "signed" && contract.status === "declined") {
+    return (
+      <EmptyState icon="error" title="Another signer declined">
+        You signed “{contract.title}”, but another signer declined it, so it
+        will not be completed.
       </EmptyState>
     );
   }

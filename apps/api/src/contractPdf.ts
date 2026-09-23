@@ -164,6 +164,36 @@ export async function stampContract(
   return document.save();
 }
 
+/** Adopted signatures are drawn at 640×160; this bounds what may be decoded. */
+const maxSignaturePixels = { height: 800, width: 1600 };
+
+/**
+ * Whether a signer's PNG is small enough and decodes, checked when it is
+ * submitted so a bad image cannot stall completion later.
+ */
+export async function isEmbeddablePng(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.byteLength < 33) return false;
+  const header = String.fromCharCode(...bytes.subarray(12, 16));
+  const width = view.getUint32(16);
+  const height = view.getUint32(20);
+  if (
+    header !== "IHDR" ||
+    width < 1 ||
+    height < 1 ||
+    width > maxSignaturePixels.width ||
+    height > maxSignaturePixels.height
+  ) {
+    return false;
+  }
+  try {
+    await (await PDFDocument.create()).embedPng(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function sha256Hex(bytes: ArrayBuffer | Uint8Array) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)]
@@ -220,14 +250,19 @@ function drawTextInBox(
   value: string,
   font: PDFFont,
 ) {
-  const text = encodable(value, font);
   const padding = Math.min(2, placement.boxWidth / 20);
+  const room = placement.boxWidth - padding * 2;
+  let text = encodable(value, font);
   let size = Math.min(placement.boxHeight * 0.7, 14);
-  while (
-    size > 5 &&
-    font.widthOfTextAtSize(text, size) > placement.boxWidth - padding * 2
-  ) {
+  while (size > 5 && font.widthOfTextAtSize(text, size) > room) {
     size -= 0.5;
+  }
+  // Past the smallest legible size, cut the text so it stays in its box.
+  if (font.widthOfTextAtSize(text, size) > room) {
+    while (text && font.widthOfTextAtSize(`${text}…`, size) > room) {
+      text = text.slice(0, -1);
+    }
+    text = `${text}…`;
   }
   const baseline = (placement.boxHeight - size * 0.72) / 2;
   const origin = toPage(placement, padding, baseline);
