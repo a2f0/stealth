@@ -8,7 +8,10 @@ type LinkContext = Context<{
   Variables: AuthVariables;
 }>;
 
-type EmailLinkTargetType = "finance_transaction" | "library_folder";
+type EmailLinkTargetType =
+  | "equipment"
+  | "finance_transaction"
+  | "library_folder";
 
 interface EmailLinkInput {
   targetId: string;
@@ -16,6 +19,10 @@ interface EmailLinkInput {
 }
 
 interface EmailLinkRow {
+  equipment_make: string | null;
+  equipment_model: string | null;
+  equipment_serial_number: string | null;
+  equipment_type: string | null;
   folder_name: string | null;
   id: string;
   target_id: string;
@@ -58,7 +65,7 @@ export async function listEmailLinks(
     .flatMap((row) => toEmailLink(row) ?? []);
 }
 
-/** Links an inbox email to a library folder or a finance transaction. */
+/** Links an inbox email to a library folder, equipment, or a transaction. */
 export async function createEmailLink(context: LinkContext) {
   const emailId = context.req.param("id");
   const input = linkInput(await context.req.json().catch(() => null));
@@ -84,16 +91,16 @@ export async function createEmailLink(context: LinkContext) {
   ) {
     return financeRequired(context);
   }
-  if (!(await targetExists(database, organizationId, input))) {
-    return context.json({ error: "Link target not found." }, 404);
-  }
+  // The target is checked in the insert itself: a target deleted a moment
+  // earlier (after its cleanup trigger ran) must not gain an orphaned link.
   const id = crypto.randomUUID();
   await database
     .prepare(
       `INSERT INTO inbound_email_links
          (id, organization_id, email_id, target_type, target_id, created_by,
           created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+       SELECT ?, ?, ?, ?, ?, ?, ?
+       WHERE EXISTS (${targetQueries[input.targetType]})
        ON CONFLICT (email_id, target_type, target_id) DO NOTHING`,
     )
     .bind(
@@ -104,6 +111,8 @@ export async function createEmailLink(context: LinkContext) {
       input.targetId,
       context.get("authSession").user.id,
       new Date().toISOString(),
+      input.targetId,
+      organizationId,
     )
     .run();
   const row = (await emailLinkRows(database, organizationId, email.id)).find(
@@ -192,6 +201,9 @@ async function emailLinkRows(
     .prepare(
       `SELECT link.id, link.target_type, link.target_id,
               folder.name AS folder_name,
+              item.type AS equipment_type, item.make AS equipment_make,
+              item.model AS equipment_model,
+              item.serial_number AS equipment_serial_number,
               txn.name AS transaction_name,
               txn.merchant_name AS transaction_merchant_name,
               txn.amount AS transaction_amount,
@@ -202,6 +214,10 @@ async function emailLinkRows(
          ON link.target_type = 'library_folder'
         AND folder.id = link.target_id
         AND folder.organization_id = link.organization_id
+       LEFT JOIN equipment AS item
+         ON link.target_type = 'equipment'
+        AND item.id = link.target_id
+        AND item.organization_id = link.organization_id
        LEFT JOIN plaid_transactions AS txn
          ON link.target_type = 'finance_transaction'
         AND txn.id = link.target_id
@@ -215,20 +231,14 @@ async function emailLinkRows(
   return result.results;
 }
 
-async function targetExists(
-  database: D1Database,
-  organizationId: string,
-  input: EmailLinkInput,
-) {
-  const query =
-    input.targetType === "library_folder"
-      ? `SELECT id FROM library_folders WHERE id = ? AND organization_id = ?`
-      : `SELECT id FROM plaid_transactions
-         WHERE id = ? AND organization_id = ? AND source_status = 'active'`;
-  return Boolean(
-    await database.prepare(query).bind(input.targetId, organizationId).first(),
-  );
-}
+/** Each target type's existence check, bound to (target id, organization). */
+const targetQueries: Record<EmailLinkTargetType, string> = {
+  equipment: `SELECT 1 FROM equipment WHERE id = ? AND organization_id = ?`,
+  finance_transaction: `SELECT 1 FROM plaid_transactions
+    WHERE id = ? AND organization_id = ? AND source_status = 'active'`,
+  library_folder: `SELECT 1 FROM library_folders
+    WHERE id = ? AND organization_id = ?`,
+};
 
 function canUseFinance(context: LinkContext) {
   return userHasCapability(
@@ -240,6 +250,20 @@ function canUseFinance(context: LinkContext) {
 }
 
 function toEmailLink(row: EmailLinkRow) {
+  if (row.target_type === "equipment") {
+    if (row.equipment_make === null) return null;
+    return {
+      equipment: {
+        make: row.equipment_make,
+        model: row.equipment_model ?? "",
+        serialNumber: row.equipment_serial_number,
+        type: row.equipment_type ?? "",
+      },
+      id: row.id,
+      targetId: row.target_id,
+      targetType: row.target_type,
+    };
+  }
   if (row.target_type === "library_folder") {
     if (row.folder_name === null) return null;
     return {
@@ -269,7 +293,9 @@ function linkInput(input: unknown): EmailLinkInput | null {
   const targetType = Reflect.get(input, "targetType");
   const targetId = Reflect.get(input, "targetId");
   if (
-    (targetType !== "library_folder" && targetType !== "finance_transaction") ||
+    (targetType !== "equipment" &&
+      targetType !== "library_folder" &&
+      targetType !== "finance_transaction") ||
     typeof targetId !== "string" ||
     targetId.length === 0 ||
     targetId.length > 100

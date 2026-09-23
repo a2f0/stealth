@@ -35,6 +35,17 @@ export interface InboundEmailAttachment {
 
 export type InboundEmailLink =
   | {
+      equipment: {
+        make: string;
+        model: string;
+        serialNumber: string | null;
+        type: string;
+      };
+      id: string;
+      targetId: string;
+      targetType: "equipment";
+    }
+  | {
       folder: { name: string };
       id: string;
       targetId: string;

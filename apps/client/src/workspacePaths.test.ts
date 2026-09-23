@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
+  equipmentIdForPath,
+  equipmentPath,
   inboxEmailPath,
+  isEquipmentPath,
   libraryFolderIdForPath,
   libraryPath,
 } from "./workspacePaths";
@@ -15,6 +18,17 @@ describe("workspace paths", () => {
     expect(libraryFolderIdForPath("/library")).toBeUndefined();
     expect(libraryFolderIdForPath("/library/a/b")).toBeUndefined();
     expect(libraryFolderIdForPath("/library/%E0%A4")).toBe("%E0%A4");
+  });
+
+  it("round-trips equipment paths", () => {
+    expect(equipmentPath()).toBe("/equipment");
+    expect(equipmentPath("item/1")).toBe("/equipment/item%2F1");
+    expect(equipmentIdForPath(equipmentPath("item/1"))).toBe("item/1");
+    expect(equipmentIdForPath("/equipment")).toBeUndefined();
+    expect(equipmentIdForPath("/equipment/%E0%A4")).toBe("%E0%A4");
+    expect(isEquipmentPath("/equipment")).toBe(true);
+    expect(isEquipmentPath("/equipment/abc")).toBe(true);
+    expect(isEquipmentPath("/equipments")).toBe(false);
   });
 
   it("opens a message in the inbox", () => {

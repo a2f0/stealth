@@ -56,6 +56,23 @@ export async function listOrganizationMembers(
   );
 }
 
+/** Members' names and addresses, for choosing a person to assign. */
+export async function listMemberDirectory(
+  database: D1Database,
+  organizationId: string,
+) {
+  const result = await database
+    .prepare(
+      `SELECT user.id, user.name, user.email
+       FROM member JOIN user ON user.id = member.userId
+       WHERE member.organizationId = ?
+       ORDER BY user.name COLLATE NOCASE ASC`,
+    )
+    .bind(organizationId)
+    .all<{ email: string; id: string; name: string }>();
+  return result.results;
+}
+
 export async function countOrganizationOwners(
   database: D1Database,
   organizationId: string,

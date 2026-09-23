@@ -21,6 +21,7 @@ import {
 import { useAccountSessions } from "./accountSessions";
 import { authClient } from "./authClient";
 import { Businesses } from "./Businesses";
+import { Equipment } from "./Equipment";
 import { Finance } from "./Finance";
 import { isFinancePath } from "./financePages";
 import { Inbox } from "./Inbox";
@@ -37,6 +38,7 @@ import {
 } from "./organizationState";
 import { useOrganizationAccess } from "./useOrganizationAccess";
 import { hasRole, WorkspaceShell, type WorkspaceUser } from "./WorkspaceShell";
+import { isEquipmentPath } from "./workspacePaths";
 
 export function App() {
   const { data: session, error, isPending, refetch } = authClient.useSession();
@@ -510,6 +512,9 @@ function contentForPath(
     return <Finance onNavigate={navigate} pathname={pathname} />;
   }
   if (pathname === "/businesses") return <Businesses />;
+  if (isEquipmentPath(pathname)) {
+    return <Equipment onNavigate={navigate} pathname={pathname} />;
+  }
   if (pathname === "/inbox") {
     return (
       <Inbox canAccessFinance={access.can("finance")} onNavigate={navigate} />
@@ -562,6 +567,7 @@ function activePageFor(pathname: string) {
   }
   if (isFinancePath(pathname)) return "finance" as const;
   if (pathname === "/businesses") return "businesses" as const;
+  if (isEquipmentPath(pathname)) return "equipment" as const;
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
   if (pathname === "/account/security") return "account" as const;
