@@ -205,6 +205,11 @@ fi
    ```bash
    [ -f "$HOOKS_SCRIPT" ] || { echo "Error: install-hooks.sh not found at $HOOKS_SCRIPT" >&2; exit 1; }
    sh "$HOOKS_SCRIPT" || { echo "Error: install-hooks.sh failed" >&2; exit 1; }
+   HOOKS_DIR="$(git rev-parse --path-format=absolute --git-common-dir)/hooks"
+   for hook in "$ROOT_DIR"/scripts/git/hooks/*; do
+     [ -f "$hook" ] || continue
+     cmp -s "$hook" "$HOOKS_DIR/${hook##*/}" || { echo "Error: installed ${hook##*/} hook does not match its source" >&2; exit 1; }
+   done
    ```
 
    Invoke it through `sh` rather than executing it directly, and test for `-f`
@@ -212,12 +217,16 @@ fi
    marked executable in the tree — the installer is what `chmod +x`es them at the
    destination — so do not assume the mode bit here either.
 
-   The script copies every file from `scripts/git/hooks/` into `.git/hooks/`,
+   The script copies every file from `scripts/git/hooks/` into the repository's
+   shared hooks directory (`.git/hooks/`, common to linked worktrees),
    marks them executable, **removes installed hooks that no longer exist in the
    source** (leaving git's own `*.sample` files alone), and sets `core.hooksPath`.
    It **overwrites** the installed hooks — that is the point, since hook changes
    arrive as ordinary commits and do nothing until copied. It is idempotent, so
-   running it on every reset is cheap and safe.
+   running it on every reset is cheap and safe. The loop after it confirms that
+   each installed hook now matches its source; the pre-push hook refuses to run
+   when stale, so an unconfirmed install would otherwise surface only at the
+   next push.
 
    **The removal pass is what makes this a sync rather than an overlay.** Copying
    alone cannot express a deletion: a hook removed or renamed at the target

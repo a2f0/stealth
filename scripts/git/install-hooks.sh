@@ -4,7 +4,9 @@ set -e
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 HOOKS_SRC="$REPO_ROOT/scripts/git/hooks"
-HOOKS_DST="$REPO_ROOT/.git/hooks"
+# Linked worktrees have a .git file and share hooks/config with the main checkout.
+HOOKS_DST="$(git rev-parse --path-format=absolute --git-common-dir)/hooks"
+mkdir -p "$HOOKS_DST"
 
 for hook in "$HOOKS_SRC"/*; do
   if [ -f "$hook" ]; then
@@ -15,6 +17,9 @@ for hook in "$HOOKS_SRC"/*; do
   fi
 done
 
+# Copying alone leaves a hook that was deleted or renamed in the source tree
+# installed and executable, so it keeps running forever. Mirror the deletion.
+# Git's own *.sample files ship with `git init`, are inert, and are left alone.
 for installed in "$HOOKS_DST"/*; do
   [ -f "$installed" ] || continue
   installed_name="$(basename "$installed")"

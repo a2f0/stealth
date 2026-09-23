@@ -51,6 +51,8 @@ commit, repair rounds produce new commits to read.
 ## Prerequisites
 
 - `git`, `gh` (authenticated), `awk`, `realpath`, and `tar` on `PATH`.
+- Commit signing configured so `git commit -S` works without a prompt; repair
+  and base-merge commits are signed, and pushes refuse unsigned commits.
 - The `@tearleads/agent-tool` package in the fetched base commit. During the
   package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
   independently trusted installation outside the repository checkout.
@@ -115,7 +117,10 @@ REVIEWER_PATH=""
 for reviewer_bin in "$CLAUDE_BIN" "$CODEX_BIN"; do
   [ -z "$reviewer_bin" ] || REVIEWER_PATH="${REVIEWER_PATH:+$REVIEWER_PATH:}${reviewer_bin%/*}"
 done
-PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}${REVIEWER_PATH:+:$REVIEWER_PATH}:/usr/bin:/bin:/usr/sbin:/sbin"
+# Commits are signed: keep the signing program (gpg, when installed) on PATH,
+# or git can neither sign commits nor verify their signatures.
+GPG_BIN=$(resolve_bootstrap_tool gpg 2>/dev/null || true)
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}${GPG_BIN:+:${GPG_BIN%/*}}${REVIEWER_PATH:+:$REVIEWER_PATH}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -136,6 +141,32 @@ PR_LINES=$(gh pr list --head "$BRANCH" --state open --json number,headRepository
 PR_NUMBER=$(printf '%s\n' "$PR_LINES" | awk -v repository="$FEATURE_REPO" '$2 == repository { print $1 }')
 [ "$(printf '%s\n' "$PR_NUMBER" | awk 'NF { count++ } END { print count + 0 }')" -le 1 ] || { echo "Error: multiple PRs match $FEATURE_REPO:$BRANCH" >&2; exit 1; }
 TRUSTED_AGENT_TOOL_TMP=""
+# `--no-verify` pushes skip the feature checkout's pre-push hook, so every push
+# first runs the hook's commit-trust check itself, taken from the trusted base:
+# each commit being pushed must be signed and free of Co-authored-by trailers.
+# During the bootstrap PR that introduces the check, the base has no copy; set
+# TEARLEADS_COMMIT_TRUST_SCRIPT to an independently trusted copy instead.
+verify_commit_trust() {
+  trust_base=$1
+  trust_dir=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-commit-trust.XXXXXX") || return 1
+  if git cat-file -e "$trust_base:scripts/checks/checkCommitTrust.sh" 2>/dev/null; then
+    git show "$trust_base:scripts/checks/checkCommitTrust.sh" >"$trust_dir/checkCommitTrust.sh" || { rm -rf "$trust_dir"; return 1; }
+    trust_script="$trust_dir/checkCommitTrust.sh"
+  elif [ -n "${TEARLEADS_COMMIT_TRUST_SCRIPT:-}" ]; then
+    trust_script=$("$REALPATH_BIN" "$TEARLEADS_COMMIT_TRUST_SCRIPT") || { rm -rf "$trust_dir"; return 1; }
+    case "$trust_script" in
+      "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted commit-trust check must be outside the feature checkout" >&2; rm -rf "$trust_dir"; return 1 ;;
+    esac
+  else
+    echo "Error: base has no commit-trust check; set TEARLEADS_COMMIT_TRUST_SCRIPT to a trusted copy outside the checkout" >&2
+    rm -rf "$trust_dir"
+    return 1
+  fi
+  trust_status=0
+  sh "$trust_script" --range "$trust_base..HEAD" || trust_status=$?
+  rm -rf "$trust_dir"
+  [ "$trust_status" -eq 0 ] || { echo "Error: refusing to push unsigned or co-authored commits" >&2; return 1; }
+}
 ```
 
 If `$BRANCH` equals `$DEFAULT_BRANCH` (or a conventional `main`/`master`), report
@@ -234,13 +265,14 @@ Require a clean worktree before fetching or snapshotting anything:
    ```bash
    if [ "$REPAIR_ROUNDS" -ne 0 ]; then
      PRE_SYNC_HEAD=$(git rev-parse HEAD)
-     git -c core.hooksPath=/dev/null -c commit.gpgSign=false merge --no-edit "$FETCHED_BASE" || {
+     git -c core.hooksPath=/dev/null merge -S --no-edit "$FETCHED_BASE" || {
        git -c core.hooksPath=/dev/null merge --abort
        echo "Error: merging the latest $BASE_REF into $BRANCH conflicts — resolve it and re-run" >&2
        exit 1
      }
 
      if [ -n "$PR_NUMBER" ] && [ "$(git rev-parse HEAD)" != "$PRE_SYNC_HEAD" ]; then
+       verify_commit_trust "$FETCHED_BASE" || exit 1
        git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"
      fi
    fi
@@ -257,9 +289,10 @@ Require a clean worktree before fetching or snapshotting anything:
    no-op. **When a PR is open**, push the updated head without force so the
    pushed head still matches what is reviewed — but **only when the merge
    actually moved `HEAD`**, so an already-current branch does not push for
-   nothing. The push bypasses feature-controlled hooks; **with no PR**, the
-   merge stays local
-   and `open-pr` pushes it later, so the flow's single push is preserved:
+   nothing. The merge commit is signed, and the push bypasses
+   feature-controlled hooks after running their commit-trust check from the
+   trusted base; **with no PR**, the merge stays local and `open-pr` pushes it
+   later, so the flow's single push is preserved:
 
    Then snapshot the head under review — the integrated head when the sync ran,
    the current head when it was skipped:
@@ -434,16 +467,23 @@ Require a clean worktree before fetching or snapshotting anything:
           actions. Never execute a branch-controlled preflight directly in the
           credential-bearing review shell.
        4. Stage only the repair paths and commit with a valid conventional
-          subject, with contributor-controlled hooks and signing disabled:
+          subject, signed, with contributor-controlled hooks disabled:
 
           ```bash
           git add <intended-repair-paths>
-          git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "$REPAIR_SUBJECT"
+          git -c core.hooksPath=/dev/null commit -S -m "$REPAIR_SUBJECT"
           ```
 
           **When a PR is open, push without force and with
           `--no-verify`** so feature-controlled hooks cannot run with ambient
-          credentials; the sandboxed validation in step 3 remains authoritative.
+          credentials; the sandboxed validation in step 3 remains authoritative,
+          and the hook's commit-trust check runs from the trusted base first:
+
+          ```bash
+          verify_commit_trust "$FETCHED_BASE" || exit 1
+          git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"
+          ```
+
           **With no PR, do not push** — the repairs stay local and are pushed
           once, later, when the PR is opened. Stop if unrelated changes are mixed
           into the worktree.
