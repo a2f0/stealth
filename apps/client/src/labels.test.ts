@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { countLabel, formatLabel } from "./labels";
+import { countLabel, formatBytes, formatLabel } from "./labels";
 
 test("countLabel pluralizes regular and irregular nouns", () => {
   expect(countLabel(0, "audit")).toBe("0 audits");
@@ -15,4 +15,10 @@ test("formatLabel turns machine values into sentence case", () => {
   expect(formatLabel("high")).toBe("High");
   expect(formatLabel("FOOD_AND_DRINK")).toBe("Food and drink");
   expect(formatLabel("")).toBe("");
+});
+
+test("formatBytes uses the largest sensible unit", () => {
+  expect(formatBytes(512)).toBe("512 B");
+  expect(formatBytes(3_500)).toBe("3.4 KB");
+  expect(formatBytes(12 * 1024 * 1024)).toBe("12.0 MB");
 });

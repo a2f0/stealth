@@ -867,6 +867,19 @@ async function createFixture(options?: { pendingTransition?: boolean }) {
   await applyMigration(database, "0007_create_finance.sql");
   await applyMigration(database, "0009_retain_finance_history.sql");
   await applyMigration(database, "0034_create_finance_expense_categories.sql");
+  for (const migration of [
+    "0001_create_objects.sql",
+    "0006_scope_objects_to_organizations.sql",
+    "0025_classify_objects.sql",
+    "0002_create_inbound_emails.sql",
+    "0011_soft_delete_organizations.sql",
+    "0012_scope_inbound_emails_to_organizations.sql",
+    "0016_soft_delete_inbound_emails.sql",
+    "0035_create_library_folders.sql",
+    "0036_create_inbound_email_links.sql",
+  ]) {
+    await applyMigration(database, migration);
+  }
   const requestPlaid = mockPlaid(options);
   const bindings = bindingsFor(database);
   return {

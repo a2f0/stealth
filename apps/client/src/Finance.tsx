@@ -19,13 +19,13 @@ import {
 import {
   type Dispatch,
   type FormEvent,
-  type MouseEvent,
   type SetStateAction,
   useCallback,
   useEffect,
   useRef,
   useState,
 } from "react";
+import type { LinkedEmail } from "./api";
 import { websiteUrl } from "./config";
 import { FinanceCategories } from "./FinanceCategories";
 import { FinanceReports } from "./FinanceReports";
@@ -49,6 +49,7 @@ import { formatMoney } from "./financeFormat";
 import { type FinancePage, financePageFor, financePages } from "./financePages";
 import { filterTransactionsByAccount } from "./financeTransactions";
 import { countLabel, formatLabel } from "./labels";
+import { handleNavigation, inboxEmailPath } from "./workspacePaths";
 
 const linkTokenStorageKey = "tearleads.plaid.linkToken";
 
@@ -708,6 +709,7 @@ function AccountCard({
 interface AnnotationHandlers {
   busy: boolean;
   categories: ExpenseCategory[];
+  onNavigate: (pathname: string) => void;
   onAnnotate: (
     transaction: FinanceTransaction,
     input: FinanceTransactionAnnotationInput,
@@ -723,13 +725,11 @@ interface AnnotationHandlers {
 function TransactionHistory({
   accountName,
   onClearFilter,
-  onNavigate,
   transactions,
   ...handlers
 }: AnnotationHandlers & {
   accountName: string | undefined;
   onClearFilter: () => void;
-  onNavigate: (pathname: string) => void;
   transactions: FinanceTransaction[] | undefined;
 }) {
   return (
@@ -759,7 +759,10 @@ function TransactionHistory({
       {Boolean(transactions?.length) && !handlers.categories.length && (
         <Banner
           actions={
-            <Button onClick={() => onNavigate("/finance/categories")} size="sm">
+            <Button
+              onClick={() => handlers.onNavigate("/finance/categories")}
+              size="sm"
+            >
               Set up categories
             </Button>
           }
@@ -824,6 +827,7 @@ function TransactionRow({
   categories,
   onAnnotate,
   onCategorize,
+  onNavigate,
   onSelectAnnotation,
   selectedTransactionId,
   transaction,
@@ -844,6 +848,10 @@ function TransactionRow({
         <span className="rowMeta financeTransactionMeta">
           {transactionMeta(transaction)}
         </span>
+        <LinkedEmailChips
+          emails={transaction.linkedEmails}
+          onNavigate={onNavigate}
+        />
       </div>
       <div className="financeTransactionCategory">
         {categories.length > 0 && (
@@ -903,6 +911,35 @@ function TransactionRow({
         />
       )}
     </li>
+  );
+}
+
+/** Inbox emails, such as receipts, linked to a transaction. */
+function LinkedEmailChips({
+  emails,
+  onNavigate,
+}: {
+  emails: LinkedEmail[];
+  onNavigate: (pathname: string) => void;
+}) {
+  if (!emails.length) return null;
+  return (
+    <span className="financeTransactionEmails">
+      {emails.map((email) => {
+        const path = inboxEmailPath(email.id);
+        return (
+          <a
+            className="financeEmailChip"
+            href={path}
+            key={email.linkId}
+            onClick={(event) => handleNavigation(event, path, onNavigate)}
+          >
+            <Icon name="mail" size={14} />
+            <span className="truncate">{email.subject || "(no subject)"}</span>
+          </a>
+        );
+      })}
+    </span>
   );
 }
 
@@ -1069,24 +1106,6 @@ function formatDate(value: string) {
     day: "numeric",
     month: "short",
   }).format(new Date(`${value}T12:00:00`));
-}
-
-function handleNavigation(
-  event: MouseEvent<HTMLAnchorElement>,
-  pathname: string,
-  onNavigate: (pathname: string) => void,
-) {
-  if (
-    event.button !== 0 ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.shiftKey ||
-    event.altKey
-  ) {
-    return;
-  }
-  event.preventDefault();
-  onNavigate(pathname);
 }
 
 function messageFrom(cause: unknown) {

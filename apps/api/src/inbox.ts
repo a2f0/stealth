@@ -2,6 +2,11 @@ import { type Context, Hono } from "hono";
 import PostalMime from "postal-mime";
 import type { AuthVariables } from "./authMiddleware";
 import { organizationInboxAddress } from "./inboundEmailAddress";
+import {
+  createEmailLink,
+  deleteEmailLink,
+  listEmailLinks,
+} from "./inboundEmailLinks";
 import type { Bindings } from "./types";
 
 type InboxEnv = {
@@ -90,9 +95,10 @@ inbox.get("/:id", async (context) => {
     return context.json({ error: "Email content not found." }, 404);
   }
 
-  const [rawContents, attachments] = await Promise.all([
+  const [rawContents, attachments, links] = await Promise.all([
     raw.arrayBuffer(),
     findAttachments(context.env.DB, organizationId, email.id),
+    listEmailLinks(context, organizationId, email.id),
   ]);
   const parsed = await PostalMime.parse(rawContents, {
     maxHeadersSize: 128 * 1024,
@@ -105,10 +111,14 @@ inbox.get("/:id", async (context) => {
       ...toEmailSummary(email),
       attachments: attachments.map(toAttachment),
       html: parsed.html ?? null,
+      links,
       text: parsed.text ?? null,
     },
   });
 });
+
+inbox.post("/:id/links", createEmailLink);
+inbox.delete("/:id/links/:linkId", deleteEmailLink);
 
 inbox.get("/:emailId/attachments/:attachmentId", async (context) => {
   const folder = inboxFolder(context.req.query("folder"));
