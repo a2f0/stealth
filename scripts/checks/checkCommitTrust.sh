@@ -5,28 +5,31 @@ set -eu
 # Verifies that every commit in a range is (1) signed and (2) free of
 # Co-authored-by trailers. Designed to be called from the pre-push hook with a
 # computed rev-range, e.g. `checkCommitTrust.sh --range "$remote..$local"`.
+# Unlike the reference version, more rev-list arguments may follow the range,
+# e.g. `--range "$local" --not --remotes=origin` to check every commit a push
+# adds to that remote, whichever local branch it was committed on.
 
 usage() {
-  echo "Usage: $0 --range <rev-range>" >&2
+  echo "Usage: $0 --range <rev-range> [<rev-list argument>...]" >&2
   exit 2
 }
 
-if [ "$#" -eq 2 ] && [ "$1" = "--range" ]; then
-  range=$2
-elif [ "$#" -eq 1 ]; then
-  case "$1" in
-    --range=*)
-      range=${1#--range=}
-      ;;
-    *)
-      usage
-      ;;
-  esac
-else
-  usage
-fi
+case "${1:-}" in
+  --range)
+    shift
+    [ "$#" -ge 1 ] || usage
+    ;;
+  --range=*)
+    [ "$#" -eq 1 ] || usage
+    set -- "${1#--range=}"
+    ;;
+  *)
+    usage
+    ;;
+esac
 
-[ -n "${range:-}" ] || usage
+[ -n "$1" ] || usage
+range="$*"
 
 # %G? is "N" when a commit carries no signature and "B" when it carries a bad
 # (corrupt or forged) signature -- both are rejected. We accept G/U/E/X/Y/R so a
@@ -40,6 +43,7 @@ check_signed() {
   if [ "$sig" = "N" ] || [ "$sig" = "B" ]; then
     echo "Error: commit $commit has a missing or invalid signature (status: $sig)." >&2
     echo "Sign it (e.g. 'git commit --amend -S' or rebase with --gpg-sign) before pushing." >&2
+    echo "If it is signed, git could not read the signature: GPG signing needs gpg on PATH, and SSH signing needs gpg.ssh.allowedSignersFile." >&2
     return 1
   fi
 
@@ -73,7 +77,7 @@ failed=0
 # above only run for the few offenders. Assigning rather than iterating $(...)
 # also lets a git failure (bad range, missing object) surface here instead of
 # silently expanding to an empty list and passing the check.
-if ! commit_info=$(git log --format="%H %G? %(trailers:key=Co-authored-by,valueonly,separator=%x2C)" "$range"); then
+if ! commit_info=$(git log --format="%H %G? %(trailers:key=Co-authored-by,valueonly,separator=%x2C)" "$@" --); then
   echo "Error: failed to list commits for range '$range'." >&2
   exit 1
 fi

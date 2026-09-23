@@ -60,7 +60,9 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 - The trusted `@tearleads/agent-tool` setup required by the delegated
   `cross-agent-review`, `open-pr`, and `squash-merge` skills.
 - `node_modules` installed (`bun install`) so repository checks and hooks run.
-- Commit signing configured so `git commit -S` works without a prompt. Every
+- Commit signing configured so `git commit -S` works without a prompt, and so
+  git can verify the result (SSH signing also needs
+  `gpg.ssh.allowedSignersFile`). Every
   push in the flow is refused while any commit in the branch is unsigned.
 - macOS Seatbelt for credential-free preflights. The delegated preflight fails
   closed on another platform.
@@ -134,7 +136,7 @@ BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
   exit 1
 }
 
-if git cat-file -e "$BASE_HEAD:packages/agent-tool/src/index.ts" 2>/dev/null; then
+if git cat-file -e "${BASE_HEAD}:packages/agent-tool/src/index.ts" 2>/dev/null; then
   TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
   trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
   git archive "$BASE_HEAD" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
@@ -154,16 +156,24 @@ fi
 # During the bootstrap PR that introduces the check, the base has no copy; set
 # TEARLEADS_COMMIT_TRUST_SCRIPT to an independently trusted copy instead.
 verify_commit_trust() {
-  trust_base=$1
+  # Only a real commit may name the trusted base: an empty one would read the
+  # feature branch's own copy from the index and check an empty range.
+  [ -n "${1:-}" ] && trust_base=$(git rev-parse --verify --quiet "${1}^{commit}") || {
+    echo "Error: verify_commit_trust needs the trusted base commit" >&2
+    return 1
+  }
   trust_dir=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-commit-trust.XXXXXX") || return 1
-  if git cat-file -e "$trust_base:scripts/checks/checkCommitTrust.sh" 2>/dev/null; then
-    git show "$trust_base:scripts/checks/checkCommitTrust.sh" >"$trust_dir/checkCommitTrust.sh" || { rm -rf "$trust_dir"; return 1; }
+  if git cat-file -e "${trust_base}:scripts/checks/checkCommitTrust.sh" 2>/dev/null; then
+    git show "${trust_base}:scripts/checks/checkCommitTrust.sh" >"$trust_dir/checkCommitTrust.sh" || { rm -rf "$trust_dir"; return 1; }
     trust_script="$trust_dir/checkCommitTrust.sh"
   elif [ -n "${TEARLEADS_COMMIT_TRUST_SCRIPT:-}" ]; then
     trust_script=$("$REALPATH_BIN" "$TEARLEADS_COMMIT_TRUST_SCRIPT") || { rm -rf "$trust_dir"; return 1; }
-    case "$trust_script" in
-      "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted commit-trust check must be outside the feature checkout" >&2; rm -rf "$trust_dir"; return 1 ;;
-    esac
+    # Outside every worktree of this repository, not just the current one.
+    if git worktree list --porcelain | awk -v script="$trust_script" 'sub(/^worktree /, "") && (script == $0 || index(script, $0 "/") == 1) { found = 1 } END { exit !found }'; then
+      echo "Error: trusted commit-trust check must be outside every checkout of this repository" >&2
+      rm -rf "$trust_dir"
+      return 1
+    fi
   else
     echo "Error: base has no commit-trust check; set TEARLEADS_COMMIT_TRUST_SCRIPT to a trusted copy outside the checkout" >&2
     rm -rf "$trust_dir"
@@ -229,6 +239,15 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" runPreflight check
    git add <intended-paths>
    git -c core.hooksPath=/dev/null commit -S -m "$COMMIT_SUBJECT"
+   ```
+
+   On the resume path only, push the committed work to the branch's push remote
+   (resolved by the PR lookup above) after the same trusted commit-trust check
+   every push in this flow runs:
+
+   ```bash
+   verify_commit_trust "$BASE_HEAD" || exit 1
+   git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"
    ```
 
    Skip `git add` and `git commit` when there is no uncommitted work. The

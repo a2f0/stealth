@@ -113,7 +113,7 @@ function fixture() {
       return [];
     }
   };
-  return { bunCalls, commit, copyPushGate, cwd, must, run };
+  return { bunCalls, commit, copyPushGate, cwd, env, must, root, run };
 }
 
 describe("checkCommitTrust.sh", () => {
@@ -167,9 +167,10 @@ describe("pre-push hook", () => {
     repo.commit("chore: add push gate", true);
     repo.must("sh", "scripts/git/install-hooks.sh");
     repo.must("git", "init", "--quiet", "--bare", "remote.git");
+    repo.must("git", "remote", "add", "origin", "./remote.git");
     repo.must("git", "switch", "--quiet", "-c", "feature");
     const push = (refspec = "HEAD:refs/heads/feature") =>
-      repo.run("git", "push", "--quiet", "./remote.git", refspec);
+      repo.run("git", "push", "--quiet", "origin", refspec);
     return { ...repo, push };
   }
 
@@ -202,6 +203,18 @@ describe("pre-push hook", () => {
     expect(result.stderr).toContain("missing or invalid signature");
   });
 
+  test("refuses unsigned work carried from local main onto a new branch", () => {
+    const repo = pushFixture();
+    expect(repo.push("main:refs/heads/main").code).toBe(0);
+    repo.must("git", "switch", "--quiet", "main");
+    const unsigned = repo.commit("feat: unpushed local main work", false);
+    repo.must("git", "switch", "--quiet", "-c", "follow-up");
+    repo.commit("feat: signed branch work", true);
+    const result = repo.push("HEAD:refs/heads/follow-up");
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(`commit ${unsigned} has a missing`);
+  });
+
   test("lets a branch deletion through", () => {
     const repo = pushFixture();
     repo.commit("feat: signed work", true);
@@ -219,4 +232,98 @@ describe("pre-push hook", () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("pre-push hook is stale");
   });
+});
+
+describe("the skills' verify_commit_trust gate", () => {
+  const skill = readFileSync(
+    path.join(repositoryRoot, ".claude/skills/open-pr/SKILL.md"),
+    "utf8",
+  );
+  const gate = /^verify_commit_trust\(\) \{\n[\s\S]*?\n\}$/m.exec(skill)?.[0];
+  const realpath = Bun.which("realpath") ?? "/usr/bin/realpath";
+  // The agent's shell may be zsh, whose parameter modifiers once broke it.
+  const shells = ["sh", ...(Bun.which("zsh") ? ["zsh"] : [])];
+
+  function gateFixture(withTrustedCopy: boolean) {
+    const repo = fixture();
+    if (withTrustedCopy) repo.copyPushGate();
+    repo.must("git", "add", "--all");
+    repo.commit("chore: base", true);
+    const base = repo.must("git", "rev-parse", "HEAD");
+    repo.must("git", "switch", "--quiet", "-c", "feature");
+    const verify = (shell: string, trustBase: string, extraEnv = {}) => {
+      const result = Bun.spawnSync(
+        [
+          shell,
+          "-c",
+          `REALPATH_BIN=${realpath}\n${gate}\nverify_commit_trust "$1"`,
+          shell,
+          trustBase,
+        ],
+        {
+          cwd: repo.cwd,
+          env: { ...repo.env, ...extraEnv },
+          stderr: "pipe",
+          stdout: "pipe",
+        },
+      );
+      return { code: result.exitCode, stderr: result.stderr.toString() };
+    };
+    return { ...repo, base, verify };
+  }
+
+  test("is defined in the skill", () => {
+    expect(gate).toBeDefined();
+  });
+
+  for (const shell of shells) {
+    test(`checks commits against the trusted base copy under ${shell}`, () => {
+      const repo = gateFixture(true);
+      repo.commit("feat: signed work", true);
+      const signed = repo.verify(shell, repo.base);
+      expect(signed.code, signed.stderr).toBe(0);
+
+      repo.commit("feat: unsigned work", false);
+      const unsigned = repo.verify(shell, repo.base);
+      expect(unsigned.code).not.toBe(0);
+      expect(unsigned.stderr).toContain("missing or invalid signature");
+      expect(unsigned.stderr).toContain("refusing to push");
+    });
+
+    test(`refuses a missing base rather than check nothing under ${shell}`, () => {
+      const repo = gateFixture(true);
+      repo.commit("feat: unsigned work", false);
+      for (const trustBase of ["", "not-a-commit"]) {
+        const result = repo.verify(shell, trustBase);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain("needs the trusted base commit");
+      }
+    });
+
+    test(`takes a bootstrap copy only from outside the checkout under ${shell}`, () => {
+      const repo = gateFixture(false);
+      repo.commit("feat: signed work", true);
+      expect(repo.verify(shell, repo.base).stderr).toContain(
+        "base has no commit-trust check",
+      );
+
+      const inside = path.join(repo.cwd, "checkCommitTrust.sh");
+      writeFileSync(inside, "#!/bin/sh\nexit 0\n");
+      const rejected = repo.verify(shell, repo.base, {
+        TEARLEADS_COMMIT_TRUST_SCRIPT: inside,
+      });
+      expect(rejected.code).not.toBe(0);
+      expect(rejected.stderr).toContain("outside every checkout");
+
+      const outside = path.join(repo.root, "checkCommitTrust.sh");
+      writeFileSync(
+        outside,
+        readFileSync(path.join(repositoryRoot, trustScript)),
+      );
+      const trusted = repo.verify(shell, repo.base, {
+        TEARLEADS_COMMIT_TRUST_SCRIPT: outside,
+      });
+      expect(trusted.code, trusted.stderr).toBe(0);
+    });
+  }
 });

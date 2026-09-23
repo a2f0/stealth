@@ -132,7 +132,7 @@ git fetch --quiet "$BASE_REPO_URL" "$BASE_BRANCH" || { echo "Error: could not fe
 TOOL_BASE_SHA=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || { echo "Error: fetched PR base is unavailable" >&2; exit 1; }
 [ "$TOOL_BASE_SHA" = "$PR_BASE_SHA" ] || { echo "Error: PR base moved while resolving the trusted agent-tool; retry" >&2; exit 1; }
 
-if git cat-file -e "$TOOL_BASE_SHA:packages/agent-tool/src/index.ts" 2>/dev/null; then
+if git cat-file -e "${TOOL_BASE_SHA}:packages/agent-tool/src/index.ts" 2>/dev/null; then
   TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
   trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
   git archive "$TOOL_BASE_SHA" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }

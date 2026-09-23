@@ -291,21 +291,26 @@ test("shipping skills gate every commit push on the trusted commit-trust check",
       // The check comes from the trusted base, never the feature checkout.
       expect(content).toContain("verify_commit_trust() {");
       expect(content).toContain(
-        'git show "$trust_base:scripts/checks/checkCommitTrust.sh"',
+        'git show "$' + '{trust_base}:scripts/checks/checkCommitTrust.sh"',
       );
       expect(content).toContain(
         'sh "$trust_script" --range "$trust_base..HEAD"',
       );
 
       const lines = content.split("\n").map((line) => line.trim());
+      let pushes = 0;
       lines.forEach((line, index) => {
-        if (!line.startsWith("git push --no-verify")) return;
+        if (!/^git .* ?push .*--no-verify/.test(line)) return;
+        pushes += 1;
         const previous = lines
           .slice(0, index)
           .reverse()
           .find((candidate) => candidate !== "");
         expect(previous).toMatch(/^verify_commit_trust "\$\w+" \|\| exit 1$/);
       });
+      expect(pushes).toBeGreaterThanOrEqual(
+        skill === "cross-agent-review" ? 2 : 1,
+      );
     }
 
     // A branch delete pushes no commits; it must not run the full hook.
@@ -320,6 +325,31 @@ test("shipping skills gate every commit push on the trusted commit-trust check",
     expect(deletes[0]).toContain("-c core.hooksPath=/dev/null");
     expect(deletes[0]).toContain("push --no-verify");
   }
+});
+
+test("shipping skills share one commit-trust gate and avoid zsh modifiers", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  const gates = new Set<string>();
+  for (const skillRoot of [".claude/skills", ".codex/skills"]) {
+    for (const skill of [
+      "cross-agent-review",
+      "open-pr",
+      "reset",
+      "ship-pr",
+      "squash-merge",
+    ]) {
+      const content = readFileSync(
+        path.join(repositoryRoot, skillRoot, skill, "SKILL.md"),
+        "utf8",
+      );
+      // The agent's shell may be zsh, which reads "$VAR:s…" or "$VAR:A…" as
+      // history modifiers; every such expansion must be braced.
+      expect(content.match(/\$[A-Za-z_]\w*:[A-Za-z&]/g) ?? []).toEqual([]);
+      const gate = /^verify_commit_trust\(\) \{\n[\s\S]*?\n\}$/m.exec(content);
+      if (gate) gates.add(gate[0]);
+    }
+  }
+  expect(gates.size).toBe(1);
 });
 
 test("reset reaches the exact fetched upstream before installing hooks", () => {
@@ -378,10 +408,10 @@ test("in-session review fallback loads policy from the fetched base", () => {
   ]) {
     const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
     const reviewPolicy = content.indexOf(
-      'git show "$FETCHED_BASE:REVIEW.md" > "$REVIEW_POLICY_FILE"',
+      'git show "$' + '{FETCHED_BASE}:REVIEW.md" > "$REVIEW_POLICY_FILE"',
     );
     const agentsPolicy = content.indexOf(
-      'git show "$FETCHED_BASE:AGENTS.md" > "$REVIEW_POLICY_FILE"',
+      'git show "$' + '{FETCHED_BASE}:AGENTS.md" > "$REVIEW_POLICY_FILE"',
     );
     const fileReview = content.indexOf(
       "Review each file against the trusted guidelines materialized in",
