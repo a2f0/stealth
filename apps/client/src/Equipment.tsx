@@ -12,7 +12,14 @@ import {
   PageHeader,
   PageSection,
 } from "@tearleads/ui/react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { type LinkedEmail, unlinkInboundEmail } from "./api";
 import {
   createEquipment,
@@ -26,6 +33,7 @@ import {
   listEquipment,
   updateEquipment,
 } from "./equipmentApi";
+import { type AssigneeFilter, filterEquipment } from "./equipmentFilters";
 import {
   equipmentName,
   equipmentTypeIcon,
@@ -38,8 +46,6 @@ import {
   equipmentPath,
   handleNavigation,
 } from "./workspacePaths";
-
-type AssigneeFilter = "everyone" | "unassigned" | string;
 
 export function Equipment({
   onNavigate,
@@ -101,21 +107,6 @@ function useEquipmentListing() {
     }
   }
   return { add, adding, error, listing, notice, setAdding };
-}
-
-function filterEquipment(
-  equipment: EquipmentItem[],
-  type: string,
-  assignee: AssigneeFilter,
-) {
-  return equipment.filter(
-    (item) =>
-      (type === "all" || item.type === type) &&
-      (assignee === "everyone" ||
-        (assignee === "unassigned"
-          ? !item.assignee
-          : item.assignee?.id === assignee)),
-  );
 }
 
 function EquipmentListPage({
@@ -301,7 +292,7 @@ function EquipmentList({
   }
   return (
     <Card flush>
-      <ul className="rowList">
+      <ul className="rowList equipmentList">
         {equipment.map((item) => {
           const path = equipmentPath(item.id);
           return (
@@ -323,12 +314,12 @@ function EquipmentList({
                   </span>
                 </span>
                 {item.emailCount > 0 && (
-                  <span
-                    className="equipmentEmailCount"
-                    title={countLabel(item.emailCount, "linked email")}
-                  >
+                  <span className="equipmentEmailCount">
                     <Icon name="mail" size={14} />
-                    {item.emailCount}
+                    <span aria-hidden="true">{item.emailCount}</span>
+                    <span className="srOnly">
+                      {countLabel(item.emailCount, "linked email")}
+                    </span>
                   </span>
                 )}
                 <Assignee member={item.assignee} />
@@ -675,6 +666,9 @@ function EquipmentForm({
     type: initial?.type ?? types[0] ?? "",
   });
   const [saving, setSaving] = useState(false);
+  const firstField = useRef<HTMLSelectElement>(null);
+  // The button that opened the form is gone; move focus into the form.
+  useEffect(() => firstField.current?.focus(), []);
   const set = <Key extends keyof EquipmentInput>(
     key: Key,
     value: EquipmentInput[Key],
@@ -717,6 +711,7 @@ function EquipmentForm({
       title={initial ? "Edit equipment" : "Add equipment"}
     >
       <EquipmentFields
+        firstField={firstField}
         form={form}
         members={members}
         set={set}
@@ -727,11 +722,13 @@ function EquipmentForm({
 }
 
 function EquipmentFields({
+  firstField,
   form,
   members,
   set,
   typeOptions,
 }: {
+  firstField: RefObject<HTMLSelectElement | null>;
   form: EquipmentInput;
   members: EquipmentMember[];
   set: <Key extends keyof EquipmentInput>(
@@ -745,6 +742,7 @@ function EquipmentFields({
       <Field label="Type">
         <select
           className="select"
+          ref={firstField}
           onChange={(event) => set("type", event.target.value)}
           required
           value={form.type}

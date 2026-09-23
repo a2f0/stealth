@@ -91,16 +91,16 @@ export async function createEmailLink(context: LinkContext) {
   ) {
     return financeRequired(context);
   }
-  if (!(await targetExists(database, organizationId, input))) {
-    return context.json({ error: "Link target not found." }, 404);
-  }
+  // The target is checked in the insert itself: a target deleted a moment
+  // earlier (after its cleanup trigger ran) must not gain an orphaned link.
   const id = crypto.randomUUID();
   await database
     .prepare(
       `INSERT INTO inbound_email_links
          (id, organization_id, email_id, target_type, target_id, created_by,
           created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+       SELECT ?, ?, ?, ?, ?, ?, ?
+       WHERE EXISTS (${targetQueries[input.targetType]})
        ON CONFLICT (email_id, target_type, target_id) DO NOTHING`,
     )
     .bind(
@@ -111,6 +111,8 @@ export async function createEmailLink(context: LinkContext) {
       input.targetId,
       context.get("authSession").user.id,
       new Date().toISOString(),
+      input.targetId,
+      organizationId,
     )
     .run();
   const row = (await emailLinkRows(database, organizationId, email.id)).find(
@@ -229,23 +231,14 @@ async function emailLinkRows(
   return result.results;
 }
 
-async function targetExists(
-  database: D1Database,
-  organizationId: string,
-  input: EmailLinkInput,
-) {
-  const queries: Record<EmailLinkTargetType, string> = {
-    equipment: `SELECT id FROM equipment WHERE id = ? AND organization_id = ?`,
-    finance_transaction: `SELECT id FROM plaid_transactions
-      WHERE id = ? AND organization_id = ? AND source_status = 'active'`,
-    library_folder: `SELECT id FROM library_folders
-      WHERE id = ? AND organization_id = ?`,
-  };
-  const query = queries[input.targetType];
-  return Boolean(
-    await database.prepare(query).bind(input.targetId, organizationId).first(),
-  );
-}
+/** Each target type's existence check, bound to (target id, organization). */
+const targetQueries: Record<EmailLinkTargetType, string> = {
+  equipment: `SELECT 1 FROM equipment WHERE id = ? AND organization_id = ?`,
+  finance_transaction: `SELECT 1 FROM plaid_transactions
+    WHERE id = ? AND organization_id = ? AND source_status = 'active'`,
+  library_folder: `SELECT 1 FROM library_folders
+    WHERE id = ? AND organization_id = ?`,
+};
 
 function canUseFinance(context: LinkContext) {
   return userHasCapability(

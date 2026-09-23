@@ -51,3 +51,32 @@ describe("equipment API", () => {
     }
   });
 });
+
+describe("equipment API errors", () => {
+  it("sends JSON and surfaces the API's error message", async () => {
+    const originalFetch = globalThis.fetch;
+    const headers: unknown[] = [];
+    let status = 400;
+    globalThis.fetch = (async (_input, init) => {
+      headers.push(init?.headers);
+      return status === 400
+        ? Response.json({ error: "Equipment details are invalid." }, { status })
+        : new Response("upstream failure", { status });
+    }) as typeof fetch;
+    try {
+      await expect(updateEquipment("item-1", { make: "" })).rejects.toThrow(
+        "Equipment details are invalid.",
+      );
+      expect(headers[0]).toEqual({ "Content-Type": "application/json" });
+      status = 502;
+      await expect(listEquipment()).rejects.toThrow(
+        "Request failed with status 502.",
+      );
+      await expect(deleteEquipment("item-1")).rejects.toThrow(
+        "Request failed with status 502.",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

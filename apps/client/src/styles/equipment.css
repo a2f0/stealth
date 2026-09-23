@@ -18,6 +18,11 @@
   gap: var(--space-4);
 }
 
+/* Rows are links inside list items, so .row + .row cannot draw the divider. */
+.equipmentList > li + li {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
 .equipmentTypeMark {
   display: grid;
   flex: none;
@@ -99,6 +104,11 @@
   /* The assignee drops below the name so long names still fit. */
   .equipmentRow {
     flex-wrap: wrap;
+  }
+
+  /* The name takes the space beside the icon; the count stays on its line. */
+  .equipmentRow > .rowMain {
+    flex: 1 1 0;
   }
 
   .equipmentAssignee {

@@ -141,7 +141,8 @@ equipment.get("/:id", async (context) => {
   });
 });
 
-// Updates the fields present in the body; `assigneeId: null` unassigns.
+// Updates only the fields present in the body, so concurrent edits to other
+// fields are kept; `assigneeId: null` unassigns.
 equipment.patch("/:id", async (context) => {
   if (!canManage(context)) return managerRequired(context);
   const organizationId = context.get("organizationId");
@@ -151,30 +152,26 @@ equipment.patch("/:id", async (context) => {
     context.req.param("id"),
   );
   if (!existing) return equipmentNotFound(context);
-  const input = equipmentInput(
+  const changes = equipmentChanges(
     await context.req.json().catch(() => null),
-    existing,
+    existing.type,
   );
-  if (!input) return invalidEquipment(context);
+  if (!changes) return invalidEquipment(context);
+  const columns = Object.keys(changes) as EquipmentColumn[];
+  const assigneeChanges = "assigned_user_id" in changes;
+  const assigneeId = changes.assigned_user_id ?? null;
   const result = await context.env.DB.prepare(
     `UPDATE equipment
-     SET type = ?, make = ?, model = ?, serial_number = ?, purchase_date = ?,
-         assigned_user_id = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ? AND ${assigneeIsMember}`,
+     SET ${columns.map((column) => `${column} = ?, `).join("")}updated_at = ?
+     WHERE id = ? AND organization_id = ?
+       ${assigneeChanges ? `AND ${assigneeIsMember}` : ""}`,
   )
     .bind(
-      input.type,
-      input.make,
-      input.model,
-      input.serialNumber,
-      input.purchaseDate,
-      input.assigneeId,
+      ...columns.map((column) => changes[column] ?? null),
       new Date().toISOString(),
       existing.id,
       organizationId,
-      input.assigneeId,
-      organizationId,
-      input.assigneeId,
+      ...(assigneeChanges ? [assigneeId, organizationId, assigneeId] : []),
     )
     .run();
   const updated = await findEquipment(
@@ -223,36 +220,21 @@ function findEquipment(
     .first<EquipmentRow>();
 }
 
-/**
- * Validates a new item, or with `existing`, a partial update in which absent
- * fields keep their current values.
- */
-function equipmentInput(
-  body: unknown,
-  existing?: EquipmentRow,
-): EquipmentInput | null {
+/** Validates a new item; optional fields may be omitted. */
+function equipmentInput(body: unknown): EquipmentInput | null {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return null;
   }
   const field = (name: string) => Reflect.get(body, name);
-  const type = field("type") ?? existing?.type;
-  const make = requiredText(field("make") ?? existing?.make, 80);
-  const model = requiredText(field("model") ?? existing?.model, 120);
-  const serialNumber = optionalText(
-    field("serialNumber"),
-    existing?.serial_number,
-    (value) => (value.length <= 100 ? value : null),
-  );
+  const type = field("type");
+  const make = requiredText(field("make"), 80);
+  const model = requiredText(field("model"), 120);
+  const serialNumber = optionalText(field("serialNumber"), normalizeSerial);
   const purchaseDate = optionalText(
     field("purchaseDate"),
-    existing?.purchase_date,
     normalizeBusinessDate,
   );
-  const assigneeId = optionalText(
-    field("assigneeId"),
-    existing?.assigned_user_id,
-    (value) => (value.length <= 200 ? value : null),
-  );
+  const assigneeId = optionalText(field("assigneeId"), normalizeUserId);
   if (
     !isEquipmentType(type) ||
     !make ||
@@ -266,6 +248,62 @@ function equipmentInput(
   return { assigneeId, make, model, purchaseDate, serialNumber, type };
 }
 
+type EquipmentColumn =
+  | "assigned_user_id"
+  | "make"
+  | "model"
+  | "purchase_date"
+  | "serial_number"
+  | "type";
+
+/**
+ * Validates the fields present in an update, as column changes. An item keeps
+ * its current type even after that type stops being offered.
+ */
+function equipmentChanges(
+  body: unknown,
+  currentType: string,
+): Partial<Record<EquipmentColumn, string | null>> | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return null;
+  }
+  const changes: Partial<Record<EquipmentColumn, string | null>> = {};
+  const fields: Array<[string, EquipmentColumn, (value: unknown) => unknown]> =
+    [
+      [
+        "type",
+        "type",
+        (value) =>
+          isEquipmentType(value) || value === currentType ? value : undefined,
+      ],
+      ["make", "make", (value) => requiredText(value, 80) ?? undefined],
+      ["model", "model", (value) => requiredText(value, 120) ?? undefined],
+      [
+        "serialNumber",
+        "serial_number",
+        (value) => optionalText(value, normalizeSerial),
+      ],
+      [
+        "purchaseDate",
+        "purchase_date",
+        (value) => optionalText(value, normalizeBusinessDate),
+      ],
+      [
+        "assigneeId",
+        "assigned_user_id",
+        (value) => optionalText(value, normalizeUserId),
+      ],
+    ];
+  for (const [name, column, validate] of fields) {
+    const value = Reflect.get(body, name);
+    if (value === undefined) continue;
+    const valid = validate(value);
+    if (valid === undefined) return null;
+    changes[column] = valid as string | null;
+  }
+  return changes;
+}
+
 function requiredText(value: unknown, maxLength: number) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -273,20 +311,26 @@ function requiredText(value: unknown, maxLength: number) {
 }
 
 /**
- * An optional text field: absent keeps `current`, null or blank clears it.
- * Returns undefined when the value is invalid.
+ * An optional text field: absent, null, or blank is null. Returns undefined
+ * when the value is invalid.
  */
 function optionalText(
   value: unknown,
-  current: string | null | undefined,
   normalize: (value: string) => string | null,
 ) {
-  if (value === undefined) return current ?? null;
-  if (value === null) return null;
+  if (value === undefined || value === null) return null;
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   if (!trimmed) return null;
   return normalize(trimmed) ?? undefined;
+}
+
+function normalizeSerial(value: string) {
+  return value.length <= 100 ? value : null;
+}
+
+function normalizeUserId(value: string) {
+  return value.length <= 200 ? value : null;
 }
 
 function isEquipmentType(value: unknown): value is EquipmentType {

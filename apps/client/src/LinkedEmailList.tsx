@@ -89,9 +89,14 @@ export function LinkedEmailList({
   );
 }
 
+/** "Mar 3", or "Mar 3, 2024" for an earlier year, as older receipts often are. */
 function formatDate(value: string) {
+  const date = new Date(value);
   return new Intl.DateTimeFormat(undefined, {
     day: "numeric",
     month: "short",
-  }).format(new Date(value));
+    ...(date.getFullYear() === new Date().getFullYear()
+      ? {}
+      : { year: "numeric" }),
+  }).format(date);
 }

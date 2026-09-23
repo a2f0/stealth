@@ -97,16 +97,17 @@ Library documents can be organized into flat, organization-scoped folders,
 each opened at `/library/<folder-id>`. A document lives in at most one folder;
 deleting a folder returns its documents to the library root.
 
-Inbox messages can be linked to library folders and to imported finance
-transactions. Links live in one polymorphic table, `inbound_email_links`,
-whose `target_type` is `library_folder` or `finance_transaction`. A
-polymorphic reference cannot carry a foreign key, so database triggers remove
-links when their folder or transaction is deleted, and purging an email
-cascades to its links. An email in Trash keeps its links but is hidden from
-folders and transactions until it is restored, and links to transactions that
-Plaid has since removed are hidden. Creating, removing, or seeing transaction
-links requires the Finance capability. A folder lists its linked emails, and a
-transaction shows its linked emails in the Finance transaction list.
+Inbox messages can be linked to library folders, equipment, and imported
+finance transactions. Links live in one polymorphic table,
+`inbound_email_links`, whose `target_type` is `library_folder`, `equipment`,
+or `finance_transaction`. A polymorphic reference cannot carry a foreign key,
+so database triggers remove links when their target is deleted, and purging
+an email cascades to its links. An email in Trash keeps its links but is
+hidden from folders and transactions until it is restored, and links to
+transactions that Plaid has since removed are hidden. Creating, removing, or
+seeing transaction links requires the Finance capability. A folder lists its
+linked emails, and a transaction shows its linked emails in the Finance
+transaction list.
 
 PDF and image attachments preview in the inbox. PDFs are rendered in the
 browser with [PDF.js](https://mozilla.github.io/pdf.js/), which loads on the
@@ -122,9 +123,9 @@ Each item can be assigned to one organization member at a time, and removing a
 member from the organization returns their equipment to unassigned. Every
 member can view equipment; organization owners and admins add, edit, assign,
 and delete it. Receipts and other inbox emails link to equipment the same way
-they link to folders, through `inbound_email_links` with a `target_type` of
-`equipment`. The API owns the list of equipment types, so adding one needs no
-migration.
+they link to folders, and any member can link or unlink them. The API owns the
+list of equipment types, so adding one needs no migration; an item keeps its
+type if that type is later retired.
 
 ## Audits and checklists
 

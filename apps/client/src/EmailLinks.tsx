@@ -8,12 +8,12 @@ import {
   listLibraryFolders,
   unlinkInboundEmail,
 } from "./api";
-import { type EquipmentItem, listEquipment } from "./equipmentApi";
 import {
-  equipmentName,
-  equipmentTypeIcon,
-  equipmentTypeLabel,
-} from "./equipmentLabels";
+  describeEmailLink,
+  formatTransactionDate,
+} from "./emailLinkDescription";
+import { type EquipmentItem, listEquipment } from "./equipmentApi";
+import { equipmentName, equipmentTypeLabel } from "./equipmentLabels";
 import {
   type FinanceTransactionMatch,
   searchFinanceTransactions,
@@ -111,9 +111,9 @@ export function EmailLinks({
       ) : (
         !adding && (
           <p className="emailLinksEmpty">
-            Link this email to a library folder, equipment
-            {canAccessFinance ? ", or a finance transaction" : ""} to keep it
-            with related records.
+            {canAccessFinance
+              ? "Link this email to a library folder, equipment, or a finance transaction to keep it with related records."
+              : "Link this email to a library folder or equipment to keep it with related records."}
           </p>
         )
       )}
@@ -146,7 +146,7 @@ function EmailLinkChip({
   onUnlink: () => void;
   working: boolean;
 }) {
-  const { icon, label, path } = describeLink(link);
+  const { icon, label, path } = describeEmailLink(link);
   return (
     <li className="emailLinkChip">
       <a
@@ -241,37 +241,6 @@ function AddLinkPanel({
       )}
     </div>
   );
-}
-
-/** The icon, text, and destination of a link chip. */
-function describeLink(link: InboundEmailLink): {
-  icon: IconName;
-  label: string;
-  path: string;
-} {
-  if (link.targetType === "library_folder") {
-    return {
-      icon: "folder",
-      label: link.folder.name,
-      path: libraryPath(link.targetId),
-    };
-  }
-  if (link.targetType === "equipment") {
-    const serial = link.equipment.serialNumber;
-    return {
-      icon: equipmentTypeIcon(link.equipment.type),
-      label: serial
-        ? `${equipmentName(link.equipment)} · ${serial}`
-        : equipmentName(link.equipment),
-      path: equipmentPath(link.targetId),
-    };
-  }
-  const { transaction } = link;
-  return {
-    icon: "finance",
-    label: `${transaction.merchantName ?? transaction.name} · ${formatMoney(-transaction.amount, transaction.currencyCode)} · ${formatDate(transaction.date)}`,
-    path: "/finance",
-  };
 }
 
 function EquipmentPicker({
@@ -513,7 +482,7 @@ function TransactionPicker({
                   type="button"
                 >
                   <span className="emailLinkMatchDate">
-                    {formatDate(transaction.transactionDate)}
+                    {formatTransactionDate(transaction.transactionDate)}
                   </span>
                   <span className="rowMain">
                     <span className="rowTitle truncate">
@@ -538,14 +507,6 @@ function TransactionPicker({
       )}
     </div>
   );
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(`${value}T12:00:00`));
 }
 
 function messageFrom(cause: unknown) {

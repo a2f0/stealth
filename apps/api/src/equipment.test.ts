@@ -153,6 +153,68 @@ describe("equipment", () => {
     ).toBeNull();
   });
 
+  it("updates only the fields sent, and keeps a type no longer offered", async () => {
+    const { as, database } = await createFixture();
+    const owner = as("owner-user", "owner");
+    // A pager assigned to someone who has since left, as if removed mid-edit.
+    database
+      .query(
+        `INSERT INTO equipment
+         (id, organization_id, type, make, model, assigned_user_id,
+          created_at, updated_at)
+         VALUES ('pager-1', 'org-1', 'pager', 'Motorola', 'Bravo',
+                 'other-user', ?, ?)`,
+      )
+      .run(timestamp, timestamp);
+
+    const renamed = await owner.json<{ equipment: Equipment }>(
+      "PATCH",
+      "/api/equipment/pager-1",
+      { model: "Bravo Plus" },
+    );
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.equipment).toMatchObject({
+      assignee: { id: "other-user" },
+      model: "Bravo Plus",
+      type: "pager",
+    });
+    expect(
+      (
+        await owner.json("PATCH", "/api/equipment/pager-1", {
+          assigneeId: "member-user",
+          type: "pager",
+        })
+      ).status,
+    ).toBe(200);
+    for (const change of [
+      { type: "tablet" },
+      { make: "" },
+      { purchaseDate: "03/01/2026" },
+      { serialNumber: 42 },
+      { assigneeId: "other-user" },
+    ]) {
+      expect(
+        (await owner.json("PATCH", "/api/equipment/pager-1", change)).status,
+      ).toBe(400);
+    }
+    expect(
+      (await owner.json("POST", "/api/equipment", { ...laptop, type: "pager" }))
+        .status,
+    ).toBe(400);
+    expect(
+      (
+        await owner.json<{ equipment: Equipment }>(
+          "GET",
+          "/api/equipment/pager-1",
+        )
+      ).body.equipment,
+    ).toMatchObject({
+      assignee: { id: "member-user" },
+      make: "Motorola",
+      model: "Bravo Plus",
+    });
+  });
+
   it("lets members view but not change equipment, within their organization", async () => {
     const { as } = await createFixture();
     const owner = as("owner-user", "owner");
@@ -259,6 +321,21 @@ describe("equipment", () => {
     expect(database.query("SELECT id FROM inbound_email_links").all()).toEqual(
       [],
     );
+
+    // Deletes that bypass the API, such as organization cascades, rely on the
+    // trigger alone.
+    database
+      .query(
+        `INSERT INTO inbound_email_links
+         (id, organization_id, email_id, target_type, target_id, created_at)
+         VALUES ('link-other', 'org-2', 'email-1', 'equipment',
+                 'equipment-other', ?)`,
+      )
+      .run(timestamp);
+    database.query("DELETE FROM equipment WHERE id = 'equipment-other'").run();
+    expect(database.query("SELECT id FROM inbound_email_links").all()).toEqual(
+      [],
+    );
   });
 });
 
@@ -268,24 +345,54 @@ describe("equipment link migration", () => {
     database.exec("PRAGMA foreign_keys = ON");
     await applyMigrations(database, (filename) => filename < "0037");
     seed(database);
-    database
-      .query(
-        `INSERT INTO inbound_email_links
-         (id, organization_id, email_id, target_type, target_id, created_by,
-          created_at)
-         VALUES ('link-1', 'org-1', 'email-1', 'library_folder', 'folder-1',
-                 'owner-user', ?)`,
-      )
-      .run(timestamp);
+    // Inserted out of id order with equal timestamps, so only rowid order
+    // keeps them in the order they were linked.
+    for (const [id, targetType, targetId] of [
+      ["link-c", "library_folder", "folder-1"],
+      ["link-a", "finance_transaction", "txn-1"],
+      ["link-b", "library_folder", "folder-2"],
+    ] as const) {
+      database
+        .query(
+          `INSERT INTO inbound_email_links
+           (id, organization_id, email_id, target_type, target_id,
+            created_by, created_at)
+           VALUES (?, 'org-1', 'email-1', ?, ?, 'owner-user', ?)`,
+        )
+        .run(id, targetType, targetId, timestamp);
+    }
     await applyMigrations(database, (filename) => filename >= "0037");
 
     expect(
-      database.query("SELECT id, target_type FROM inbound_email_links").all(),
-    ).toEqual([{ id: "link-1", target_type: "library_folder" }]);
-    database.query("DELETE FROM library_folders WHERE id = 'folder-1'").run();
-    expect(database.query("SELECT id FROM inbound_email_links").all()).toEqual(
-      [],
+      database
+        .query(
+          `SELECT id, target_type FROM inbound_email_links
+           ORDER BY created_at, rowid`,
+        )
+        .all(),
+    ).toEqual([
+      { id: "link-c", target_type: "library_folder" },
+      { id: "link-a", target_type: "finance_transaction" },
+      { id: "link-b", target_type: "library_folder" },
+    ]);
+    const schema = database
+      .query(
+        "SELECT name FROM sqlite_master WHERE type IN ('index', 'trigger')",
+      )
+      .all()
+      .map((row) => (row as { name: string }).name);
+    expect(schema).toEqual(
+      expect.arrayContaining([
+        "inbound_email_links_target_idx",
+        "remove_equipment_email_links",
+        "remove_finance_transaction_email_links",
+        "remove_library_folder_email_links",
+      ]),
     );
+    database.query("DELETE FROM library_folders WHERE id = 'folder-1'").run();
+    expect(
+      database.query("SELECT id FROM inbound_email_links ORDER BY id").all(),
+    ).toEqual([{ id: "link-a" }, { id: "link-b" }]);
   });
 });
 
