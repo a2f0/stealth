@@ -127,6 +127,37 @@ they link to folders, and any member can link or unlink them. The API owns the
 list of equipment types, so adding one needs no migration; an item keeps its
 type if that type is later retired.
 
+## Contracts and e-signature
+
+The organization-scoped Contracts page at `/contracts` sends PDFs for
+signature. Any member uploads a PDF (up to 25 MB), adds signers, and places
+signature, initials, date signed, full name, and text fields on its pages.
+Signers sign in any order or one after another; a sequential signer is emailed
+only once everyone before them has signed. A contract can carry a due date,
+after which it is flagged overdue but stays signable, and a reminder interval.
+The hourly cron re-emails signers who have not signed once the interval has
+passed since their last email, and **Send reminder** emails them immediately.
+A sent contract can be voided, which invalidates its signing links; drafts,
+completed, declined, and voided contracts can be deleted.
+
+Signers need no account. Each receives a link to `/sign/<token>` from
+`security@auth.tearleads.de`, with the sender's address as reply-to. The token
+is an HMAC-SHA256, keyed by `BETTER_AUTH_SECRET`, of the recipient ID and a
+random nonce; only the nonce and a hash of the token are stored, so reminders
+can resend the same link. Rotating `BETTER_AUTH_SECRET` therefore invalidates
+every outstanding signing link. A signer adopts a typed or drawn signature,
+agrees to use electronic records, and finishes, or declines with a reason,
+which ends the contract for everyone.
+
+When the last signer finishes, the API stamps each signature and value into
+the PDF with [pdf-lib](https://pdf-lib.js.org/), honouring page rotation, and
+appends a certificate of completion listing the original document's SHA-256,
+each signer's time, IP address, and browser, and the audit trail. The signed
+copy is emailed to every signer and the sender (attached when it is 8 MB or
+smaller) and can be downloaded from the contract or the signing link. Original
+and signed PDFs live in R2; deleting a contract or organization queues them in
+`deleted_object_cleanup` for the scheduled purge.
+
 ## Audits and checklists
 
 Authenticated users can build organization-scoped checklist templates at

@@ -1,0 +1,515 @@
+/* Contracts: the list, draft editor, summary, and the public signing page. */
+.contractPageLayout {
+  --page-width: 84rem;
+}
+
+.contractFilters {
+  margin-bottom: var(--space-4);
+}
+
+.contractRow {
+  flex-wrap: nowrap;
+  gap: var(--space-4);
+}
+
+.contractRowMark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-md);
+  color: var(--color-green-deep);
+  background: var(--color-lime-wash);
+}
+
+.contractHint {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+/* Signers are told apart by tone on the document and in lists. */
+.recipientTone0 {
+  --tone-bg: var(--color-info-bg);
+  --tone-border: var(--color-info-border);
+  --tone-fg: var(--color-info-fg);
+}
+
+.recipientTone1 {
+  --tone-bg: var(--color-warning-bg);
+  --tone-border: var(--color-warning-border);
+  --tone-fg: var(--color-warning-fg);
+}
+
+.recipientTone2 {
+  --tone-bg: var(--color-success-bg);
+  --tone-border: var(--color-success-border);
+  --tone-fg: var(--color-success-fg);
+}
+
+.recipientTone3 {
+  --tone-bg: var(--color-lime-wash);
+  --tone-border: var(--color-lime-border);
+  --tone-fg: var(--color-green-deep);
+}
+
+.recipientTone4 {
+  --tone-bg: var(--color-neutral-bg);
+  --tone-border: var(--color-neutral-border);
+  --tone-fg: var(--color-neutral-fg);
+}
+
+.recipientTone5 {
+  --tone-bg: var(--color-danger-bg);
+  --tone-border: var(--color-danger-border);
+  --tone-fg: var(--color-danger-fg);
+}
+
+/* Document pages with an overlay for fields. */
+.contractPages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+}
+
+.contractPage {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.contractPageCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.contractPageOverlay,
+.contractOverlayHit {
+  position: absolute;
+  inset: 0;
+}
+
+.contractOverlayPlacing {
+  cursor: crosshair;
+}
+
+.contractPagesMessage {
+  color: var(--color-text-muted);
+}
+
+.contractField {
+  display: flex;
+  position: absolute;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 1.5px dashed var(--tone-border, var(--color-border-strong));
+  border-radius: var(--radius-xs);
+  color: var(--tone-fg, var(--color-text));
+  background: color-mix(
+    in srgb,
+    var(--tone-bg, var(--color-surface-sunken)) 88%,
+    transparent
+  );
+  cursor: grab;
+  font: inherit;
+  touch-action: none;
+}
+
+.contractFieldSelected {
+  border-style: solid;
+  box-shadow:
+    0 0 0 2px var(--color-surface),
+    0 0 0 4px var(--tone-border, var(--color-border-strong));
+}
+
+.contractFieldStatic {
+  cursor: default;
+}
+
+.contractFieldLabel {
+  overflow: hidden;
+  padding: 0 var(--space-1);
+  font-size: clamp(0.5rem, 1.1vw, 0.75rem);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The draft editor: settings beside the document. */
+.contractEditor {
+  display: grid;
+  grid-template-columns: minmax(18rem, 22rem) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-6);
+}
+
+.contractEditorPanel {
+  display: grid;
+  position: sticky;
+  top: var(--space-4);
+  gap: var(--space-4);
+  max-height: calc(100dvh - var(--space-8));
+  overflow-y: auto;
+  padding-bottom: var(--space-2);
+}
+
+.contractDetailRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.contractSigners {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.contractSigner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2-5);
+}
+
+.contractSignerSwatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-top: 0.6rem;
+  border: 1.5px solid var(--tone-border);
+  border-radius: var(--radius-full);
+  background: var(--tone-bg);
+}
+
+.contractSignerFields {
+  display: grid;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.contractSignerMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.contractSignerOrder {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.contractSignerOrder > .input {
+  width: 3.5rem;
+}
+
+.contractTools {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.contractTool {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  background: var(--color-surface);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.contractTool[aria-pressed="true"] {
+  border-color: var(--color-ink);
+  color: var(--color-text-inverse);
+  background: var(--color-ink);
+}
+
+.contractEditorActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* The summary of a sent contract. */
+.contractSummary {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.contractSummaryGrid {
+  display: grid;
+  grid-template-columns: minmax(18rem, 26rem) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-6);
+}
+
+.contractSummaryActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.contractSignerRow {
+  flex-wrap: nowrap;
+}
+
+.contractActivity {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.contractActivity li {
+  display: grid;
+  gap: var(--space-0-5);
+}
+
+.contractActivity time {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.contractActivityProblem {
+  color: var(--color-danger-fg);
+}
+
+/* The public signing page. */
+.signingShell {
+  min-height: 100dvh;
+  background: var(--color-paper);
+}
+
+.signingTopBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--page-gutter);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.signingFrom {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.signingMain {
+  display: grid;
+  gap: var(--space-5);
+  width: min(100%, 60rem);
+  margin: 0 auto;
+  padding: var(--space-6) var(--page-gutter)
+    calc(var(--space-24) + var(--space-8));
+}
+
+.signingIntro {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.signingMessage {
+  white-space: pre-wrap;
+}
+
+.signingField {
+  cursor: pointer;
+}
+
+.signingFieldTodo {
+  border-color: var(--color-green-strong);
+  background: color-mix(in srgb, var(--color-lime-soft) 80%, transparent);
+}
+
+.signingFieldImage {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.signingFieldInput {
+  position: absolute;
+  min-width: 0;
+  padding: 0 var(--space-1);
+  border: 1.5px dashed var(--color-border-strong);
+  border-radius: var(--radius-xs);
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface) 90%, transparent);
+  font: inherit;
+  font-size: clamp(0.625rem, 1.3vw, 0.875rem);
+}
+
+.signingFieldFixed {
+  justify-content: flex-start;
+  border-style: solid;
+  cursor: default;
+}
+
+.signingFieldText {
+  overflow: hidden;
+  padding: 0 var(--space-1);
+  color: var(--color-text);
+  font-size: clamp(0.625rem, 1.3vw, 0.875rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signingFooter {
+  display: flex;
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: var(--z-sticky);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-6);
+  padding: var(--space-4) var(--page-gutter);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.signingConsent {
+  flex: 1 1 22rem;
+  font-size: var(--text-sm);
+}
+
+.signingFooterActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Adopting a signature. */
+.signatureDialog {
+  width: min(40rem, calc(100vw - var(--space-8)));
+  max-width: none;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  color: var(--color-text);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.signatureDialog::backdrop {
+  background: color-mix(in srgb, var(--color-ink) 60%, transparent);
+}
+
+.signatureDialogFrame {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+.signatureDialogHeader,
+.signatureDialogFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.signatureDialogFooter {
+  justify-content: flex-end;
+}
+
+.signaturePreview {
+  min-height: 5rem;
+  padding: var(--space-3) var(--space-4);
+  overflow: hidden;
+  border-bottom: 1.5px solid var(--color-border-strong);
+  color: var(--color-text);
+  font-family: var(--font-serif);
+  font-size: var(--text-4xl);
+  font-style: italic;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signaturePad {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-2);
+}
+
+.signaturePadCanvas {
+  width: 100%;
+  border: 1.5px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+@media (max-width: 960px) {
+  .contractEditor,
+  .contractSummaryGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .contractEditorPanel {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .contractFilters {
+    width: 100%;
+    contain: inline-size;
+  }
+
+  .contractDetailRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .signingFooterActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* State and descendant selectors come last (noDescendingSpecificity). */
+.contractList > li + li {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.contractField:focus-visible {
+  outline-offset: 2px;
+}
