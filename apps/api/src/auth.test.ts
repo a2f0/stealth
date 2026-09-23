@@ -1,5 +1,6 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
+import { app } from "./app";
 import { createAuth } from "./auth";
 import type { Bindings } from "./types";
 
@@ -1021,6 +1022,109 @@ describe("password authentication", () => {
     ).toEqual({ defaultOrganizationId: organization.id });
   });
 
+  it("keeps a saved default after accepting an invitation and signing in again", async () => {
+    const fixture = await createFixture();
+    await post(fixture.auth, "/sign-up/email", {
+      email,
+      name: "Example Person",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    const ownerSignIn = await post(fixture.auth, "/sign-in/email", {
+      email,
+      password: originalPassword,
+    });
+    const ownerOrganization = fixture.database
+      .query("SELECT defaultOrganizationId AS id FROM user WHERE email = ?")
+      .get(email) as { id: string };
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_price_id, stripe_status, seat_quantity,
+          stripe_event_created, updated_at)
+         VALUES (?, 'price_pro_test', 'active', 1, 1, ?)`,
+      )
+      .run(ownerOrganization.id, new Date().toISOString());
+
+    const invitedEmail = "saved-default@example.com";
+    await post(fixture.auth, "/sign-up/email", {
+      email: invitedEmail,
+      name: "Saved Default",
+      password: originalPassword,
+      termsAccepted: true,
+    });
+    const personalOrganization = fixture.database
+      .query("SELECT defaultOrganizationId AS id FROM user WHERE email = ?")
+      .get(invitedEmail) as { id: string };
+    const inviteeSignIn = await post(fixture.auth, "/sign-in/email", {
+      email: invitedEmail,
+      password: originalPassword,
+    });
+    const inviteeCookie = inviteeSignIn.headers.get("set-cookie");
+    const saved = await app.request(
+      "/api/account-settings/default-organization",
+      {
+        body: JSON.stringify({ organizationId: personalOrganization.id }),
+        headers: {
+          "content-type": "application/json",
+          cookie: inviteeCookie ?? "",
+          origin,
+        },
+        method: "PATCH",
+      },
+      { ...fixture.bindings, DB: toD1(fixture.database) },
+    );
+    expect(saved.status).toBe(200);
+
+    const invitation = await post(
+      fixture.auth,
+      "/organization/invite-member",
+      {
+        email: invitedEmail,
+        organizationId: ownerOrganization.id,
+        role: "member",
+      },
+      ownerSignIn.headers.get("set-cookie"),
+    );
+    expect(invitation.status).toBe(200);
+    const invitationId = ((await invitation.json()) as { id: string }).id;
+    const accepted = await post(
+      fixture.auth,
+      "/organization/accept-invitation",
+      { invitationId },
+      inviteeCookie,
+    );
+    expect(accepted.status).toBe(200);
+    expect(
+      fixture.database
+        .query(
+          "SELECT defaultOrganizationId, defaultOrganizationPinned FROM user WHERE email = ?",
+        )
+        .get(invitedEmail),
+    ).toEqual({
+      defaultOrganizationId: personalOrganization.id,
+      defaultOrganizationPinned: 1,
+    });
+
+    const freshSignIn = await post(fixture.auth, "/sign-in/email", {
+      email: invitedEmail,
+      password: originalPassword,
+    });
+    expect(freshSignIn.status).toBe(200);
+    expect(
+      await (
+        await get(
+          fixture.auth,
+          "/get-session",
+          freshSignIn.headers.get("set-cookie"),
+        )
+      ).json(),
+    ).toMatchObject({
+      session: { activeOrganizationId: personalOrganization.id },
+      user: { defaultOrganizationId: personalOrganization.id },
+    });
+  });
+
   it("backfills an organization for an existing user", async () => {
     const database = new Database(":memory:");
     await applyMigration(database, "0003_create_auth.sql");
@@ -1071,6 +1175,46 @@ function financeGroupFor(database: Database, organizationId: string) {
     .get(organizationId);
 }
 
+function toD1(database: Database) {
+  return {
+    batch: async (statements: Array<{ execute: () => unknown }>) =>
+      statements.map((statement) => statement.execute()),
+    exec: async (query: string) => database.exec(query),
+    prepare: (query: string) => {
+      let values: SQLQueryBindings[] = [];
+      const statement = {
+        all: async () => {
+          const results = database.query(query).all(...values);
+          const meta = database
+            .query(
+              `SELECT changes() AS changes,
+                      last_insert_rowid() AS last_row_id`,
+            )
+            .get() as { changes: number; last_row_id: number };
+          return { meta, results, success: true };
+        },
+        bind: (...nextValues: SQLQueryBindings[]) => {
+          values = nextValues;
+          return statement;
+        },
+        execute: () => run(),
+        first: async () => database.query(query).get(...values),
+        raw: async () => database.query(query).values(...values),
+        run: async () => run(),
+      };
+      const run = () => {
+        const result = database.query(query).run(...values);
+        return {
+          meta: { changes: result.changes },
+          results: [],
+          success: true,
+        };
+      };
+      return statement;
+    },
+  } as unknown as D1Database;
+}
+
 async function createFixture() {
   const database = new Database(":memory:");
   const messages: EmailMessageBuilder[] = [];
@@ -1098,13 +1242,14 @@ async function createFixture() {
   await applyMigration(database, "0004_create_organizations.sql");
   await applyMigration(database, "0008_keep_organization_defaults_valid.sql");
   await applyMigration(database, "0010_create_organization_groups.sql");
+  await applyMigration(database, "0011_soft_delete_organizations.sql");
   await applyMigration(database, "0020_add_two_factor_authentication.sql");
   await applyMigration(database, "0021_track_terms_acceptance.sql");
   await applyMigration(database, "0031_require_member_two_factor.sql");
   await applyMigration(database, "0032_create_billing.sql");
   await applyMigration(database, "0040_pin_default_organization.sql");
 
-  return { auth, database, messages, pending };
+  return { auth, bindings, database, messages, pending };
 }
 
 function post(
