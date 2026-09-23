@@ -130,7 +130,7 @@ type if that type is later retired.
 ## Contracts and e-signature
 
 The organization-scoped Contracts page at `/contracts` sends PDFs for
-signature. Any member uploads a PDF (up to 25 MB), adds signers, and places
+signature. Any member uploads a PDF (up to 10 MB), adds signers, and places
 signature, initials, date signed, full name, and text fields on its pages.
 Drafts save automatically as they are edited, and sending checks that every
 signer has a name, a valid email, and a signature field. Signers sign in any

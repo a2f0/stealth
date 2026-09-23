@@ -8,21 +8,27 @@ import {
 
 const reminderBatchSize = 50;
 const resumeBatchSize = 5;
+const maxResumeAttempts = 5;
+const resumeLeaseMs = 30 * 60 * 1000;
 
-/** The hourly contract upkeep: finish stalled contracts, then remind. */
+/**
+ * The hourly contract upkeep. Reminders go first, so a stalled contract that
+ * exhausts the Worker cannot hold them up.
+ */
 export async function maintainContracts(
   environment: ContractEnvironment,
   now = new Date(),
 ) {
+  const reminded = await sendContractReminders(environment, now);
   await resumeStalledContracts(environment, now);
-  return sendContractReminders(environment, now);
+  return reminded;
 }
 
 /**
  * Finishes what a signature started when it could not: emails the next
- * sequential signers, or completes a contract everyone has signed. A failure
- * moves the contract to the back of the queue so one bad document cannot
- * hold up the rest.
+ * sequential signers, or completes a contract everyone has signed. Each
+ * attempt is claimed before it is made, so a document that exhausts the
+ * Worker moves to the back of the queue and is abandoned after a few tries.
  */
 export async function resumeStalledContracts(
   environment: ContractEnvironment,
@@ -34,28 +40,35 @@ export async function resumeStalledContracts(
       `SELECT contract.id FROM contracts AS contract
        JOIN organization ON organization.id = contract.organization_id
        WHERE contract.status = 'sent' AND organization.deletedAt IS NULL
+         AND contract.resume_attempts < ?
          AND NOT EXISTS (
            SELECT 1 FROM contract_recipients
            WHERE contract_id = contract.id AND status IN ('sent', 'viewed')
          )
-       ORDER BY contract.updated_at ASC
+       ORDER BY contract.resume_attempted_at IS NOT NULL,
+                contract.resume_attempted_at ASC
        LIMIT ?`,
     )
-    .bind(resumeBatchSize)
+    .bind(maxResumeAttempts, resumeBatchSize)
     .all<{ id: string }>();
+  const leaseExpired = new Date(now.getTime() - resumeLeaseMs).toISOString();
   let resumed = 0;
   for (const { id } of stalled.results) {
+    const claim = await database
+      .prepare(
+        `UPDATE contracts
+         SET resume_attempts = resume_attempts + 1, resume_attempted_at = ?
+         WHERE id = ? AND status = 'sent'
+           AND (resume_attempted_at IS NULL OR resume_attempted_at < ?)`,
+      )
+      .bind(now.toISOString(), id, leaseExpired)
+      .run();
+    if (claim.meta.changes !== 1) continue;
     try {
       await advanceContract(environment, id);
       resumed += 1;
     } catch (cause) {
       console.error("A stalled contract could not be resumed.", cause);
-      await database
-        .prepare(
-          `UPDATE contracts SET updated_at = ? WHERE id = ? AND status = 'sent'`,
-        )
-        .bind(now.toISOString(), id)
-        .run();
     }
   }
   return resumed;

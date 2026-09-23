@@ -145,17 +145,32 @@ export async function uploadContract(file: File) {
   return body.contract;
 }
 
+// Saves of one draft run one at a time, in order, and reads wait for them,
+// so a save fired while leaving the editor can't be overtaken or read stale.
+const draftSaves = new Map<string, Promise<unknown>>();
+
 export async function getContract(id: string) {
+  await draftSaves.get(id)?.catch(() => undefined);
   const body = await request<{ contract: ContractDetail }>(path(id));
   return body.contract;
 }
 
-export async function saveContractDraft(id: string, draft: DraftInput) {
-  const body = await request<{ contract: ContractDetail }>(
-    `${path(id)}/draft`,
-    { body: JSON.stringify(draft), method: "PUT" },
-  );
-  return body.contract;
+export function saveContractDraft(id: string, draft: DraftInput) {
+  const previous = draftSaves.get(id) ?? Promise.resolve();
+  const saving = previous
+    .catch(() => undefined)
+    .then(() =>
+      request<{ contract: ContractDetail }>(`${path(id)}/draft`, {
+        body: JSON.stringify(draft),
+        method: "PUT",
+      }),
+    );
+  draftSaves.set(id, saving);
+  const settle = () => {
+    if (draftSaves.get(id) === saving) draftSaves.delete(id);
+  };
+  saving.then(settle, settle);
+  return saving.then(({ contract }) => contract);
 }
 
 export async function sendContract(id: string) {

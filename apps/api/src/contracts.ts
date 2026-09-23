@@ -27,7 +27,9 @@ type ContractEnv = {
 };
 type ContractContext = Context<ContractEnv>;
 
-const maxDocumentBytes = 25 * 1024 * 1024;
+// Stamping holds the document in memory several times over, so this stays
+// well inside a Worker's memory limit.
+const maxDocumentBytes = 10 * 1024 * 1024;
 const manualReminderGapMs = 60 * 60 * 1000;
 const maxRecipients = 20;
 const maxFields = 500;
@@ -110,7 +112,7 @@ contracts.post("/", async (context) => {
     return context.json({ error: "Choose a PDF to upload." }, 400);
   }
   if (file.size > maxDocumentBytes) {
-    return context.json({ error: "Contracts must be 25 MB or smaller." }, 413);
+    return context.json({ error: "Contracts must be 10 MB or smaller." }, 413);
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   let pageCount: number;
@@ -247,15 +249,23 @@ contracts.post("/:id/send", async (context) => {
   if (problem) return context.json({ error: problem }, 400);
   const userId = context.get("authSession").user.id;
   const now = new Date().toISOString();
+  // Only the revision that was validated goes out: a save landing meanwhile
+  // bumps it and this send is refused.
   const sent = await database
     .prepare(
       `UPDATE contracts
        SET status = 'sent', sent_at = ?, sent_by = ?, updated_at = ?
-       WHERE id = ? AND organization_id = ? AND status = 'draft'`,
+       WHERE id = ? AND organization_id = ? AND status = 'draft'
+         AND revision = ?`,
     )
-    .bind(now, userId, now, contract.id, organizationId)
+    .bind(now, userId, now, contract.id, organizationId, contract.revision)
     .run();
-  if (sent.meta.changes !== 1) return notDraft(context);
+  if (sent.meta.changes !== 1) {
+    return context.json(
+      { error: "The draft changed while it was being sent. Send it again." },
+      409,
+    );
+  }
   await recordEvent(database, {
     actorUserId: userId,
     contractId: contract.id,
@@ -295,19 +305,34 @@ contracts.post("/:id/remind", async (context) => {
     ({ status }) => status === "sent" || status === "viewed",
   );
   // At most one manual reminder an hour per signer, to protect the sender's
-  // reputation and the signers' inboxes.
-  const threshold = Date.now() - manualReminderGapMs;
-  const due = awaiting.filter(({ last_reminded_at, notified_at }) => {
-    const lastEmailed = last_reminded_at ?? notified_at;
-    return !lastEmailed || Date.parse(lastEmailed) <= threshold;
-  });
+  // reputation and the signers' inboxes. Each signer is claimed first, so a
+  // double click cannot email anyone twice.
+  const now = new Date();
+  const threshold = new Date(now.getTime() - manualReminderGapMs);
+  const due: typeof awaiting = [];
+  for (const recipient of awaiting) {
+    const claim = await database
+      .prepare(
+        `UPDATE contract_recipients SET last_reminded_at = ?
+         WHERE id = ? AND COALESCE(last_reminded_at, notified_at) <= ?`,
+      )
+      .bind(now.toISOString(), recipient.id, threshold.toISOString())
+      .run();
+    if (claim.meta.changes === 1) due.push(recipient);
+  }
   if (awaiting.length > 0 && due.length === 0) {
     return context.json(
       { error: "Signers were emailed within the last hour. Try again later." },
       429,
     );
   }
-  const reminded = await notifyRecipients(context.env, contract, due, true);
+  const reminded = await notifyRecipients(
+    context.env,
+    contract,
+    due,
+    true,
+    now,
+  );
   return context.json({
     contract: await detailFor(context, contract.id),
     reminded,
@@ -699,7 +724,8 @@ function draftStatements(
       .prepare(
         `UPDATE contracts
          SET title = ?, message = ?, signing_order = ?, due_date = ?,
-             reminder_interval_days = ?, updated_at = ?
+             reminder_interval_days = ?, updated_at = ?,
+             revision = revision + 1
          WHERE id = ? AND organization_id = ? AND status = 'draft'`,
       )
       .bind(

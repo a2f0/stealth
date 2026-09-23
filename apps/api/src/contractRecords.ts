@@ -44,6 +44,7 @@ export interface ContractRow {
   message: string;
   organization_id: string;
   reminder_interval_days: number | null;
+  revision: number;
   sent_at: string | null;
   sent_by: string | null;
   signing_order: "parallel" | "sequential";
@@ -117,7 +118,7 @@ const contractColumns = `id, organization_id, title, message, status, signing_or
   due_date, reminder_interval_days, document_object_key, document_filename,
   document_size, document_sha256, document_page_count, final_object_key,
   final_sha256, created_by, sent_by, created_at, updated_at, sent_at,
-  completed_at, voided_at, void_reason`;
+  completed_at, voided_at, void_reason, revision`;
 
 export function findContract(
   database: D1Database,
@@ -354,7 +355,10 @@ export async function advanceContract(
   const contract = await findContractById(environment.DB, contractId);
   if (contract?.status !== "sent") return false;
   const recipients = await listRecipients(environment.DB, contract.id);
-  if (recipients.every(({ status }) => status === "signed")) {
+  if (
+    recipients.length > 0 &&
+    recipients.every(({ status }) => status === "signed")
+  ) {
     return completeContract(environment, contract, recipients);
   }
   const awaiting = recipients.filter(

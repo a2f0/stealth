@@ -80,7 +80,11 @@ export function SignatureDialog({
             <button
               aria-pressed={tab === option}
               key={option}
-              onClick={() => setTab(option)}
+              onClick={() => {
+                setTab(option);
+                // The pad starts blank again, so forget any earlier drawing.
+                setDrawing(null);
+              }}
               type="button"
             >
               <Icon name={option === "type" ? "type" : "edit"} size={16} />

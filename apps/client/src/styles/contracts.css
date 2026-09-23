@@ -402,6 +402,16 @@
   box-shadow: var(--shadow-lg);
 }
 
+.signingFooterError {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* Scrolling to a focused field keeps it clear of the sticky footer. */
+html:has(.signingShell) {
+  scroll-padding-bottom: 12rem;
+}
+
 .signingConsent {
   flex: 1 1 22rem;
   font-size: var(--text-sm);

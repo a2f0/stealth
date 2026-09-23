@@ -470,7 +470,7 @@ function usePlaidConnect(
     try {
       const result = await createPlaidLinkToken();
       localStorage.setItem(linkTokenStorageKey, result.linkToken);
-      launchPlaid(result.linkToken, undefined, complete, (message) => {
+      await launchPlaid(result.linkToken, undefined, complete, (message) => {
         setError(message);
         setBusy(false);
       });
@@ -498,7 +498,7 @@ function useOAuthResume(
       return;
     }
     setBusy(true);
-    launchPlaid(token, window.location.href, complete, (message) => {
+    void launchPlaid(token, window.location.href, complete, (message) => {
       setError(message);
       setBusy(false);
     });
@@ -1030,13 +1030,36 @@ function TransactionAnnotationForm({
   );
 }
 
-function launchPlaid(
+let plaidScript: Promise<boolean> | undefined;
+
+/**
+ * Loads Plaid Link on first use rather than on every page, so its script
+ * never runs on pages that carry secrets in the URL, such as signing links.
+ */
+function loadPlaid() {
+  plaidScript ??= new Promise<boolean>((resolve) => {
+    if (window.Plaid) return resolve(true);
+    const script = document.createElement("script");
+    script.async = true;
+    script.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+    script.onload = () => resolve(Boolean(window.Plaid));
+    script.onerror = () => {
+      plaidScript = undefined;
+      script.remove();
+      resolve(false);
+    };
+    document.head.append(script);
+  });
+  return plaidScript;
+}
+
+async function launchPlaid(
   token: string,
   receivedRedirectUri: string | undefined,
   onSuccess: (token: string, metadata: PlaidLinkMetadata) => Promise<void>,
   onExit: (message: string | undefined) => void,
 ) {
-  if (!window.Plaid) {
+  if (!(await loadPlaid()) || !window.Plaid) {
     onExit("Plaid Link could not load. Check your connection and try again.");
     return;
   }

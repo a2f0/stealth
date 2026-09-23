@@ -90,6 +90,8 @@ function useDraftEditor(
   // while it was in flight.
   const revision = useRef(0);
   const pageSizes = useRef(new Map<number, PageSize>());
+  // The field just placed from the keyboard or pointer, focused once mounted.
+  const justPlaced = useRef<string | null>(null);
   const update = useCallback((change: (draft: DraftInput) => DraftInput) => {
     revision.current += 1;
     setDraft(change);
@@ -107,7 +109,7 @@ function useDraftEditor(
   const active = draft.recipients.some(({ key }) => key === activeKey)
     ? activeKey
     : draft.recipients[0]?.key;
-  const fields = fieldActions(update, setSelectedKey);
+  const fields = fieldActions(update, setSelectedKey, justPlaced);
   return {
     ...saving,
     ...recipientActions(draft, update, setActiveKey),
@@ -115,6 +117,7 @@ function useDraftEditor(
     activeKey: active,
     dirty,
     draft,
+    justPlaced,
     pageCount: contract.document.pageCount,
     pageSizes: pageSizes.current,
     /** Keyboard placement: the middle of page 1, then arrow keys and Page. */
@@ -169,6 +172,10 @@ function useDraftSaving({
   const [notice, setNotice] = useState<string>();
   const unsaved = useRef<DraftInput | null>(null);
   const contractId = contract.id;
+  // A cleared title still saves, under the document's name, so edits made
+  // meanwhile are never skipped.
+  const untitled =
+    contract.document.filename.replace(/\.pdf$/i, "") || "Untitled";
   const run = useCallback(async (action: () => Promise<void>) => {
     setBusy(true);
     setError(undefined);
@@ -184,30 +191,33 @@ function useDraftSaving({
   const saveDraft = useCallback(
     async (value: DraftInput) => {
       const saving = revision.current;
-      onChanged(await saveContractDraft(contractId, value));
+      const titled = value.title.trim() ? value : { ...value, title: untitled };
+      onChanged(await saveContractDraft(contractId, titled));
       if (revision.current !== saving) return false;
       setDirty(false);
       return true;
     },
-    [contractId, onChanged, revision, setDirty],
+    [contractId, onChanged, revision, setDirty, untitled],
   );
 
-  const autosave = dirty && !busy && !stalled && draft.title.trim() !== "";
+  const autosave = dirty && !busy && !stalled;
   useEffect(() => {
     if (!autosave) return;
     const timer = window.setTimeout(() => {
+      const started = revision.current;
       void run(async () => {
         try {
           await saveDraft(draft);
         } catch (cause) {
-          // Wait for the next edit rather than retrying a rejected draft.
-          setStalled(true);
+          // Wait for the next edit rather than retrying a rejected draft,
+          // unless it was already edited while this save was in flight.
+          if (revision.current === started) setStalled(true);
           throw cause;
         }
       });
     }, autosaveDelayMs);
     return () => window.clearTimeout(timer);
-  }, [autosave, draft, run, saveDraft]);
+  }, [autosave, draft, revision, run, saveDraft]);
   useEffect(() => {
     unsaved.current = dirty ? draft : null;
     setStalled(false);
@@ -215,13 +225,15 @@ function useDraftSaving({
   // Leaving the page saves edits the autosave has not reached yet.
   useEffect(
     () => () => {
-      if (unsaved.current) {
-        void saveContractDraft(contractId, unsaved.current).catch(
-          () => undefined,
-        );
+      const value = unsaved.current;
+      if (value) {
+        const titled = value.title.trim()
+          ? value
+          : { ...value, title: untitled };
+        void saveContractDraft(contractId, titled).catch(() => undefined);
       }
     },
-    [contractId],
+    [contractId, untitled],
   );
   useEffect(() => {
     if (!dirty && !busy) return;
@@ -303,11 +315,13 @@ function recipientActions(
 function fieldActions(
   update: (change: (draft: DraftInput) => DraftInput) => void,
   setSelectedKey: (key: string | undefined) => void,
+  justPlaced: { current: string | null },
 ) {
   return {
     addField: (field: DraftField) => {
       update((current) => ({ ...current, fields: [...current.fields, field] }));
       setSelectedKey(field.key);
+      justPlaced.current = field.key;
     },
     changeField: (key: string, change: Partial<DraftField>) =>
       update((current) => ({
@@ -737,11 +751,14 @@ function DraftFieldBox({
   const owner = editor.draft.recipients[index];
   const selected = editor.selectedKey === field.key;
   const button = useRef<HTMLButtonElement>(null);
-  // A field mounts selected only when just placed: focus it so Delete works.
-  const placed = useRef(selected);
+  const { justPlaced } = editor;
+  // Focus a field once when it is placed, so arrow keys and Delete work.
   useEffect(() => {
-    if (placed.current) button.current?.focus();
-  }, []);
+    if (justPlaced.current !== field.key) return;
+    justPlaced.current = null;
+    button.current?.focus();
+  }, [field.key, justPlaced]);
+  const select = () => editor.setSelectedKey(field.key);
   function drag(event: PointerEvent<HTMLButtonElement>) {
     event.stopPropagation();
     event.preventDefault();
@@ -774,7 +791,12 @@ function DraftFieldBox({
   function key(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
+      // Keep keyboard users in the editor rather than back at the page top.
+      const tools = event.currentTarget
+        .closest(".contractEditor")
+        ?.querySelector<HTMLElement>(".contractTool");
       editor.removeField(field.key);
+      tools?.focus();
       return;
     }
     const step = event.shiftKey ? 0.05 : 0.01;
@@ -795,6 +817,8 @@ function DraftFieldBox({
         recipientTone(Math.max(index, 0)),
         selected && "contractFieldSelected",
       )}
+      onClick={select}
+      onFocus={select}
       onKeyDown={key}
       onPointerDown={drag}
       ref={button}

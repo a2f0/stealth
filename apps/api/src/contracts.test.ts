@@ -495,11 +495,13 @@ describe("contracts", () => {
     fixture.database
       .query("UPDATE contract_recipients SET last_reminded_at = ?")
       .run(new Date(Date.now() - 2 * 3_600_000).toISOString());
-    const manual = await fixture.json<{ reminded: number }>(
-      "POST",
-      `/api/contracts/${id}/remind`,
-    );
-    expect(manual.body.reminded).toBe(2);
+    // A double click reminds each signer once.
+    const [manual, doubled] = await Promise.all([
+      fixture.json<{ reminded: number }>("POST", `/api/contracts/${id}/remind`),
+      fixture.json<{ reminded: number }>("POST", `/api/contracts/${id}/remind`),
+    ]);
+    expect(manual.body.reminded + (doubled.body.reminded ?? 0)).toBe(2);
+    expect(fixture.emails).toHaveLength(2);
     expect(
       (await fixture.json("POST", `/api/contracts/${id}/remind`)).status,
     ).toBe(429);
@@ -525,17 +527,65 @@ describe("contracts", () => {
       { consent: true, signature: png },
     );
     expect(signed.body).toEqual({ completed: false, status: "signed" });
-    expect(await resumeStalledContracts(fixture.bindings)).toBe(0);
+    const hour = (count: number) => new Date(Date.now() + count * 3_600_000);
+    expect(await resumeStalledContracts(fixture.bindings, hour(0))).toBe(0);
     expect(await statusOf(fixture, id)).toBe("sent");
+    // An attempt is leased, so an overlapping run leaves it alone.
+    expect(await resumeStalledContracts(fixture.bindings, hour(0))).toBe(0);
 
     fixture.storage.failWrites = false;
-    expect(await resumeStalledContracts(fixture.bindings)).toBe(1);
+    expect(await resumeStalledContracts(fixture.bindings, hour(1))).toBe(1);
     expect(await statusOf(fixture, id)).toBe("completed");
     expect(fixture.emails.map(({ to }) => to.email)).toEqual([
       "sam@example.com",
       "owner@example.com",
     ]);
-    expect(await resumeStalledContracts(fixture.bindings)).toBe(0);
+    expect(await resumeStalledContracts(fixture.bindings, hour(2))).toBe(0);
+  });
+
+  it("gives up on a contract that keeps failing to complete", async () => {
+    const fixture = await createFixture();
+    const id = await fixture.prepare(solo());
+    await fixture.json("POST", `/api/contracts/${id}/send`);
+    fixture.storage.failWrites = true;
+    await fixture.json(
+      "POST",
+      `/api/signing/${tokenFrom(fixture.emails[0])}/sign`,
+      { consent: true, signature: png },
+    );
+    for (let hour = 1; hour <= 7; hour++) {
+      await resumeStalledContracts(
+        fixture.bindings,
+        new Date(Date.now() + hour * 3_600_000),
+      );
+    }
+    expect(
+      fixture.database
+        .query("SELECT resume_attempts AS attempts FROM contracts WHERE id = ?")
+        .get(id),
+    ).toEqual({ attempts: 5 });
+    expect(await statusOf(fixture, id)).toBe("sent");
+  });
+
+  it("refuses a send when the draft changes while it is validated", async () => {
+    const fixture = await createFixture();
+    const id = await fixture.prepare(draft());
+    // A save from another tab lands between validation and the send.
+    fixture.onQuery = (query) => {
+      if (query.includes("SET status = 'sent'")) {
+        fixture.database
+          .query("UPDATE contracts SET revision = revision + 1 WHERE id = ?")
+          .run(id);
+      }
+    };
+    const raced = await fixture.json<{ error: string }>(
+      "POST",
+      `/api/contracts/${id}/send`,
+    );
+    expect(raced.status).toBe(409);
+    expect(raced.body.error).toContain("changed while it was being sent");
+    expect(await statusOf(fixture, id)).toBe("draft");
+    expect(fixture.emails).toEqual([]);
   });
 
   it("rejects adopted images that could not be stamped", async () => {
@@ -682,7 +732,7 @@ async function createFixture() {
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: toD1(database),
+    DB: toD1(database, (query) => fixture.onQuery?.(query)),
     EMAIL: {
       send: async (message: SentEmail) => {
         emails.push(message);
@@ -752,7 +802,8 @@ async function createFixture() {
   }
 
   const owner = as("owner-user", "org-1");
-  return {
+  const fixture: { onQuery?: (query: string) => void } = {};
+  return Object.assign(fixture, {
     ...owner,
     as,
     bindings,
@@ -774,7 +825,7 @@ async function createFixture() {
       return created.body.contract.id;
     },
     stored,
-  };
+  });
 }
 
 function seed(database: Database) {
@@ -819,7 +870,8 @@ interface TestStatement {
   execute: () => { changes: number };
 }
 
-function toD1(database: Database) {
+/** A D1 stand-in; `onQuery` runs before each statement executes. */
+function toD1(database: Database, onQuery: (query: string) => void) {
   return {
     // D1 runs a batch as one transaction.
     batch: async (statements: TestStatement[]) =>
@@ -839,9 +891,13 @@ function toD1(database: Database) {
           values = nextValues;
           return statement;
         },
-        execute: () => database.query(query).run(...values),
+        execute: () => {
+          onQuery(query);
+          return database.query(query).run(...values);
+        },
         first: async () => database.query(query).get(...values),
         run: async () => {
+          onQuery(query);
           const result = database.query(query).run(...values);
           return { meta: { changes: result.changes }, success: true };
         },

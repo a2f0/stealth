@@ -31,7 +31,14 @@ CREATE TABLE contracts (
   sent_at TEXT,
   completed_at TEXT,
   voided_at TEXT,
-  void_reason TEXT
+  void_reason TEXT,
+  -- Bumped by every draft save, so a send only goes out for the draft it
+  -- validated.
+  revision INTEGER NOT NULL DEFAULT 0,
+  -- The scheduled sweep that finishes stalled contracts claims each attempt
+  -- before making it, and gives up after a few.
+  resume_attempts INTEGER NOT NULL DEFAULT 0,
+  resume_attempted_at TEXT
 );
 
 CREATE INDEX contracts_organization_updated_idx

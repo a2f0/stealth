@@ -1,5 +1,4 @@
 import {
-  Banner,
   Button,
   ButtonLink,
   cx,
@@ -172,7 +171,6 @@ function SigningSession({
           </ButtonLink>
         </div>
       </section>
-      {session.error && <Banner tone="danger">{session.error}</Banner>}
       <ContractPages
         load={() => fetchSigningDocument(token)}
         renderOverlay={(page) =>
@@ -296,6 +294,12 @@ function SigningFooter({ session }: { session: Session }) {
   const ready = session.remaining === 0 && session.consent;
   return (
     <footer className="signingFooter">
+      {/* Beside Finish, so a rejected signature is seen where it was tapped. */}
+      {session.error && (
+        <p className="fieldError signingFooterError" role="alert">
+          {session.error}
+        </p>
+      )}
       <label className="check signingConsent">
         <input
           checked={session.consent}
