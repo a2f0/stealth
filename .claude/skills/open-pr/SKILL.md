@@ -30,6 +30,10 @@ PR **title must conform to the repository's commitlint rules**
   package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
   independently trusted installation outside the repository checkout.
 - `node_modules` installed (`bun install`) so repository checks and hooks run.
+- Commit signing configured so `git commit -S` works without a prompt, and so
+  git can verify the result (SSH signing also needs
+  `gpg.ssh.allowedSignersFile`). Pushes
+  are refused while any commit in the branch is unsigned.
 - macOS Seatbelt for credential-free preflights. The tool fails closed instead
   of running branch scripts unsandboxed on another platform.
 - The working tree contains only changes intended for this PR. Stop and ask
@@ -77,7 +81,10 @@ GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
 GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
 BUN_BIN=$(resolve_bootstrap_tool bun) || exit 1
 TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
-PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+# Commits are signed: keep the signing program (gpg, when installed) on PATH,
+# or git can neither sign commits nor verify their signatures.
+GPG_BIN=$(resolve_bootstrap_tool gpg 2>/dev/null || true)
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}${GPG_BIN:+:${GPG_BIN%/*}}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -116,7 +123,7 @@ BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
   exit 1
 }
 
-if git cat-file -e "$BASE_HEAD:packages/agent-tool/src/index.ts" 2>/dev/null; then
+if git cat-file -e "${BASE_HEAD}:packages/agent-tool/src/index.ts" 2>/dev/null; then
   TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
   trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
   git archive "$BASE_HEAD" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
@@ -129,6 +136,41 @@ else
   esac
 fi
 [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
+
+# `--no-verify` pushes skip the feature checkout's pre-push hook, so every push
+# first runs the hook's commit-trust check itself, taken from the trusted base:
+# each commit being pushed must be signed and free of Co-authored-by trailers.
+# During the bootstrap PR that introduces the check, the base has no copy; set
+# TEARLEADS_COMMIT_TRUST_SCRIPT to an independently trusted copy instead.
+verify_commit_trust() {
+  # Only a real commit may name the trusted base: an empty one would read the
+  # feature branch's own copy from the index and check an empty range.
+  [ -n "${1:-}" ] && trust_base=$(git rev-parse --verify --quiet "${1}^{commit}") || {
+    echo "Error: verify_commit_trust needs the trusted base commit" >&2
+    return 1
+  }
+  trust_dir=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-commit-trust.XXXXXX") || return 1
+  if git cat-file -e "${trust_base}:scripts/checks/checkCommitTrust.sh" 2>/dev/null; then
+    git show "${trust_base}:scripts/checks/checkCommitTrust.sh" >"$trust_dir/checkCommitTrust.sh" || { rm -rf "$trust_dir"; return 1; }
+    trust_script="$trust_dir/checkCommitTrust.sh"
+  elif [ -n "${TEARLEADS_COMMIT_TRUST_SCRIPT:-}" ]; then
+    trust_script=$("$REALPATH_BIN" "$TEARLEADS_COMMIT_TRUST_SCRIPT") || { rm -rf "$trust_dir"; return 1; }
+    # Outside every worktree of this repository, not just the current one.
+    if git worktree list --porcelain | awk -v script="$trust_script" 'sub(/^worktree /, "") && (script == $0 || index(script, $0 "/") == 1) { found = 1 } END { exit !found }'; then
+      echo "Error: trusted commit-trust check must be outside every checkout of this repository" >&2
+      rm -rf "$trust_dir"
+      return 1
+    fi
+  else
+    echo "Error: base has no commit-trust check; set TEARLEADS_COMMIT_TRUST_SCRIPT to a trusted copy outside the checkout" >&2
+    rm -rf "$trust_dir"
+    return 1
+  fi
+  trust_status=0
+  sh "$trust_script" --range "$trust_base..HEAD" || trust_status=$?
+  rm -rf "$trust_dir"
+  [ "$trust_status" -eq 0 ] || { echo "Error: refusing to push unsigned or co-authored commits" >&2; return 1; }
+}
 ```
 
 ## Workflow
@@ -299,12 +341,13 @@ fi
 
    Review the final diff, stage only intended paths, and commit any uncommitted
    work with a valid conventional subject — and never with a `Co-authored-by`
-   trailer, which repository policy rejects. Contributor-controlled hooks and
-   signing stay disabled for the commit:
+   trailer, which repository policy rejects. Contributor-controlled hooks stay
+   disabled, and the commit is signed (`-S`), because unsigned commits are
+   refused at push:
 
    ```bash
    git add <intended-paths>
-   git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "$COMMIT_SUBJECT"
+   git -c core.hooksPath=/dev/null commit -S -m "$COMMIT_SUBJECT"
    ```
 
    Use separate commits for distinct changes when useful. Confirm the branch
@@ -312,15 +355,20 @@ fi
    feature remote:
 
    ```bash
+   verify_commit_trust "$BASE_HEAD" || exit 1
    git push --no-verify -u "$PUSH_REMOTE" "$BRANCH"
    ```
 
    `--no-verify` is required here: feature-controlled hooks must not run with
    ambient GitHub or reviewer credentials. The sandboxed preflight above is the
    validation gate: it strips credentials, denies external network access, and
-   prevents writes to `.git` and `node_modules`. Inspect commit messages for
-   forbidden co-author trailers before the review; never rewrite the reviewed
-   head during this push step.
+   prevents writes to `.git` and `node_modules`. Skipping the hook also skips
+   its commit-trust check, so `verify_commit_trust` runs that check first from
+   the trusted base and refuses the push if any commit is unsigned or carries a
+   `Co-authored-by` trailer. Inspect commit messages for forbidden co-author
+   trailers before the review; never rewrite the reviewed head during this push
+   step. Re-signing changes a commit's SHA, so a reviewed head that fails the
+   check goes back through review after it is fixed.
 
 4. **Open the PR** (title single-quoted; body via a quoted heredoc):
 

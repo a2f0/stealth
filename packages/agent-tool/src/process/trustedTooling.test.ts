@@ -158,7 +158,7 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
     );
     const mergeGuard = review.indexOf('if [ "$REPAIR_ROUNDS" -ne 0 ]; then');
     const merge = review.indexOf(
-      'git -c core.hooksPath=/dev/null -c commit.gpgSign=false merge --no-edit "$FETCHED_BASE"',
+      'git -c core.hooksPath=/dev/null merge -S --no-edit "$FETCHED_BASE"',
     );
     const push = review.indexOf(
       'git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"',
@@ -232,9 +232,11 @@ test("shipping skills isolate preflights and disable contributor hooks", () => {
       commitCommands.every(
         (line) =>
           line.includes("-c core.hooksPath=/dev/null") &&
-          line.includes("--no-gpg-sign"),
+          line.includes(" commit -S "),
       ),
     ).toBe(true);
+    expect(content).not.toContain("--no-gpg-sign");
+    expect(content).not.toContain("gpgSign=false");
   }
 
   for (const skillPath of mirroredSkillPaths) {
@@ -273,6 +275,83 @@ test("shipping skills isolate preflights and disable contributor hooks", () => {
   }
 });
 
+test("shipping skills gate every commit push on the trusted commit-trust check", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  for (const skillRoot of [".claude/skills", ".codex/skills"]) {
+    for (const skill of ["cross-agent-review", "open-pr", "ship-pr"]) {
+      const content = readFileSync(
+        path.join(repositoryRoot, skillRoot, skill, "SKILL.md"),
+        "utf8",
+      );
+      // Signing and verifying both need the signing program on PATH.
+      expect(content).toContain(
+        "GPG_BIN=$(resolve_bootstrap_tool gpg 2>/dev/null || true)",
+      );
+      expect(content).toContain("$" + "{GPG_BIN:+:$" + "{GPG_BIN%/*}}");
+      // The check comes from the trusted base, never the feature checkout.
+      expect(content).toContain("verify_commit_trust() {");
+      expect(content).toContain(
+        'git show "$' + '{trust_base}:scripts/checks/checkCommitTrust.sh"',
+      );
+      expect(content).toContain(
+        'sh "$trust_script" --range "$trust_base..HEAD"',
+      );
+
+      const lines = content.split("\n").map((line) => line.trim());
+      let pushes = 0;
+      lines.forEach((line, index) => {
+        if (!/^git .* ?push .*--no-verify/.test(line)) return;
+        pushes += 1;
+        const previous = lines
+          .slice(0, index)
+          .reverse()
+          .find((candidate) => candidate !== "");
+        expect(previous).toMatch(/^verify_commit_trust "\$\w+" \|\| exit 1$/);
+      });
+      expect(pushes).toBeGreaterThanOrEqual(
+        skill === "cross-agent-review" ? 2 : 1,
+      );
+    }
+
+    // A branch delete pushes no commits; it must not run the full hook.
+    const squashMerge = readFileSync(
+      path.join(repositoryRoot, skillRoot, "squash-merge/SKILL.md"),
+      "utf8",
+    );
+    const deletes = squashMerge
+      .split("\n")
+      .filter((line) => line.includes(':refs/heads/$MERGED_BRANCH"'));
+    expect(deletes.length).toBe(1);
+    expect(deletes[0]).toContain("-c core.hooksPath=/dev/null");
+    expect(deletes[0]).toContain("push --no-verify");
+  }
+});
+
+test("shipping skills share one commit-trust gate and avoid zsh modifiers", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  const gates = new Set<string>();
+  for (const skillRoot of [".claude/skills", ".codex/skills"]) {
+    for (const skill of [
+      "cross-agent-review",
+      "open-pr",
+      "reset",
+      "ship-pr",
+      "squash-merge",
+    ]) {
+      const content = readFileSync(
+        path.join(repositoryRoot, skillRoot, skill, "SKILL.md"),
+        "utf8",
+      );
+      // The agent's shell may be zsh, which reads "$VAR:s…" or "$VAR:A…" as
+      // history modifiers; every such expansion must be braced.
+      expect(content.match(/\$[A-Za-z_]\w*:[A-Za-z&]/g) ?? []).toEqual([]);
+      const gate = /^verify_commit_trust\(\) \{\n[\s\S]*?\n\}$/m.exec(content);
+      if (gate) gates.add(gate[0]);
+    }
+  }
+  expect(gates.size).toBe(1);
+});
+
 test("reset reaches the exact fetched upstream before installing hooks", () => {
   const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
   for (const skillPath of [
@@ -305,6 +384,9 @@ test("reset reaches the exact fetched upstream before installing hooks", () => {
       '[ "$(git rev-parse --verify \'HEAD^{commit}\')" = "$FETCHED_UPSTREAM" ]',
     );
     const install = content.indexOf('sh "$HOOKS_SCRIPT"');
+    const confirmInstalled = content.indexOf(
+      'cmp -s "$hook" "$HOOKS_DIR/$' + '{hook##*/}"',
+    );
 
     expect(fetch).toBeGreaterThan(-1);
     expect(resolveLocalTarget).toBeGreaterThan(fetch);
@@ -314,6 +396,7 @@ test("reset reaches the exact fetched upstream before installing hooks", () => {
     expect(fastForward).toBeGreaterThan(ancestry);
     expect(equality).toBeGreaterThan(fastForward);
     expect(install).toBeGreaterThan(equality);
+    expect(confirmInstalled).toBeGreaterThan(install);
   }
 });
 
@@ -325,10 +408,10 @@ test("in-session review fallback loads policy from the fetched base", () => {
   ]) {
     const content = readFileSync(path.join(repositoryRoot, skillPath), "utf8");
     const reviewPolicy = content.indexOf(
-      'git show "$FETCHED_BASE:REVIEW.md" > "$REVIEW_POLICY_FILE"',
+      'git show "$' + '{FETCHED_BASE}:REVIEW.md" > "$REVIEW_POLICY_FILE"',
     );
     const agentsPolicy = content.indexOf(
-      'git show "$FETCHED_BASE:AGENTS.md" > "$REVIEW_POLICY_FILE"',
+      'git show "$' + '{FETCHED_BASE}:AGENTS.md" > "$REVIEW_POLICY_FILE"',
     );
     const fileReview = content.indexOf(
       "Review each file against the trusted guidelines materialized in",

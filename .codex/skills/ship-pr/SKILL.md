@@ -60,6 +60,10 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 - The trusted `@tearleads/agent-tool` setup required by the delegated
   `cross-agent-review`, `open-pr`, and `squash-merge` skills.
 - `node_modules` installed (`bun install`) so repository checks and hooks run.
+- Commit signing configured so `git commit -S` works without a prompt, and so
+  git can verify the result (SSH signing also needs
+  `gpg.ssh.allowedSignersFile`). Every
+  push in the flow is refused while any commit in the branch is unsigned.
 - macOS Seatbelt for credential-free preflights. The delegated preflight fails
   closed on another platform.
 - The worktree contains only changes intended for this PR. A PR may already be
@@ -110,7 +114,10 @@ GIT_BIN=$(resolve_bootstrap_tool git) || exit 1
 GH_BIN=$(resolve_bootstrap_tool gh) || exit 1
 BUN_BIN=$(resolve_bootstrap_tool bun) || exit 1
 TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
-PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+# Commits are signed: keep the signing program (gpg, when installed) on PATH,
+# or git can neither sign commits nor verify their signatures.
+GPG_BIN=$(resolve_bootstrap_tool gpg 2>/dev/null || true)
+PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}${GPG_BIN:+:${GPG_BIN%/*}}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -129,7 +136,7 @@ BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
   exit 1
 }
 
-if git cat-file -e "$BASE_HEAD:packages/agent-tool/src/index.ts" 2>/dev/null; then
+if git cat-file -e "${BASE_HEAD}:packages/agent-tool/src/index.ts" 2>/dev/null; then
   TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
   trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
   git archive "$BASE_HEAD" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
@@ -142,6 +149,41 @@ else
   esac
 fi
 [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
+
+# `--no-verify` pushes skip the feature checkout's pre-push hook, so every push
+# first runs the hook's commit-trust check itself, taken from the trusted base:
+# each commit being pushed must be signed and free of Co-authored-by trailers.
+# During the bootstrap PR that introduces the check, the base has no copy; set
+# TEARLEADS_COMMIT_TRUST_SCRIPT to an independently trusted copy instead.
+verify_commit_trust() {
+  # Only a real commit may name the trusted base: an empty one would read the
+  # feature branch's own copy from the index and check an empty range.
+  [ -n "${1:-}" ] && trust_base=$(git rev-parse --verify --quiet "${1}^{commit}") || {
+    echo "Error: verify_commit_trust needs the trusted base commit" >&2
+    return 1
+  }
+  trust_dir=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-commit-trust.XXXXXX") || return 1
+  if git cat-file -e "${trust_base}:scripts/checks/checkCommitTrust.sh" 2>/dev/null; then
+    git show "${trust_base}:scripts/checks/checkCommitTrust.sh" >"$trust_dir/checkCommitTrust.sh" || { rm -rf "$trust_dir"; return 1; }
+    trust_script="$trust_dir/checkCommitTrust.sh"
+  elif [ -n "${TEARLEADS_COMMIT_TRUST_SCRIPT:-}" ]; then
+    trust_script=$("$REALPATH_BIN" "$TEARLEADS_COMMIT_TRUST_SCRIPT") || { rm -rf "$trust_dir"; return 1; }
+    # Outside every worktree of this repository, not just the current one.
+    if git worktree list --porcelain | awk -v script="$trust_script" 'sub(/^worktree /, "") && (script == $0 || index(script, $0 "/") == 1) { found = 1 } END { exit !found }'; then
+      echo "Error: trusted commit-trust check must be outside every checkout of this repository" >&2
+      rm -rf "$trust_dir"
+      return 1
+    fi
+  else
+    echo "Error: base has no commit-trust check; set TEARLEADS_COMMIT_TRUST_SCRIPT to a trusted copy outside the checkout" >&2
+    rm -rf "$trust_dir"
+    return 1
+  fi
+  trust_status=0
+  sh "$trust_script" --range "$trust_base..HEAD" || trust_status=$?
+  rm -rf "$trust_dir"
+  [ "$trust_status" -eq 0 ] || { echo "Error: refusing to push unsigned or co-authored commits" >&2; return 1; }
+}
 ```
 
 The setup fetches the exact GitHub base and materializes `packages/agent-tool`
@@ -171,10 +213,11 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
      fixes): do not prepare a new branch or open another PR. Confirm it targets
      the expected branch, then run the relevant preflight, stage only intended
      paths, commit any uncommitted intended work with a valid conventional
-     subject, and push it without force so the pushed head carries the resumed
-     work. Capture its number, URL, and title, and set `PR_NUMBER` to it. On this
-     existing-PR path `cross-agent-review` reviews the pushed head and pushes its
-     own repairs, and step 3 is a no-op.
+     subject, and push it without force (`--no-verify`, once
+     `verify_commit_trust "$BASE_HEAD"` passes) so the pushed head carries the
+     resumed work. Capture its number, URL, and title, and set `PR_NUMBER` to
+     it. On this existing-PR path `cross-agent-review` reviews the pushed head
+     and pushes its own repairs, and step 3 is a no-op.
    - **`$BRANCH` equals `$DEFAULT_BRANCH`**: move the work to a new feature branch
      with the same safe transition `open-pr` documents in its "Move
      default-branch work safely" step — stash tracked and untracked work, fetch,
@@ -195,13 +238,23 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    ```bash
    "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" runPreflight check
    git add <intended-paths>
-   git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "$COMMIT_SUBJECT"
+   git -c core.hooksPath=/dev/null commit -S -m "$COMMIT_SUBJECT"
+   ```
+
+   On the resume path only, push the committed work to the branch's push remote
+   (resolved by the PR lookup above) after the same trusted commit-trust check
+   every push in this flow runs:
+
+   ```bash
+   verify_commit_trust "$BASE_HEAD" || exit 1
+   git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"
    ```
 
    Skip `git add` and `git commit` when there is no uncommitted work. The
    preflight sandbox strips credentials, denies external network access, and
    blocks writes to `.git` and `node_modules`; the commit disables all
-   contributor-controlled hooks and signing. Never run a branch-controlled
+   contributor-controlled hooks and is signed, because every push in this flow
+   refuses unsigned commits. Never run a branch-controlled
    package script or commit hook in this credential-bearing orchestration shell.
    Checks that inherently require local TCP (currently the Workerd upload
    integration and provider-backed Terraform validation/TFLint) explicitly skip
@@ -353,7 +406,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    the git hooks from `scripts/git/install-hooks.sh`.
 
    After step 4 the checkout is normally already on the base branch and current,
-   so the branch half is a no-op; the hooks half is the point. Hook changes
+   so the branch half is a no-op; the hooks half is the point. This is where the
+   flow re-bootstraps the hooks, including the pre-push commit-trust gate that
+   refuses unsigned or co-authored commits on every manual push. Hook changes
    arrive as ordinary commits under `scripts/git/hooks/` and do nothing until
    they are copied into `.git/hooks`, so a flow that just merged one would
    otherwise leave the stale hook installed until someone noticed. Running the

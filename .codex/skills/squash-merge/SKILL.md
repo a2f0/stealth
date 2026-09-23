@@ -132,7 +132,7 @@ git fetch --quiet "$BASE_REPO_URL" "$BASE_BRANCH" || { echo "Error: could not fe
 TOOL_BASE_SHA=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || { echo "Error: fetched PR base is unavailable" >&2; exit 1; }
 [ "$TOOL_BASE_SHA" = "$PR_BASE_SHA" ] || { echo "Error: PR base moved while resolving the trusted agent-tool; retry" >&2; exit 1; }
 
-if git cat-file -e "$TOOL_BASE_SHA:packages/agent-tool/src/index.ts" 2>/dev/null; then
+if git cat-file -e "${TOOL_BASE_SHA}:packages/agent-tool/src/index.ts" 2>/dev/null; then
   TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
   trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
   git archive "$TOOL_BASE_SHA" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
@@ -271,7 +271,7 @@ as-is.
    REMOTE_BRANCH_SHA=$(printf '%s\n' "$REMOTE_BRANCH_LINES" | awk 'NR == 1 { print $1 }')
    if [ -n "$REMOTE_BRANCH_SHA" ]; then
      [ "$REMOTE_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$REMOTE_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH moved to $REMOTE_BRANCH_SHA after merge; refusing remote delete" >&2; exit 1; }
-     git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --force-with-lease="refs/heads/$MERGED_BRANCH:$REMOTE_BRANCH_SHA" "$FEATURE_REPO_URL" ":refs/heads/$MERGED_BRANCH" || { echo "Error: could not lease-delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }
+     git -c core.hooksPath=/dev/null -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --no-verify --force-with-lease="refs/heads/$MERGED_BRANCH:$REMOTE_BRANCH_SHA" "$FEATURE_REPO_URL" ":refs/heads/$MERGED_BRANCH" || { echo "Error: could not lease-delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }
    fi
    LOCAL_BRANCH_SHA=$(git rev-parse --verify "refs/heads/$MERGED_BRANCH^{commit}") || { echo "Error: could not resolve local branch $MERGED_BRANCH; refusing local delete" >&2; exit 1; }
    [ "$LOCAL_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$LOCAL_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: local $MERGED_BRANCH moved after merge; refusing local delete" >&2; exit 1; }
@@ -297,6 +297,9 @@ as-is.
      means GitHub already deleted the feature branch and is treated as success.
      Local deletion separately requires the branch tip to remain the captured
      pre-merge head.
+   - **The delete bypasses hooks.** It pushes no commits, so there is nothing
+     for the commit-trust check to verify, and the pre-push hook would
+     otherwise run the repository's full check and test with credentials.
    - **`-D`, not `-d`, is required here** — see the note below. The `MERGED` check
      plus the ancestry check above are what make the force safe.
 
