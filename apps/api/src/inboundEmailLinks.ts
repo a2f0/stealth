@@ -8,7 +8,10 @@ type LinkContext = Context<{
   Variables: AuthVariables;
 }>;
 
-type EmailLinkTargetType = "finance_transaction" | "library_folder";
+type EmailLinkTargetType =
+  | "equipment"
+  | "finance_transaction"
+  | "library_folder";
 
 interface EmailLinkInput {
   targetId: string;
@@ -16,6 +19,10 @@ interface EmailLinkInput {
 }
 
 interface EmailLinkRow {
+  equipment_make: string | null;
+  equipment_model: string | null;
+  equipment_serial_number: string | null;
+  equipment_type: string | null;
   folder_name: string | null;
   id: string;
   target_id: string;
@@ -58,7 +65,7 @@ export async function listEmailLinks(
     .flatMap((row) => toEmailLink(row) ?? []);
 }
 
-/** Links an inbox email to a library folder or a finance transaction. */
+/** Links an inbox email to a library folder, equipment, or a transaction. */
 export async function createEmailLink(context: LinkContext) {
   const emailId = context.req.param("id");
   const input = linkInput(await context.req.json().catch(() => null));
@@ -192,6 +199,9 @@ async function emailLinkRows(
     .prepare(
       `SELECT link.id, link.target_type, link.target_id,
               folder.name AS folder_name,
+              item.type AS equipment_type, item.make AS equipment_make,
+              item.model AS equipment_model,
+              item.serial_number AS equipment_serial_number,
               txn.name AS transaction_name,
               txn.merchant_name AS transaction_merchant_name,
               txn.amount AS transaction_amount,
@@ -202,6 +212,10 @@ async function emailLinkRows(
          ON link.target_type = 'library_folder'
         AND folder.id = link.target_id
         AND folder.organization_id = link.organization_id
+       LEFT JOIN equipment AS item
+         ON link.target_type = 'equipment'
+        AND item.id = link.target_id
+        AND item.organization_id = link.organization_id
        LEFT JOIN plaid_transactions AS txn
          ON link.target_type = 'finance_transaction'
         AND txn.id = link.target_id
@@ -220,11 +234,14 @@ async function targetExists(
   organizationId: string,
   input: EmailLinkInput,
 ) {
-  const query =
-    input.targetType === "library_folder"
-      ? `SELECT id FROM library_folders WHERE id = ? AND organization_id = ?`
-      : `SELECT id FROM plaid_transactions
-         WHERE id = ? AND organization_id = ? AND source_status = 'active'`;
+  const queries: Record<EmailLinkTargetType, string> = {
+    equipment: `SELECT id FROM equipment WHERE id = ? AND organization_id = ?`,
+    finance_transaction: `SELECT id FROM plaid_transactions
+      WHERE id = ? AND organization_id = ? AND source_status = 'active'`,
+    library_folder: `SELECT id FROM library_folders
+      WHERE id = ? AND organization_id = ?`,
+  };
+  const query = queries[input.targetType];
   return Boolean(
     await database.prepare(query).bind(input.targetId, organizationId).first(),
   );
@@ -240,6 +257,20 @@ function canUseFinance(context: LinkContext) {
 }
 
 function toEmailLink(row: EmailLinkRow) {
+  if (row.target_type === "equipment") {
+    if (row.equipment_make === null) return null;
+    return {
+      equipment: {
+        make: row.equipment_make,
+        model: row.equipment_model ?? "",
+        serialNumber: row.equipment_serial_number,
+        type: row.equipment_type ?? "",
+      },
+      id: row.id,
+      targetId: row.target_id,
+      targetType: row.target_type,
+    };
+  }
   if (row.target_type === "library_folder") {
     if (row.folder_name === null) return null;
     return {
@@ -269,7 +300,9 @@ function linkInput(input: unknown): EmailLinkInput | null {
   const targetType = Reflect.get(input, "targetType");
   const targetId = Reflect.get(input, "targetId");
   if (
-    (targetType !== "library_folder" && targetType !== "finance_transaction") ||
+    (targetType !== "equipment" &&
+      targetType !== "library_folder" &&
+      targetType !== "finance_transaction") ||
     typeof targetId !== "string" ||
     targetId.length === 0 ||
     targetId.length > 100

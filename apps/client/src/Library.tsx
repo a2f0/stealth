@@ -35,12 +35,12 @@ import {
   unlinkInboundEmail,
   uploadObject,
 } from "./api";
+import { LinkedEmailList } from "./LinkedEmailList";
 import { countLabel, formatBytes } from "./labels";
 import { useMenuDismissal } from "./useMenuDismissal";
 import type { WorkspaceUser } from "./WorkspaceShell";
 import {
   handleNavigation,
-  inboxEmailPath,
   libraryFolderIdForPath,
   libraryPath,
 } from "./workspacePaths";
@@ -432,9 +432,11 @@ function LibraryContent({
             </EmptyState>
           )}
         </PageSection>
-        <LinkedEmails
+        <LinkedEmailList
           busy={actions.busy}
+          description="Inbox messages linked to this folder."
           emails={data.detail.emails}
+          emptyText="Open a message in the Inbox and link it to this folder."
           onNavigate={onNavigate}
           onUnlink={(email) => void actions.unlink(email)}
         />
@@ -625,76 +627,6 @@ function FileCard({
         </div>
       )}
     </article>
-  );
-}
-
-function LinkedEmails({
-  busy,
-  emails,
-  onNavigate,
-  onUnlink,
-}: {
-  busy: boolean;
-  emails: LinkedEmail[];
-  onNavigate: (pathname: string) => void;
-  onUnlink: (email: LinkedEmail) => void;
-}) {
-  return (
-    <PageSection
-      actions={
-        <span className="sectionCount">
-          {countLabel(emails.length, "email")}
-        </span>
-      }
-      description="Inbox messages linked to this folder."
-      title="Linked emails"
-    >
-      {emails.length === 0 ? (
-        <EmptyState compact icon="mail" title="No linked emails">
-          Open a message in the Inbox and link it to this folder.
-        </EmptyState>
-      ) : (
-        <Card flush>
-          <ul className="rowList">
-            {emails.map((email) => {
-              const path = inboxEmailPath(email.id);
-              const subject = email.subject || "(no subject)";
-              return (
-                <li className="row folderEmail" key={email.linkId}>
-                  <Icon className="folderEmailIcon" name="mail" />
-                  <a
-                    className="rowMain folderEmailLink"
-                    href={path}
-                    onClick={(event) =>
-                      handleNavigation(event, path, onNavigate)
-                    }
-                  >
-                    <span className="rowTitle truncate">{subject}</span>
-                    <span className="rowMeta truncate">
-                      {email.from} · {formatDate(email.receivedAt)}
-                      {email.attachmentCount > 0 &&
-                        ` · ${countLabel(email.attachmentCount, "attachment")}`}
-                    </span>
-                  </a>
-                  <div className="rowActions">
-                    <Button
-                      aria-label={`Unlink ${subject}`}
-                      disabled={busy}
-                      icon="unlink"
-                      onClick={() => onUnlink(email)}
-                      size="sm"
-                      variant="ghost"
-                    >
-                      Unlink
-                    </Button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
-      )}
-    </PageSection>
   );
 }
 

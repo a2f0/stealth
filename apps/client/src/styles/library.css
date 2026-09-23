@@ -120,21 +120,21 @@
   overflow-y: auto;
 }
 
-/* Linked emails in a folder. */
-.folderEmail {
+/* Linked emails on a folder or a piece of equipment (LinkedEmailList). */
+.linkedEmail {
   flex-wrap: nowrap;
 }
 
-.folderEmailIcon {
+.linkedEmailIcon {
   color: var(--color-text-subtle);
 }
 
-.folderEmailLink {
+.linkedEmailLink {
   color: inherit;
   text-decoration: none;
 }
 
-.folderEmailLink:hover .rowTitle {
+.linkedEmailLink:hover .rowTitle {
   text-decoration: underline;
 }
 

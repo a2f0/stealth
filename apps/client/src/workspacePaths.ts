@@ -19,6 +19,28 @@ export function libraryFolderIdForPath(pathname: string) {
   }
 }
 
+/** The equipment list, or one item of equipment. */
+export function equipmentPath(equipmentId?: string) {
+  return equipmentId
+    ? `/equipment/${encodeURIComponent(equipmentId)}`
+    : "/equipment";
+}
+
+export function isEquipmentPath(pathname: string) {
+  return pathname === "/equipment" || pathname.startsWith("/equipment/");
+}
+
+/** The equipment id in an `/equipment/<id>` path, if any. */
+export function equipmentIdForPath(pathname: string) {
+  const segment = /^\/equipment\/([^/]+)\/?$/.exec(pathname)?.[1];
+  if (!segment) return undefined;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 /** Opens one message in the inbox. */
 export function inboxEmailPath(emailId: string) {
   return `/inbox?${new URLSearchParams({ email: emailId })}`;

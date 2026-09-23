@@ -114,6 +114,18 @@ first preview; the client build copies its image decoders, colour profiles,
 character maps, and standard fonts to `/pdfjs/`. Only raster image formats are
 previewed, so SVG attachments download instead.
 
+## Equipment
+
+The organization-scoped Equipment page at `/equipment` tracks computers, cell
+phones, and monitors with their make, model, serial number, and purchase date.
+Each item can be assigned to one organization member at a time, and removing a
+member from the organization returns their equipment to unassigned. Every
+member can view equipment; organization owners and admins add, edit, assign,
+and delete it. Receipts and other inbox emails link to equipment the same way
+they link to folders, through `inbound_email_links` with a `target_type` of
+`equipment`. The API owns the list of equipment types, so adding one needs no
+migration.
+
 ## Audits and checklists
 
 Authenticated users can build organization-scoped checklist templates at

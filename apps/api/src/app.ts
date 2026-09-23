@@ -13,6 +13,7 @@ import {
 } from "./authMiddleware";
 import { billing, handleStripeWebhook, syncOrganizationSeats } from "./billing";
 import { businesses } from "./businesses";
+import { equipment } from "./equipment";
 import { finance } from "./finance";
 import { inbox } from "./inbox";
 import { libraryFolders } from "./libraryFolders";
@@ -83,6 +84,7 @@ app.get("/api", (context) =>
       audits: "/api/audits",
       billing: "/api/billing",
       businesses: "/api/businesses",
+      equipment: "/api/equipment",
       finance: "/api/finance",
       inbox: "/api/inbox",
       libraryFolders: "/api/library/folders",
@@ -114,6 +116,10 @@ app.route("/api/audits", audits);
 app.use("/api/businesses", requireAuth, requireOrganization);
 app.use("/api/businesses/*", requireAuth, requireOrganization);
 app.route("/api/businesses", businesses);
+
+app.use("/api/equipment", requireAuth, requireOrganization);
+app.use("/api/equipment/*", requireAuth, requireOrganization);
+app.route("/api/equipment", equipment);
 
 app.post("/api/billing/webhook", handleStripeWebhook);
 app.use("/api/billing", requireAuth, requireOrganization);

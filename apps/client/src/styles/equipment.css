@@ -1,0 +1,119 @@
+/* Equipment inventory: filters, the item list, details, and the item form. */
+.equipmentFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.equipmentAssigneeFilter {
+  width: auto;
+  min-width: 12rem;
+}
+
+.equipmentRow {
+  flex-wrap: nowrap;
+  gap: var(--space-4);
+}
+
+.equipmentTypeMark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-md);
+  color: var(--color-green-deep);
+  background: var(--color-lime-wash);
+}
+
+.equipmentEmailCount {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.equipmentAssignee {
+  display: inline-flex;
+  flex: 0 1 12rem;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.equipmentUnassigned {
+  color: var(--color-text-subtle);
+}
+
+.equipmentDetails {
+  grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3) var(--space-6);
+}
+
+.equipmentTypeInline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.equipmentMissing {
+  color: var(--color-text-subtle);
+}
+
+.equipmentAssigneeSelect {
+  width: min(100%, 22rem);
+}
+
+.equipmentFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+@media (max-width: 720px) {
+  .equipmentFields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .equipmentFilters > .segmented,
+  .equipmentAssigneeFilter {
+    width: 100%;
+  }
+
+  /* The type filter scrolls within the row instead of widening the page. */
+  .equipmentFilters > .segmented {
+    contain: inline-size;
+  }
+
+  /* The assignee drops below the name so long names still fit. */
+  .equipmentRow {
+    flex-wrap: wrap;
+  }
+
+  .equipmentAssignee {
+    flex-basis: 100%;
+    padding-left: calc(2.5rem + var(--space-4));
+  }
+}
+
+/* Keep Type through Assigned to in two columns on phones, where .keyValue
+ * stacks. */
+.equipmentDetails dd + dt {
+  margin-top: 0;
+}
+
+/* The list rows are links; the icon tile and count keep their own colours. */
+.equipmentRow .rowTitle {
+  color: var(--color-text);
+}

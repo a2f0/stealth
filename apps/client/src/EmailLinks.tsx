@@ -1,4 +1,4 @@
-import { Banner, Button, cx, Icon } from "@tearleads/ui/react";
+import { Banner, Button, cx, Icon, type IconName } from "@tearleads/ui/react";
 import { type FormEvent, useEffect, useState } from "react";
 import {
   type InboundEmailLink,
@@ -8,18 +8,24 @@ import {
   listLibraryFolders,
   unlinkInboundEmail,
 } from "./api";
+import { type EquipmentItem, listEquipment } from "./equipmentApi";
+import {
+  equipmentName,
+  equipmentTypeIcon,
+  equipmentTypeLabel,
+} from "./equipmentLabels";
 import {
   type FinanceTransactionMatch,
   searchFinanceTransactions,
 } from "./financeApi";
 import { formatMoney } from "./financeFormat";
-import { handleNavigation, libraryPath } from "./workspacePaths";
+import { equipmentPath, handleNavigation, libraryPath } from "./workspacePaths";
 
-type LinkTab = "folder" | "transaction";
+type LinkTab = "equipment" | "folder" | "transaction";
 
 /**
- * The folders and transactions an email is linked to, with controls to add
- * and remove links while the email is outside Trash.
+ * The folders, equipment, and transactions an email is linked to, with
+ * controls to add and remove links while the email is outside Trash.
  */
 export function EmailLinks({
   canAccessFinance,
@@ -105,8 +111,8 @@ export function EmailLinks({
       ) : (
         !adding && (
           <p className="emailLinksEmpty">
-            Link this email to a library folder
-            {canAccessFinance ? " or a finance transaction" : ""} to keep it
+            Link this email to a library folder, equipment
+            {canAccessFinance ? ", or a finance transaction" : ""} to keep it
             with related records.
           </p>
         )
@@ -140,11 +146,7 @@ function EmailLinkChip({
   onUnlink: () => void;
   working: boolean;
 }) {
-  const folder = link.targetType === "library_folder";
-  const label = folder
-    ? link.folder.name
-    : `${link.transaction.merchantName ?? link.transaction.name} · ${formatMoney(-link.transaction.amount, link.transaction.currencyCode)} · ${formatDate(link.transaction.date)}`;
-  const path = folder ? libraryPath(link.targetId) : "/finance";
+  const { icon, label, path } = describeLink(link);
   return (
     <li className="emailLinkChip">
       <a
@@ -152,7 +154,7 @@ function EmailLinkChip({
         href={path}
         onClick={(event) => handleNavigation(event, path, onNavigate)}
       >
-        <Icon name={folder ? "folder" : "finance"} size={16} />
+        <Icon name={icon} size={16} />
         <span className="emailLinkLabel">{label}</span>
       </a>
       {editable && (
@@ -187,45 +189,178 @@ function AddLinkPanel({
 }) {
   const [tab, setTab] = useState<LinkTab>("folder");
   const linkedIds = new Set(links.map(({ targetId }) => targetId));
+  const tabs: Array<{ icon: IconName; label: string; value: LinkTab }> = [
+    { icon: "folder", label: "Library folder", value: "folder" },
+    { icon: "equipment", label: "Equipment", value: "equipment" },
+    ...(canAccessFinance
+      ? [
+          {
+            icon: "finance" as const,
+            label: "Transaction",
+            value: "transaction" as const,
+          },
+        ]
+      : []),
+  ];
   return (
     <div className="emailLinkPanel">
       <div className="emailLinkPanelHeader">
-        {canAccessFinance ? (
-          <nav aria-label="Link to" className="segmented">
+        <nav aria-label="Link to" className="segmented">
+          {tabs.map((option) => (
             <button
-              aria-pressed={tab === "folder"}
-              onClick={() => setTab("folder")}
+              aria-pressed={tab === option.value}
+              key={option.value}
+              onClick={() => setTab(option.value)}
               type="button"
             >
-              <Icon name="folder" size={16} />
-              Library folder
+              <Icon name={option.icon} size={16} />
+              {option.label}
             </button>
-            <button
-              aria-pressed={tab === "transaction"}
-              onClick={() => setTab("transaction")}
-              type="button"
-            >
-              <Icon name="finance" size={16} />
-              Transaction
-            </button>
-          </nav>
-        ) : (
-          <p className="eyebrow">Link to a library folder</p>
-        )}
+          ))}
+        </nav>
         <Button icon="close" onClick={onCancel} size="sm" variant="ghost">
           Cancel
         </Button>
       </div>
-      {tab === "folder" ? (
+      {tab === "folder" && (
         <FolderPicker
           linkedIds={linkedIds}
           onLink={onLink}
           onNavigate={onNavigate}
         />
-      ) : (
+      )}
+      {tab === "equipment" && (
+        <EquipmentPicker
+          linkedIds={linkedIds}
+          onLink={onLink}
+          onNavigate={onNavigate}
+        />
+      )}
+      {tab === "transaction" && (
         <TransactionPicker linkedIds={linkedIds} onLink={onLink} />
       )}
     </div>
+  );
+}
+
+/** The icon, text, and destination of a link chip. */
+function describeLink(link: InboundEmailLink): {
+  icon: IconName;
+  label: string;
+  path: string;
+} {
+  if (link.targetType === "library_folder") {
+    return {
+      icon: "folder",
+      label: link.folder.name,
+      path: libraryPath(link.targetId),
+    };
+  }
+  if (link.targetType === "equipment") {
+    const serial = link.equipment.serialNumber;
+    return {
+      icon: equipmentTypeIcon(link.equipment.type),
+      label: serial
+        ? `${equipmentName(link.equipment)} · ${serial}`
+        : equipmentName(link.equipment),
+      path: equipmentPath(link.targetId),
+    };
+  }
+  const { transaction } = link;
+  return {
+    icon: "finance",
+    label: `${transaction.merchantName ?? transaction.name} · ${formatMoney(-transaction.amount, transaction.currencyCode)} · ${formatDate(transaction.date)}`,
+    path: "/finance",
+  };
+}
+
+function EquipmentPicker({
+  linkedIds,
+  onLink,
+  onNavigate,
+}: {
+  linkedIds: Set<string>;
+  onLink: (target: InboundEmailLinkTarget) => Promise<void>;
+  onNavigate: (pathname: string) => void;
+}) {
+  const [equipment, setEquipment] = useState<EquipmentItem[]>();
+  const [equipmentId, setEquipmentId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let active = true;
+    listEquipment()
+      .then((listing) => {
+        if (active) setEquipment(listing.equipment);
+      })
+      .catch((cause: unknown) => {
+        if (active) setError(messageFrom(cause));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  const available = equipment?.filter(({ id }) => !linkedIds.has(id)) ?? [];
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!equipmentId) return;
+    setSaving(true);
+    await onLink({ targetId: equipmentId, targetType: "equipment" });
+    setSaving(false);
+  }
+
+  if (error) return <p className="fieldError">{error}</p>;
+  if (!equipment) return <p className="emailLinksEmpty">Loading equipment…</p>;
+  if (available.length === 0) {
+    return (
+      <div className="emailLinkPickerEmpty">
+        <p className="emailLinksEmpty">
+          {equipment.length
+            ? "This email is already linked to all of your equipment."
+            : "Your organization hasn’t added any equipment yet."}
+        </p>
+        <Button
+          icon="equipment"
+          onClick={() => onNavigate(equipmentPath())}
+          size="sm"
+        >
+          Open Equipment
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <form
+      className="emailLinkFolderForm"
+      onSubmit={(event) => void submit(event)}
+    >
+      <select
+        aria-label="Equipment"
+        className="select inputSm"
+        onChange={(event) => setEquipmentId(event.target.value)}
+        value={equipmentId}
+      >
+        <option value="">Choose equipment…</option>
+        {available.map((item) => (
+          <option key={item.id} value={item.id}>
+            {equipmentTypeLabel(item.type)}: {equipmentName(item)}
+            {item.serialNumber ? ` · ${item.serialNumber}` : ""}
+            {item.assignee ? ` (${item.assignee.name})` : ""}
+          </option>
+        ))}
+      </select>
+      <Button
+        busy={saving}
+        disabled={!equipmentId}
+        icon="link"
+        size="sm"
+        type="submit"
+        variant="primary"
+      >
+        Link
+      </Button>
+    </form>
   );
 }
 

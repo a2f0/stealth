@@ -27,6 +27,7 @@ type WorkspacePage =
   | "account"
   | "audits"
   | "businesses"
+  | "equipment"
   | "finance"
   | "inbox"
   | "library"
@@ -240,6 +241,12 @@ function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
       icon: "businesses",
       label: "Businesses",
       page: "businesses",
+    },
+    {
+      href: "/equipment",
+      icon: "equipment",
+      label: "Equipment",
+      page: "equipment",
     },
   ];
   if (canAccessFinance) {

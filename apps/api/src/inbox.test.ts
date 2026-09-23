@@ -286,6 +286,8 @@ async function createFixture() {
     "0009_retain_finance_history.sql",
     "0035_create_library_folders.sql",
     "0036_create_inbound_email_links.sql",
+    "0037_create_equipment.sql",
+    "0038_link_inbound_emails_to_equipment.sql",
   ]) {
     await applyMigration(database, migration);
   }
