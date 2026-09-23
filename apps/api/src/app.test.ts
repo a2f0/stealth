@@ -45,6 +45,20 @@ describe("api", () => {
     });
   });
 
+  it("requires authentication to change the default organization", async () => {
+    const response = await app.request(
+      "/api/account-settings/default-organization",
+      {
+        body: JSON.stringify({ organizationId: "organization-id" }),
+        headers: { "content-type": "application/json" },
+        method: "PATCH",
+      },
+      authBindings(),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
   it("requires authentication to delete an inbox message", async () => {
     const response = await app.request(
       "/api/inbox/email-id",
@@ -288,6 +302,7 @@ async function protectedOrganizationFixture() {
     "0020_add_two_factor_authentication.sql",
     "0021_track_terms_acceptance.sql",
     "0031_require_member_two_factor.sql",
+    "0040_pin_default_organization.sql",
   ]) {
     database.exec(
       await Bun.file(

@@ -1,13 +1,4 @@
-import {
-  Badge,
-  Banner,
-  Button,
-  Card,
-  Field,
-  Page,
-  PageBody,
-  PageHeader,
-} from "@tearleads/ui/react";
+import { Badge, Banner, Button, Card, Field } from "@tearleads/ui/react";
 import { QRCodeSVG } from "qrcode.react";
 import { type FormEvent, useState } from "react";
 import { authClient } from "./authClient";
@@ -210,23 +201,16 @@ function AccountSecurityPage({
   const busy =
     enrollment.action !== undefined || maintenance.action !== undefined;
   return (
-    <Page narrow>
-      <PageHeader
-        description="Protect your account with a second step at sign-in."
-        eyebrow="Account settings"
-        title="Security"
+    <>
+      {error && <Banner tone="danger">{error}</Banner>}
+      {notice && <Banner tone="success">{notice}</Banner>}
+      <SecurityContent
+        busy={busy}
+        enrollment={enrollment}
+        maintenance={maintenance}
+        twoFactorEnabled={twoFactorEnabled}
       />
-      <PageBody>
-        {error && <Banner tone="danger">{error}</Banner>}
-        {notice && <Banner tone="success">{notice}</Banner>}
-        <SecurityContent
-          busy={busy}
-          enrollment={enrollment}
-          maintenance={maintenance}
-          twoFactorEnabled={twoFactorEnabled}
-        />
-      </PageBody>
-    </Page>
+    </>
   );
 }
 

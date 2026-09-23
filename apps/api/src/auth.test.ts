@@ -1004,6 +1004,21 @@ describe("password authentication", () => {
       memberCount: 1,
       name: "Finance",
     });
+    fixture.database
+      .query("UPDATE user SET defaultOrganizationPinned = 1 WHERE email = ?")
+      .run(email);
+    const another = await post(
+      fixture.auth,
+      "/organization/create",
+      { name: "Another Organization", slug: "another-organization-12345678" },
+      cookie,
+    );
+    expect(another.status).toBe(200);
+    expect(
+      fixture.database
+        .query("SELECT defaultOrganizationId FROM user WHERE email = ?")
+        .get(email),
+    ).toEqual({ defaultOrganizationId: organization.id });
   });
 
   it("backfills an organization for an existing user", async () => {
@@ -1087,6 +1102,7 @@ async function createFixture() {
   await applyMigration(database, "0021_track_terms_acceptance.sql");
   await applyMigration(database, "0031_require_member_two_factor.sql");
   await applyMigration(database, "0032_create_billing.sql");
+  await applyMigration(database, "0040_pin_default_organization.sql");
 
   return { auth, database, messages, pending };
 }

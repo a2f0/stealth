@@ -423,7 +423,7 @@ async function updateDefaultOrganization(
   organizationId: string,
 ) {
   const statement = database.prepare(
-    'UPDATE "user" SET "defaultOrganizationId" = ? WHERE "id" = ?',
+    'UPDATE "user" SET "defaultOrganizationId" = ? WHERE "id" = ? AND ("defaultOrganizationPinned" = 0 OR "defaultOrganizationId" IS NULL)',
   );
   if (typeof statement.bind === "function") {
     await statement.bind(organizationId, userId).run();
