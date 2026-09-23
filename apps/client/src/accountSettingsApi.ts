@@ -1,6 +1,6 @@
 import { apiUrl } from "./config";
 
-export async function updateDefaultOrganization(organizationId: string) {
+async function updateDefaultOrganization(organizationId: string) {
   const response = await fetch(
     `${apiUrl}/api/account-settings/default-organization`,
     {
@@ -16,4 +16,12 @@ export async function updateDefaultOrganization(organizationId: string) {
     } | null;
     throw new Error(body?.error ?? "Could not save your default organization.");
   }
+}
+
+export async function saveDefaultOrganizationPreference(
+  organizationId: string,
+  refreshSession: () => Promise<unknown>,
+) {
+  await updateDefaultOrganization(organizationId);
+  await refreshSession();
 }

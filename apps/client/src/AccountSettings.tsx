@@ -9,7 +9,7 @@ import {
 } from "@tearleads/ui/react";
 import { type FormEvent, type MouseEvent, useEffect, useState } from "react";
 import { AccountSecurity } from "./AccountSecurity";
-import { updateDefaultOrganization } from "./accountSettingsApi";
+import { saveDefaultOrganizationPreference } from "./accountSettingsApi";
 import type { WorkspaceOrganization } from "./organizationState";
 
 export function AccountSettings({
@@ -136,8 +136,7 @@ function AccountGeneral({
     setError(undefined);
     setNotice(undefined);
     try {
-      await updateDefaultOrganization(selected);
-      await onSessionChanged();
+      await saveDefaultOrganizationPreference(selected, onSessionChanged);
       setNotice("Default organization saved.");
     } catch (cause) {
       setError(
