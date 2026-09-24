@@ -1,0 +1,15 @@
+# Credentials are loaded from .secrets/staging.env, never from this file.
+domain = "tearleads.de"
+
+d1_database_name = "stealth-db-staging"
+r2_bucket_name    = "stealth-objects-staging"
+inbound_email_subdomain = "inbox-staging.tearleads.de"
+inbound_email_address   = "upload@inbox-staging.tearleads.de"
+
+# The staging deploy script creates all three Workers before Terraform
+# attaches these domains.
+enable_custom_domains = true
+
+website_hostname = "staging.tearleads.de"
+client_hostname  = "app-staging.tearleads.de"
+api_hostname     = "api-staging.tearleads.de"

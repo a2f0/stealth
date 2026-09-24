@@ -156,16 +156,52 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
       path.join(repositoryRoot, skillRoot, "cross-agent-review/SKILL.md"),
       "utf8",
     );
-    const mergeGuard = review.indexOf('if [ "$REPAIR_ROUNDS" -ne 0 ]; then');
+    const mergeGuard = review.indexOf('if [ "$REPORT_ONLY" != true ]; then');
     const merge = review.indexOf(
       'git -c core.hooksPath=/dev/null merge -S --no-edit "$FETCHED_BASE"',
     );
     const push = review.indexOf(
       'git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"',
     );
+    expect(review).toContain("skill arguments are not");
+    expect(review).toContain(
+      "`REPORT_ONLY=true` exactly when `--report-only` was supplied",
+    );
     expect(mergeGuard).toBeGreaterThan(-1);
     expect(merge).toBeGreaterThan(mergeGuard);
     expect(push).toBeGreaterThan(merge);
+
+    const guardEnd = review.indexOf("\n   ```", mergeGuard);
+    expect(guardEnd).toBeGreaterThan(mergeGuard);
+    const guardScript = review.slice(mergeGuard, guardEnd);
+    const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "skill-guard-"));
+    try {
+      const callsFile = path.join(temporaryDirectory, "calls");
+      const shell = `set -euo pipefail\ngit() { printf '%s\\n' "$*" >> "$CALLS"; if [ "$1" = rev-parse ]; then printf 'head\\n'; fi; }\n${guardScript}`;
+      for (const reportOnly of ["true", "false"]) {
+        writeFileSync(callsFile, "");
+        const result = spawnSync("/bin/bash", ["-c", shell], {
+          encoding: "utf8",
+          env: {
+            BASE_REF: "main",
+            BRANCH: "feature",
+            CALLS: callsFile,
+            FETCHED_BASE: "base",
+            PR_NUMBER: "",
+            REPORT_ONLY: reportOnly,
+          },
+        });
+        expect(result.status).toBe(0);
+        const calls = readFileSync(callsFile, "utf8");
+        if (reportOnly === "true") {
+          expect(calls).toBe("");
+        } else {
+          expect(calls).toContain("merge -S --no-edit base");
+        }
+      }
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
 
     const openPr = readFileSync(
       path.join(repositoryRoot, skillRoot, "open-pr/SKILL.md"),

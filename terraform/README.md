@@ -12,6 +12,10 @@ desired Worker custom domains:
 - Client: `app.tearleads.de`
 - API: `api.tearleads.de`
 
+The separate `stacks/staging` stack provisions `stealth-db-staging`,
+`stealth-objects-staging`, staging email routing, and first-level staging
+hostnames. See the staging deployment steps in the root README.
+
 ## Secrets
 
 The scripts follow the Tearleads `.secrets` pattern and load these variables

@@ -1,8 +1,24 @@
 import { describe, expect, it } from "bun:test";
-import { updateBusiness } from "./businessesApi";
+import { getBusiness, updateBusiness } from "./businessesApi";
 import { apiUrl } from "./config";
 
 describe("businesses API", () => {
+  it("loads an encoded business route", async () => {
+    const originalFetch = globalThis.fetch;
+    let url: string | undefined;
+    globalThis.fetch = (async (input, init) => {
+      url = input.toString();
+      expect(init?.credentials).toBe("include");
+      return Response.json({ business: { id: "business/id", name: "Acme" } });
+    }) as typeof fetch;
+    try {
+      expect((await getBusiness("business/id")).business.name).toBe("Acme");
+      expect(url).toBe(`${apiUrl}/api/businesses/business%2Fid`);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("updates the encoded business route", async () => {
     const originalFetch = globalThis.fetch;
     let request:

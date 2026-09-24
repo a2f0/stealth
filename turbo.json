@@ -1,6 +1,9 @@
 {
   "$schema": "https://turborepo.com/schema.json",
-  "globalPassThroughEnv": ["TEARLEADS_PREFLIGHT_OFFLINE"],
+  "globalPassThroughEnv": [
+    "STAGING_STRIPE_PORTAL_CONFIGURATION_ID",
+    "TEARLEADS_PREFLIGHT_OFFLINE"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

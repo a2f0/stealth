@@ -344,6 +344,68 @@ bun run deploy:email:verify # verify inbound MX records and Worker route
 bun run deploy:verify   # check all production URLs
 ```
 
+## Deploy staging
+
+Staging uses separate Workers, a D1 database, an R2 bucket, and Terraform state.
+Its public URLs are `staging.tearleads.de`, `app-staging.tearleads.de`, and
+`api-staging.tearleads.de`. Inbound uploads use
+`upload+<organization-id>@inbox-staging.tearleads.de`. The flat hostnames work
+with Cloudflare Universal SSL on the `tearleads.de` zone.
+
+Create the ignored `.secrets/staging.env` with these values. Use a new auth
+secret, sandbox Plaid credentials, and Stripe test-mode credentials and price:
+
+```sh
+TF_VAR_cloudflare_api_token=...
+TF_VAR_cloudflare_account_id=...
+CLOUDFLARE_EMAIL_API_TOKEN=...
+BETTER_AUTH_SECRET=...
+PLAID_CLIENT_ID=...
+PLAID_SECRET=...
+PLAID_TOKEN_ENCRYPTION_KEY=...
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STAGING_STRIPE_PRO_PRICE_ID=price_...
+# Optional: STAGING_STRIPE_PORTAL_CONFIGURATION_ID=bpc_...
+```
+
+Provision the isolated database and bucket before the first Worker deployment.
+The first apply leaves custom domains and the inbound mail rule disabled until
+their target Workers exist:
+
+```sh
+bash terraform/scripts/run.sh staging apply \
+  -var=enable_custom_domains=false -var=enable_email_routing=false
+DRY_RUN=1 bun run deploy:staging  # check build and Worker packaging
+bun run deploy:staging
+```
+
+The staging deploy runs checks and tests, applies staging D1 migrations, updates
+staging Worker secrets, deploys the three Workers, attaches the staging domains
+and inbound mail route through Terraform, and checks the public URLs. Terraform
+asks for confirmation before applying the domains. The generated
+`wrangler.staging.jsonc` files are ignored; their D1 ID comes from staging
+Terraform output. The staging API does not run production's scheduled jobs.
+Configure the Stripe test-mode webhook at
+`https://api-staging.tearleads.de/api/billing/webhook` and put that endpoint's
+signing secret in `STRIPE_WEBHOOK_SECRET`.
+
+For later infrastructure changes, use `bun run terraform:staging:plan` and
+`bun run terraform:staging:apply`. Cloudflare Email Routing subaddressing must
+be enabled once for the zone, as described in the inbound email setup above.
+
+## Back up shared local data
+
+Run `bun run backup:shared-data` to archive `.secrets` and, when present,
+`.test_files` under `~/stealth-backups`. Pass an output directory as the first
+argument. Password-protected backups are `.zip.gpg` files encrypted with GPG
+AES-256 authenticated encryption; GPG prompts in an interactive terminal.
+For an unattended backup, use `--password <password>` or explicitly choose an
+unencrypted `.zip` with `--no-password`. Without a terminal, one of those
+options is required. The password option exposes the passphrase in the backup
+command's process list. To restore an encrypted backup, run
+`gpg --decrypt backup.zip.gpg > backup.zip` and extract the resulting ZIP.
+
 Organization owners can soft-delete an organization from its general settings.
 The organization and its workspace data become inaccessible immediately and
 retain a `deletedAt` timestamp and the initiating user's ID in D1. Root admins

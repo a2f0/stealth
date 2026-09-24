@@ -251,6 +251,30 @@ describe("organization businesses", () => {
     });
   });
 
+  it("loads a business by id only within its organization", async () => {
+    const fixture = await createFixture();
+    const created = await create(fixture.ownerApp, fixture.bindings, {
+      name: "Acme",
+    });
+    const business = ((await created.json()) as BusinessResponse).business;
+    const path = `/${business.id}`;
+
+    const memberRead = await fixture.memberApp.request(
+      path,
+      undefined,
+      fixture.bindings,
+    );
+    expect(memberRead.status).toBe(200);
+    expect((await memberRead.json()) as BusinessResponse).toEqual({ business });
+
+    const otherRead = await fixture.otherOwnerApp.request(
+      path,
+      undefined,
+      fixture.bindings,
+    );
+    expect(otherRead.status).toBe(404);
+  });
+
   it("validates input and limits mutations to organization managers", async () => {
     const fixture = await createFixture();
     const invalidEin = await create(fixture.ownerApp, fixture.bindings, {

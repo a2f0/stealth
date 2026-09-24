@@ -150,7 +150,7 @@ uninstalled. It adds no new CLI action; it orchestrates the `open-pr`,
 
 Review and repair are one unit, owned by `cross-agent-review`; `ship-pr` keeps
 only the merge gate (and `--merge-anyway` to override it). For a review that
-changes nothing, invoke `cross-agent-review` with `--repair-rounds 0`.
+changes nothing, invoke `cross-agent-review` with `--report-only`.
 
 ## Prerequisites
 

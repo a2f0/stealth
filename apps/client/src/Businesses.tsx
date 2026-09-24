@@ -19,6 +19,7 @@ import {
   type BusinessListing,
   createBusiness,
   deleteBusiness,
+  getBusiness,
   getBusinesses,
   updateBusiness,
 } from "./businessesApi";
@@ -28,6 +29,11 @@ import {
   formatEin,
 } from "./businessState";
 import { countLabel } from "./labels";
+import {
+  businessIdForPath,
+  businessPath,
+  handleNavigation,
+} from "./workspacePaths";
 
 interface BusinessFormState {
   city: string;
@@ -39,7 +45,30 @@ interface BusinessFormState {
   zip: string;
 }
 
-export function Businesses() {
+export function Businesses({
+  onNavigate,
+  pathname,
+}: {
+  onNavigate: (pathname: string) => void;
+  pathname: string;
+}) {
+  const businessId = businessIdForPath(pathname);
+  return businessId ? (
+    <BusinessDetailPage
+      id={businessId}
+      key={businessId}
+      onNavigate={onNavigate}
+    />
+  ) : (
+    <BusinessListPage onNavigate={onNavigate} />
+  );
+}
+
+function BusinessListPage({
+  onNavigate,
+}: {
+  onNavigate: (pathname: string) => void;
+}) {
   const [data, setData] = useState<BusinessListing>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -98,6 +127,7 @@ export function Businesses() {
             <BusinessList
               businesses={data.businesses}
               canManage={data.canManage}
+              onNavigate={onNavigate}
               onDeleted={(id) => {
                 setData((current) =>
                   current
@@ -200,12 +230,14 @@ function BusinessCreateForm({
 function BusinessList({
   businesses,
   canManage,
+  onNavigate,
   onDeleted,
   onError,
   onUpdated,
 }: {
   businesses: Business[];
   canManage: boolean;
+  onNavigate: (pathname: string) => void;
   onDeleted: (id: string) => void;
   onError: (message: string) => void;
   onUpdated: (business: Business) => void;
@@ -230,6 +262,7 @@ function BusinessList({
                 business={business}
                 canManage={canManage}
                 key={business.id}
+                onNavigate={onNavigate}
                 onDeleted={onDeleted}
                 onError={onError}
                 onUpdated={onUpdated}
@@ -245,12 +278,14 @@ function BusinessList({
 function BusinessRow({
   business,
   canManage,
+  onNavigate,
   onDeleted,
   onError,
   onUpdated,
 }: {
   business: Business;
   canManage: boolean;
+  onNavigate: (pathname: string) => void;
   onDeleted: (id: string) => void;
   onError: (message: string) => void;
   onUpdated: (business: Business) => void;
@@ -286,7 +321,7 @@ function BusinessRow({
 
   return (
     <li className="row">
-      <BusinessSummary business={business} />
+      <BusinessSummary business={business} onNavigate={onNavigate} />
       {canManage && (
         <div className="rowActions businessRowActions">
           <Button
@@ -312,7 +347,13 @@ function BusinessRow({
   );
 }
 
-function BusinessSummary({ business }: { business: Business }) {
+function BusinessSummary({
+  business,
+  onNavigate,
+}: {
+  business: Business;
+  onNavigate: (pathname: string) => void;
+}) {
   const facts = [
     business.ein ? `EIN ${formatEin(business.ein)}` : "EIN not provided",
   ];
@@ -323,7 +364,13 @@ function BusinessSummary({ business }: { business: Business }) {
   }
   const address = formatBusinessAddress(business);
   return (
-    <div className="businessSummary">
+    <a
+      className="businessSummary businessSummaryLink"
+      href={businessPath(business.id)}
+      onClick={(event) =>
+        handleNavigation(event, businessPath(business.id), onNavigate)
+      }
+    >
       <span aria-hidden="true" className="businessMark">
         <Icon name="businesses" size={18} />
       </span>
@@ -332,7 +379,79 @@ function BusinessSummary({ business }: { business: Business }) {
         <span className="rowMeta tabular">{facts.join(" · ")}</span>
         {address && <span className="rowMeta">{address}</span>}
       </div>
-    </div>
+    </a>
+  );
+}
+
+function BusinessDetailPage({
+  id,
+  onNavigate,
+}: {
+  id: string;
+  onNavigate: (pathname: string) => void;
+}) {
+  const [business, setBusiness] = useState<Business>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let active = true;
+    getBusiness(id)
+      .then(({ business: result }) => {
+        if (active) setBusiness(result);
+      })
+      .catch((cause: unknown) => {
+        if (active) setError(messageFrom(cause));
+      });
+    return () => {
+      active = false;
+    };
+  }, [id]);
+
+  return (
+    <Page>
+      <PageHeader
+        actions={
+          <Button icon="arrowLeft" onClick={() => onNavigate(businessPath())}>
+            Businesses
+          </Button>
+        }
+        eyebrow="Business"
+        title={business?.name ?? "Business details"}
+      />
+      <PageBody>
+        {error && <Banner tone="danger">{error}</Banner>}
+        {!business && !error && <LoadingState label="Loading business…" />}
+        {business && (
+          <PageSection title="Details">
+            <Card>
+              <dl className="businessDetails">
+                <div>
+                  <dt>Name</dt>
+                  <dd>{business.name}</dd>
+                </div>
+                <div>
+                  <dt>EIN</dt>
+                  <dd>
+                    {business.ein ? formatEin(business.ein) : "Not provided"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Incorporation date</dt>
+                  <dd>
+                    {business.incorporationDate
+                      ? formatBusinessDate(business.incorporationDate)
+                      : "Not provided"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Address</dt>
+                  <dd>{formatBusinessAddress(business) || "Not provided"}</dd>
+                </div>
+              </dl>
+            </Card>
+          </PageSection>
+        )}
+      </PageBody>
+    </Page>
   );
 }
 

@@ -1,0 +1,34 @@
+output "zone_id" {
+  description = "Cloudflare zone ID for tearleads.de."
+  value       = data.cloudflare_zone.main.id
+}
+
+output "d1_database_id" {
+  description = "D1 database ID read by scripts/deployStaging.sh."
+  value       = cloudflare_d1_database.main.id
+}
+
+output "d1_database_name" {
+  description = "D1 database name bound to the API Worker."
+  value       = cloudflare_d1_database.main.name
+}
+
+output "r2_bucket_name" {
+  description = "R2 bucket name bound to the API Worker."
+  value       = cloudflare_r2_bucket.objects.name
+}
+
+output "inbound_email_subdomain" {
+  description = "Subdomain whose Email Routing MX records Terraform manages."
+  value       = var.inbound_email_subdomain
+}
+
+output "inbound_email_address" {
+  description = "Base address routed to the API Worker using subaddressing."
+  value       = var.inbound_email_address
+}
+
+output "worker_domains" {
+  description = "Desired custom-domain mapping for the three Workers."
+  value       = local.worker_domains
+}

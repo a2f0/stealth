@@ -1,10 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import {
+  businessIdForPath,
+  businessPath,
   contractIdForPath,
   contractPath,
   equipmentIdForPath,
   equipmentPath,
   inboxEmailPath,
+  isBusinessesPath,
   isContractsPath,
   isEquipmentPath,
   libraryFolderIdForPath,
@@ -13,6 +16,15 @@ import {
 } from "./workspacePaths";
 
 describe("workspace paths", () => {
+  it("round-trips business paths", () => {
+    expect(businessPath()).toBe("/businesses");
+    expect(businessPath("business/1")).toBe("/businesses/business%2F1");
+    expect(businessIdForPath(businessPath("business/1"))).toBe("business/1");
+    expect(businessIdForPath("/businesses")).toBeUndefined();
+    expect(isBusinessesPath("/businesses/abc")).toBe(true);
+    expect(isBusinessesPath("/businessesx")).toBe(false);
+  });
+
   it("round-trips library folder paths", () => {
     expect(libraryPath()).toBe("/");
     expect(libraryPath("folder/1")).toBe("/library/folder%2F1");

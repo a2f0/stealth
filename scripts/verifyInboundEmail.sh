@@ -7,13 +7,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./cloudflareEnv.sh
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/cloudflareEnv.sh"
-load_cloudflare_email_env
+DEPLOY_TIER="${DEPLOY_TIER:-prod}"
+if [[ "$DEPLOY_TIER" == "staging" ]]; then
+  unset TF_VAR_cloudflare_api_token TF_VAR_cloudflare_account_id \
+    CLOUDFLARE_EMAIL_API_TOKEN
+  source_env_file "$(get_repo_root)/.secrets/staging.env"
+  validate_cloudflare_env
+  if [[ -z "${CLOUDFLARE_EMAIL_API_TOKEN:-}" ]]; then
+    echo "ERROR: Missing CLOUDFLARE_EMAIL_API_TOKEN." >&2
+    exit 1
+  fi
+  export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_EMAIL_API_TOKEN"
+elif [[ "$DEPLOY_TIER" == "prod" ]]; then
+  load_cloudflare_email_env
+else
+  echo "ERROR: Unknown deployment tier: $DEPLOY_TIER" >&2
+  exit 1
+fi
 
 API_BASE="https://api.cloudflare.com/client/v4"
 ZONE_NAME="tearleads.de"
-INBOUND_DOMAIN="inbox.tearleads.de"
-INBOUND_ADDRESS="upload@inbox.tearleads.de"
-WORKER_NAME="tearleads-api"
+if [[ "$DEPLOY_TIER" == "staging" ]]; then
+  INBOUND_DOMAIN="inbox-staging.tearleads.de"
+  INBOUND_ADDRESS="upload@inbox-staging.tearleads.de"
+  WORKER_NAME="tearleads-api-staging"
+else
+  INBOUND_DOMAIN="inbox.tearleads.de"
+  INBOUND_ADDRESS="upload@inbox.tearleads.de"
+  WORKER_NAME="tearleads-api"
+fi
 
 cloudflare_get() {
   curl -fsS "$1" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
@@ -30,14 +52,23 @@ fi
 # The Email Routing DNS endpoint only describes the records a subdomain needs,
 # and public resolvers negatively cache a subdomain that was checked before it
 # existed, so read the zone's live MX records with the account token.
-load_cloudflare_env
+if [[ "$DEPLOY_TIER" == "staging" ]]; then
+  export CLOUDFLARE_API_TOKEN="${TF_VAR_cloudflare_api_token:-}"
+  export CLOUDFLARE_ACCOUNT_ID="${TF_VAR_cloudflare_account_id:-}"
+else
+  load_cloudflare_env
+fi
 mx_response="$(
   curl -fsS --get "$API_BASE/zones/$zone_id/dns_records" \
     --data-urlencode "type=MX" \
     --data-urlencode "name=$INBOUND_DOMAIN" \
     -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
 )"
-load_cloudflare_email_env
+if [[ "$DEPLOY_TIER" == "staging" ]]; then
+  export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_EMAIL_API_TOKEN"
+else
+  load_cloudflare_email_env
+fi
 
 if ! jq -e \
   '(.success == true) and
