@@ -16,7 +16,15 @@ else
   exit 1
 fi
 EOF
-chmod +x "$FIXTURE/bin/git"
+cat > "$FIXTURE/bin/date" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == '+%Y%m%d-%H%M%S' ]]; then
+  printf '20260101-000000\n'
+else
+  /bin/date "$@"
+fi
+EOF
+chmod +x "$FIXTURE/bin/git" "$FIXTURE/bin/date"
 export MOCK_REPO_ROOT="$FIXTURE/source" GNUPGHOME="$GPG_HOME"
 BACKUP_SCRIPT="$REPO_ROOT/scripts/backupSharedData.sh"
 file_mode() {
@@ -45,6 +53,10 @@ fi
 PATH="$FIXTURE/bin:$PATH" bash "$BACKUP_SCRIPT" "$FIXTURE/output" --password fixture-passphrase > /dev/null
 encrypted_archive="$(find "$FIXTURE/output" -name '*.zip.gpg' -print -quit)"
 [[ -n "$encrypted_archive" && "$(file_mode "$encrypted_archive")" == 600 ]]
+first_checksum="$(cksum "$encrypted_archive")"
+PATH="$FIXTURE/bin:$PATH" bash "$BACKUP_SCRIPT" "$FIXTURE/output" --password fixture-passphrase > /dev/null
+[[ "$(find "$FIXTURE/output" -name '*.zip.gpg' -print | wc -l | tr -d ' ')" -eq 2 ]]
+[[ "$(cksum "$encrypted_archive")" == "$first_checksum" ]]
 gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 --decrypt "$encrypted_archive" \
   3<<<'fixture-passphrase' 2>/dev/null > "$FIXTURE/decrypted.zip"
 [[ "$(unzip -p "$FIXTURE/decrypted.zip" .secrets/fixture.env)" == 'fixture-secret' ]]

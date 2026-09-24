@@ -13,7 +13,7 @@ OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 PASSWORD=""
 NO_PASSWORD=false
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-ARCHIVE_NAME="shared-data-backup-${TIMESTAMP}.zip"
+ARCHIVE_EXTENSION=".zip"
 
 usage() {
   echo "Usage: backupSharedData.sh [output_dir] [--password <password>] [--no-password]"
@@ -88,13 +88,12 @@ if [[ "$NO_PASSWORD" != true ]] && ! command -v gpg >/dev/null 2>&1; then
 fi
 
 if [[ "$NO_PASSWORD" != true ]]; then
-  ARCHIVE_NAME="${ARCHIVE_NAME}.gpg"
+  ARCHIVE_EXTENSION="${ARCHIVE_EXTENSION}.gpg"
 fi
 
 mkdir -p "$OUTPUT_DIR"
 
 OUTPUT_ABS="$(cd "$OUTPUT_DIR" && pwd -P)"
-ARCHIVE_PATH="$OUTPUT_ABS/$ARCHIVE_NAME"
 
 for source_dir in "${SOURCE_DIRS[@]}"; do
   if [[ ! -d "$source_dir" ]]; then
@@ -113,20 +112,29 @@ for source_dir in "${SOURCE_DIRS[@]}"; do
   fi
 done
 
+# A private directory reserves a unique suffix for concurrent backups. Keep
+# the in-progress archive there and hard-link it into place only on success;
+# ln refuses to replace an existing destination.
+RESERVATION_DIR="$(mktemp -d "$OUTPUT_ABS/.shared-data-backup-${TIMESTAMP}.XXXXXX")"
+TEMP_ARCHIVE="$RESERVATION_DIR/archive$ARCHIVE_EXTENSION"
+trap 'rm -f "$TEMP_ARCHIVE"; rmdir "$RESERVATION_DIR"' EXIT
+ARCHIVE_PATH="$OUTPUT_ABS/shared-data-backup-${TIMESTAMP}-${RESERVATION_DIR##*.}$ARCHIVE_EXTENSION"
+
 # Zip from repo root to maintain relative paths in archive. Encrypted mode
 # streams directly into GPG so the plaintext archive is never written to disk.
 if [[ "$NO_PASSWORD" == true ]]; then
-  (cd "$REPO_ROOT" && zip -r "$ARCHIVE_PATH" "${SOURCE_DIRS_REL[@]}" >/dev/null)
+  (cd "$REPO_ROOT" && zip -r "$TEMP_ARCHIVE" "${SOURCE_DIRS_REL[@]}" >/dev/null)
 elif [[ -n "$PASSWORD" ]]; then
   echo "backupSharedData: WARNING: --password exposes the passphrase in the backup command's process list." >&2
   (cd "$REPO_ROOT" && zip -r - "${SOURCE_DIRS_REL[@]}" 2>/dev/null) |
     gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
-      --symmetric --cipher-algo AES256 --force-aead --output "$ARCHIVE_PATH" \
+      --symmetric --cipher-algo AES256 --force-aead --output "$TEMP_ARCHIVE" \
       3<<<"$PASSWORD"
 else
   (cd "$REPO_ROOT" && zip -r - "${SOURCE_DIRS_REL[@]}" 2>/dev/null) |
-    gpg --symmetric --cipher-algo AES256 --force-aead --output "$ARCHIVE_PATH"
+    gpg --symmetric --cipher-algo AES256 --force-aead --output "$TEMP_ARCHIVE"
 fi
+ln "$TEMP_ARCHIVE" "$ARCHIVE_PATH"
 
 echo "Created backup: $ARCHIVE_PATH"
 echo "Backed up directories: ${SOURCE_DIRS_REL[*]}"
