@@ -740,6 +740,7 @@ describe("employee forms", () => {
                   checkr_invitation_status = 'pending', status = 'in_progress'
               WHERE id = ?`)
       .run(id);
+    let reportResult: string | null = null;
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input) => {
       if (String(input).includes("/invitations/invitation-1?")) {
@@ -752,7 +753,7 @@ describe("employee forms", () => {
       return Response.json({
         id: "report-1",
         includes_canceled: true,
-        result: null,
+        result: reportResult,
         status: "complete",
       });
     }) as typeof fetch;
@@ -774,6 +775,25 @@ describe("employee forms", () => {
         status: "pending",
         completed_at: null,
         checkr_invitation_status: "canceled",
+      });
+      reportResult = "consider";
+      const partial = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/refresh`, { method: "POST" });
+      expect(partial.status).toBe(200);
+      expect(await partial.json()).toMatchObject({
+        invitationStatus: "partially_canceled",
+        result: "consider",
+      });
+      expect(
+        fixture.database
+          .query(`SELECT status, checkr_result, checkr_invitation_status
+                  FROM employee_requirements WHERE id = ?`)
+          .get(id),
+      ).toEqual({
+        status: "pending",
+        checkr_result: "consider",
+        checkr_invitation_status: "partially_canceled",
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -1111,6 +1131,12 @@ describe("employee forms", () => {
               id: "older-background-invitation",
               package: "background_package",
               tags: ["tearleads-screening:older-attempt"],
+              report_id: null,
+              status: "pending",
+            },
+            {
+              id: "tagless-background-invitation",
+              package: "background_package",
               report_id: null,
               status: "pending",
             },

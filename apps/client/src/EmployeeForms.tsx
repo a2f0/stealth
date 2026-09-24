@@ -354,7 +354,7 @@ function RequirementItem({
               (!requirement.checkrAvailable &&
                 !requirement.checkrStarted &&
                 !requirement.checkrPendingStart) ||
-              ["expired", "canceled", "deleted"].includes(
+              ["expired", "canceled", "deleted", "partially_canceled"].includes(
                 requirement.checkrInvitationStatus ?? "",
               )) && (
               <RequirementStatusControl
@@ -417,7 +417,9 @@ function CheckrControl({
     return (
       <>
         <span className="rowMeta">
-          Checkr: {requirement.checkrInvitationStatus ?? "pending"}
+          Checkr:{" "}
+          {requirement.checkrInvitationStatus?.replaceAll("_", " ") ??
+            "pending"}
         </span>
         <Button
           disabled={busy}
@@ -439,7 +441,9 @@ function CheckrControl({
       {(requirement.checkrInvitationStatus ||
         requirement.checkrPendingStart) && (
         <span className="rowMeta">
-          Checkr: {requirement.checkrInvitationStatus ?? "retry needed"}
+          Checkr:{" "}
+          {requirement.checkrInvitationStatus?.replaceAll("_", " ") ??
+            "retry needed"}
         </span>
       )}
       <input

@@ -206,7 +206,8 @@ employeeForms.patch("/:id", async (context) => {
      WHERE id = ? AND organization_id = ?
        AND (? IS NULL OR kind <> 'form' OR document_revision = ?)
        AND (? IS NULL OR checkr_invitation_id IS NULL OR
-            checkr_invitation_status IN ('expired', 'canceled', 'deleted'))
+            checkr_invitation_status IN
+              ('expired', 'canceled', 'deleted', 'partially_canceled'))
        AND (? IS NULL OR
             (checkr_starting_at IS NULL AND checkr_start_nonce IS NULL))`,
   )
@@ -253,7 +254,8 @@ employeeForms.delete("/:id", async (context) => {
      WHERE id = ? AND organization_id = ? AND checkr_starting_at IS NULL
        AND checkr_start_nonce IS NULL
        AND (checkr_invitation_id IS NULL OR
-            checkr_invitation_status IN ('expired', 'canceled', 'deleted'))`,
+            checkr_invitation_status IN
+              ('expired', 'canceled', 'deleted', 'partially_canceled'))`,
   )
     .bind(row.id, context.get("organizationId"))
     .run();
@@ -456,13 +458,21 @@ employeeForms.post("/:id/checkr/start", async (context) => {
       { error: "Screening is changing. Try again later." },
       409,
     );
-  const invitation = await launchCheckrScreening(
-    context,
-    row,
-    claim,
-    body.state,
-    body.city ?? "",
-  );
+  let invitation: Awaited<ReturnType<typeof launchCheckrScreening>>;
+  try {
+    invitation = await launchCheckrScreening(
+      context,
+      row,
+      claim,
+      body.state,
+      body.city ?? "",
+    );
+  } catch (cause) {
+    if (cause instanceof CheckrReconciliationRequired) {
+      return context.json({ error: cause.message }, 409);
+    }
+    throw cause;
+  }
   if (!invitation)
     return context.json({ error: "Screening could not be resumed." }, 409);
   return context.json({
@@ -489,7 +499,9 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
   const reportId = invitation.report_id ?? row.checkr_report_id;
   const report = reportId ? await getCheckrReport(context.env, reportId) : null;
   const screeningStatus = report?.includes_canceled
-    ? "canceled"
+    ? report.result
+      ? "partially_canceled"
+      : "canceled"
     : invitationStatus;
   const complete =
     (report?.status === "complete" && !report.includes_canceled) ||
@@ -515,7 +527,7 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
     .bind(
       screeningStatus,
       reportId,
-      report?.includes_canceled ? null : (report?.result ?? null),
+      report?.result ?? null,
       nextStatus,
       nextStatus,
       now,
@@ -575,7 +587,8 @@ async function claimCheckrStart(
          status = 'pending', completed_at = NULL, updated_at = ?
      WHERE id = ? AND organization_id = ?
        AND (checkr_invitation_id IS NULL OR
-            checkr_invitation_status IN ('expired', 'canceled', 'deleted'))
+            checkr_invitation_status IN
+              ('expired', 'canceled', 'deleted', 'partially_canceled'))
        AND (checkr_starting_at IS NULL OR checkr_starting_at < ?)
      RETURNING checkr_candidate_id, checkr_start_nonce,
                checkr_start_nonce_at, checkr_start_package`,
@@ -790,16 +803,32 @@ async function findPriorCheckrInvitation(
   const active = invitations.data.filter(
     (invitation) =>
       !isExpiredCheckrStatus(invitation.status) &&
-      invitation.package === claim.checkr_start_package &&
-      invitation.tags?.includes(checkrAttemptTag(claim.checkr_start_nonce)),
+      (invitation.package === claim.checkr_start_package ||
+        invitation.package === undefined),
   );
-  if (active.length > 1) {
-    throw new Error("Multiple Checkr invitations need manual reconciliation.");
+  const matched = active.filter((invitation) =>
+    invitation.tags?.includes(checkrAttemptTag(claim.checkr_start_nonce)),
+  );
+  if (matched.length > 1) {
+    throw new CheckrReconciliationRequired();
   }
-  if (invitations.data.length >= 100 && !active[0]) {
-    throw new Error("Checkr invitations need manual reconciliation.");
+  if (matched[0]) return matched[0];
+  if (
+    active.some(
+      (invitation) =>
+        invitation.package === undefined || !Array.isArray(invitation.tags),
+    ) ||
+    invitations.data.length >= 100
+  ) {
+    throw new CheckrReconciliationRequired();
   }
-  return active[0] ?? null;
+  return null;
+}
+
+class CheckrReconciliationRequired extends Error {
+  constructor() {
+    super("Checkr invitations need manual reconciliation before retrying.");
+  }
 }
 
 function checkrAttemptTag(nonce: string) {
@@ -1013,7 +1042,12 @@ function isValidRequirementUpdate(row: RequirementRow, body: InputRecord) {
 }
 
 function isExpiredCheckrStatus(status: string | null) {
-  return status === "expired" || status === "canceled" || status === "deleted";
+  return (
+    status === "expired" ||
+    status === "canceled" ||
+    status === "deleted" ||
+    status === "partially_canceled"
+  );
 }
 
 function isExpiredCheckrInvitation(row: RequirementRow) {
