@@ -473,11 +473,23 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
     : invitation.status;
   const reportId = invitation.report_id ?? row.checkr_report_id;
   const report = reportId ? await getCheckrReport(context.env, reportId) : null;
-  const complete = report?.status === "complete";
+  const complete =
+    report?.status === "complete" ||
+    (row.status === "complete" &&
+      isExpiredCheckrStatus(row.checkr_invitation_status));
+  const nextStatus = complete
+    ? "complete"
+    : isExpiredCheckrStatus(invitationStatus)
+      ? "pending"
+      : "in_progress";
+  const now = new Date().toISOString();
   const refreshed = await context.env.DB.prepare(
     `UPDATE employee_requirements
      SET checkr_invitation_status = ?, checkr_report_id = ?,
-         checkr_result = ?, status = ?, completed_at = ?, updated_at = ?,
+         checkr_result = ?, status = ?,
+         completed_at = CASE WHEN ? = 'complete'
+           THEN COALESCE(completed_at, ?) ELSE NULL END,
+         updated_at = ?,
          checkr_refresh_revision = checkr_refresh_revision + 1
      WHERE id = ? AND organization_id = ? AND checkr_invitation_id = ?
        AND checkr_refresh_revision = ?`,
@@ -486,13 +498,10 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
       invitationStatus,
       reportId,
       report?.result ?? null,
-      complete
-        ? "complete"
-        : isExpiredCheckrStatus(invitationStatus)
-          ? "pending"
-          : "in_progress",
-      complete ? new Date().toISOString() : null,
-      new Date().toISOString(),
+      nextStatus,
+      nextStatus,
+      now,
+      now,
       row.id,
       context.get("organizationId"),
       row.checkr_invitation_id,

@@ -621,6 +621,20 @@ describe("employee forms", () => {
           )
           .get(id),
       ).toEqual({ status: "complete", checkr_result: "consider" });
+      fixture.database
+        .query(
+          "UPDATE employee_requirements SET completed_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
+        )
+        .run(id);
+      const refreshedAgain = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/refresh`, { method: "POST" });
+      expect(refreshedAgain.status).toBe(200);
+      expect(
+        fixture.database
+          .query("SELECT completed_at FROM employee_requirements WHERE id = ?")
+          .get(id),
+      ).toEqual({ completed_at: "2026-01-01T00:00:00.000Z" });
       const visible = await fixture.app("employee", "member").request("/");
       const body = (await visible.json()) as {
         requirements: Array<{ checkrResult: string | null }>;
