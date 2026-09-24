@@ -127,6 +127,22 @@ export async function startCheckrScreening(
   return parseResponse<{ invitationId: string; status: string }>(response);
 }
 
+export async function reconcileCheckrScreening(
+  id: string,
+  invitationId: string,
+) {
+  const response = await fetch(
+    `${endpoint}/${encodeURIComponent(id)}/checkr/reconcile`,
+    {
+      body: JSON.stringify({ invitationId }),
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+  );
+  return parseResponse<{ invitationId: string; status: string }>(response);
+}
+
 export async function refreshCheckrScreening(id: string) {
   const response = await fetch(
     `${endpoint}/${encodeURIComponent(id)}/checkr/refresh`,

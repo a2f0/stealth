@@ -17,6 +17,7 @@ import {
   type EmployeeRequirementStatus,
   listEmployeeRequirements,
   type RequirementDraft,
+  reconcileCheckrScreening,
   refreshCheckrScreening,
   startCheckrScreening,
   updateEmployeeRequirement,
@@ -419,6 +420,7 @@ function CheckrControl({
 }) {
   const [state, setState] = useState("");
   const [city, setCity] = useState("");
+  const [invitationId, setInvitationId] = useState("");
   if (requirement.checkrStarted) {
     return (
       <>
@@ -444,6 +446,30 @@ function CheckrControl({
   }
   return (
     <div className="checkrStart">
+      {requirement.checkrPendingStart && (
+        <div className="checkrReconcile">
+          <input
+            aria-label={`Checkr invitation ID for ${requirement.title}`}
+            className="input inputSm"
+            disabled={busy}
+            onChange={(event) => setInvitationId(event.target.value.trim())}
+            placeholder="Checkr invitation ID"
+            value={invitationId}
+          />
+          <Button
+            disabled={busy || !invitationId}
+            onClick={() =>
+              void action(
+                () => reconcileCheckrScreening(requirement.id, invitationId),
+                "Checkr invitation linked.",
+              )
+            }
+            size="sm"
+          >
+            Link invitation
+          </Button>
+        </div>
+      )}
       {(requirement.checkrInvitationStatus ||
         requirement.checkrPendingStart) && (
         <span className="rowMeta">

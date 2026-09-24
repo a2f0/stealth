@@ -5,6 +5,8 @@ interface CheckrCandidate {
 }
 
 interface CheckrInvitation {
+  candidate_id?: string;
+  created_at?: string;
   deleted_at?: string | null;
   id: string;
   package?: string;

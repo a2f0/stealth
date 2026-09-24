@@ -260,6 +260,11 @@ emails the person to collect the information and authorization it requires.
 Managers use **Refresh check** to retrieve the current invitation and report
 status. A completed report is marked complete in the app; a `consider` result
 still needs the manager's review in Checkr.
+If a start request loses its response, retry it while Checkr's idempotency key
+is valid. For an older unresolved request, look up the invitation in Checkr and
+enter its ID in **Link invitation**. The app verifies the candidate, package,
+and creation time before linking it. Do not start a new check until the old
+request is reconciled.
 
 Set these optional values in `.secrets/root.env` for local development and
 production deployment, or `.secrets/staging.env` for staging:

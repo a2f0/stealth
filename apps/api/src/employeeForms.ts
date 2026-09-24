@@ -481,6 +481,60 @@ employeeForms.post("/:id/checkr/start", async (context) => {
   });
 });
 
+employeeForms.post("/:id/checkr/reconcile", async (context) => {
+  if (!canManageOrganization(context.get("organizationRole"))) {
+    return managerRequired(context);
+  }
+  const row = await findRequirement(context);
+  if (
+    !row?.checkr_start_nonce ||
+    !row.checkr_candidate_id ||
+    !row.checkr_start_package ||
+    !context.env.CHECKR_API_KEY
+  ) {
+    return context.json({ error: "No unresolved Checkr screening." }, 404);
+  }
+  const body: unknown = await context.req.json().catch(() => null);
+  if (
+    !isRecord(body) ||
+    typeof body.invitationId !== "string" ||
+    !/^[A-Za-z0-9_-]{1,100}$/.test(body.invitationId)
+  ) {
+    return context.json({ error: "A Checkr invitation ID is required." }, 400);
+  }
+  const invitation = await getCheckrInvitation(context.env, body.invitationId);
+  const createdAt = invitation.created_at
+    ? Date.parse(invitation.created_at)
+    : NaN;
+  const attemptAt = Date.parse(row.checkr_start_nonce_at ?? "");
+  if (
+    invitation.id !== body.invitationId ||
+    invitation.candidate_id !== row.checkr_candidate_id ||
+    invitation.package !== row.checkr_start_package ||
+    !Number.isFinite(createdAt) ||
+    !Number.isFinite(attemptAt) ||
+    createdAt < attemptAt - 60_000 ||
+    (Array.isArray(invitation.tags) &&
+      !invitation.tags.includes(checkrAttemptTag(row.checkr_start_nonce)))
+  ) {
+    return context.json(
+      { error: "Invitation does not match this screening attempt." },
+      409,
+    );
+  }
+  const stored = await storeCheckrInvitation(
+    context,
+    row,
+    row.checkr_start_nonce,
+    invitation,
+    false,
+  );
+  if (!stored) {
+    return context.json({ error: "Screening changed. Please refresh." }, 409);
+  }
+  return context.json({ invitationId: stored.id, status: stored.status });
+});
+
 employeeForms.post("/:id/checkr/refresh", async (context) => {
   if (!canManageOrganization(context.get("organizationRole"))) {
     return managerRequired(context);
@@ -855,7 +909,7 @@ async function storeCheckrInvitation(
   const stored = await context.env.DB.prepare(
     `UPDATE employee_requirements
      SET checkr_invitation_id = ?, checkr_invitation_status = ?,
-         checkr_report_id = ?, status = 'in_progress',
+         checkr_report_id = ?, status = ?,
          checkr_starting_at = NULL, checkr_start_nonce = NULL,
          checkr_start_nonce_at = NULL, updated_at = ?
      WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
@@ -864,6 +918,7 @@ async function storeCheckrInvitation(
       invitation.id,
       invitation.status,
       invitation.report_id,
+      isExpiredCheckrStatus(invitation.status) ? "pending" : "in_progress",
       new Date().toISOString(),
       row.id,
       context.get("organizationId"),
@@ -930,7 +985,7 @@ export async function assignRenewedInvitationRequirements(
        AND (invitation_id IS NULL OR EXISTS (
          SELECT 1 FROM invitation AS old
          WHERE old.id = employee_requirements.invitation_id
-           AND old.status <> 'pending'
+           AND (old.status <> 'pending' OR old.expiresAt <= ?)
        ))`,
   );
   const values = [
@@ -938,6 +993,7 @@ export async function assignRenewedInvitationRequirements(
     new Date().toISOString(),
     organizationId,
     email,
+    new Date().toISOString(),
   ];
   if (typeof statement.bind === "function") {
     await statement.bind(...values).run();
