@@ -3,6 +3,10 @@ export interface Bindings {
   BETTER_AUTH_SECRET: string;
   BETTER_AUTH_URL: string;
   CORS_ORIGIN: string;
+  CHECKR_API_KEY?: string;
+  CHECKR_ENV?: "staging" | "production";
+  CHECKR_BACKGROUND_PACKAGE?: string;
+  CHECKR_CREDIT_PACKAGE?: string;
   DB: D1Database;
   EMAIL: SendEmail;
   INBOUND_EMAIL_DOMAIN: string;

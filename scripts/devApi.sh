@@ -42,9 +42,23 @@ for secret_name in \
   fi
 done
 
+if [[ -f "$REPO_ROOT/.secrets/staging.env" ]]; then
+  (
+    unset CHECKR_API_KEY CHECKR_BACKGROUND_PACKAGE CHECKR_CREDIT_PACKAGE
+    source_env_file "$REPO_ROOT/.secrets/staging.env"
+    for secret_name in \
+      CHECKR_API_KEY CHECKR_BACKGROUND_PACKAGE CHECKR_CREDIT_PACKAGE; do
+      if [[ -n "${!secret_name:-}" ]]; then
+        printf '%s=%s\n' "$secret_name" "${!secret_name}" >>"$auth_env_file"
+      fi
+    done
+  )
+fi
+
 cd "$REPO_ROOT/apps/api"
 bunx wrangler dev \
   --env-file "$auth_env_file" \
+  --var "CHECKR_ENV:staging" \
   --var "STRIPE_PRO_LEGACY_PRICE_IDS:${STRIPE_PRO_LEGACY_PRICE_IDS:-}" \
   --var "STRIPE_PRO_PRICE_ID:${STRIPE_PRO_PRICE_ID:-}" \
   --var "STRIPE_PORTAL_CONFIGURATION_ID:${STRIPE_PORTAL_CONFIGURATION_ID:-}"

@@ -7,6 +7,124 @@
   gap: var(--space-4);
 }
 
+.inviteRequirements {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.inviteRequirements h3 {
+  margin: 0;
+  font-size: var(--text-base);
+}
+
+.inviteRequirements p {
+  margin: 0;
+}
+
+.requirementEditor,
+.requirementAssignment {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.requirementAssignment {
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.requirementAssignment > .field {
+  max-width: 30rem;
+}
+
+.requirementAssignment > button {
+  justify-self: start;
+}
+
+.requirementEditorFields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.requirementEditorFields .field {
+  min-width: 9rem;
+}
+
+.requirementDrafts,
+.requirementList {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.requirementDrafts li,
+.requirementItemHeader,
+.requirementActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.requirementDrafts li,
+.requirementItemHeader {
+  justify-content: space-between;
+}
+
+.requirementList {
+  padding-top: var(--space-4);
+}
+
+.requirementItem {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.requirementActions .input[type="date"] {
+  width: auto;
+}
+
+.requirementUpload {
+  display: inline-grid;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.requirementUpload input {
+  max-width: 15rem;
+}
+
+.checkrStart {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.checkrStart input:first-child {
+  width: 5rem;
+}
+
+.checkrStart input:nth-child(2) {
+  width: 10rem;
+}
+
+.checkrReconcile {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.checkrReconcile input {
+  width: 12rem;
+}
+
 /* Member rows share one column grid so controls line up across rows. */
 .memberListFrame {
   container-type: inline-size;

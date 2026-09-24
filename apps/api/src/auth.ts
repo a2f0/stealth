@@ -16,6 +16,10 @@ import {
   organizationSeatLimit,
   syncOrganizationSeats,
 } from "./billing";
+import {
+  assignAcceptedInvitationRequirements,
+  assignRenewedInvitationRequirements,
+} from "./employeeForms";
 import type { Bindings } from "./types";
 
 type WaitUntil = (promise: Promise<unknown>) => void;
@@ -208,11 +212,30 @@ function configuredOrganizationPlugin(env: Bindings, waitUntil: WaitUntil) {
         env.STRIPE_PRO_LEGACY_PRICE_IDS,
       ),
     organizationHooks: {
+      afterCreateInvitation: async ({ invitation, organization }) => {
+        await assignRenewedInvitationRequirements(
+          env.DB,
+          organization.id,
+          invitation.id,
+          invitation.email,
+        );
+      },
       afterCreateOrganization: async ({ organization, user }) => {
         await updateDefaultOrganization(env.DB, user.id, organization.id);
         await createDefaultFinanceGroup(env.DB, organization.id, user.id);
       },
-      afterAcceptInvitation: async ({ organization, user }) => {
+      afterAcceptInvitation: async ({
+        invitation,
+        member,
+        organization,
+        user,
+      }) => {
+        await assignAcceptedInvitationRequirements(
+          env.DB,
+          organization.id,
+          invitation.id,
+          member.id,
+        );
         await updateDefaultOrganization(env.DB, user.id, organization.id);
         queueSeatSync(env, waitUntil, organization.id);
       },

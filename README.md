@@ -245,6 +245,44 @@ URIs for OAuth institutions. Before switching `PLAID_ENV` to `production` in
 the API Wrangler configuration, replace the Sandbox secret with the Production
 secret and complete Plaid's application and company profile requirements.
 
+## Employee forms and screening
+
+Organization managers assign forms, background checks, and credit checks while
+inviting a member or later from Organization → People. Each requirement has a
+due date. Members upload PDF, JPEG, or PNG forms (up to 10 MB) to private R2
+storage; managers review and complete them. Only the member and organization
+managers can download a submitted form. Checkr results are visible only to
+managers. Deleted or replaced form files are queued for R2 cleanup.
+
+Background and credit screening use Checkr's hosted invitation flow. A manager
+starts a screening with the person's US work state and optional city. Checkr
+emails the person to collect the information and authorization it requires.
+Managers use **Refresh check** to retrieve the current invitation and report
+status. A completed report is marked complete in the app; a `consider` result
+still needs the manager's review in Checkr.
+If a start request loses its response, retry it while Checkr's idempotency key
+is valid. For an older unresolved request, look up the invitation in Checkr and
+enter its ID in **Link invitation**. The app verifies the candidate, package,
+and creation time before linking it. Do not start a new check until the old
+request is reconciled.
+
+Set these optional values in `.secrets/root.env` for production deployment or
+`.secrets/staging.env` for staging and local development:
+
+```sh
+CHECKR_API_KEY=your-checkr-secret-key
+CHECKR_BACKGROUND_PACKAGE=your-background-package-slug
+CHECKR_CREDIT_PACKAGE=your-employment-credit-package-slug
+```
+
+The local and staging Workers use Checkr staging; the production Worker uses
+Checkr production. Checkr must credential the account and provision a staging
+account. Obtain the package slugs from the matching Checkr account, and ask
+Checkr to enable an employment credit screening package if needed. The
+deployment scripts upload the three values as Worker secrets when present.
+Without a configured package and key, managers can still track a check
+manually.
+
 ## Billing and plans
 
 Every organization starts on the cardless Free plan with one usable member

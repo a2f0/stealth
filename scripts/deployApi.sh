@@ -41,6 +41,18 @@ for secret_name in \
     >/dev/null
 done
 
+for secret_name in \
+  CHECKR_API_KEY \
+  CHECKR_BACKGROUND_PACKAGE \
+  CHECKR_CREDIT_PACKAGE; do
+  if [[ -n "${!secret_name:-}" ]]; then
+    printf '%s' "${!secret_name}" | bunx wrangler secret put \
+      "$secret_name" \
+      --config "$REPO_ROOT/apps/api/wrangler.jsonc" \
+      >/dev/null
+  fi
+done
+
 echo "Updating Stripe Worker secrets..."
 for secret_name in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
   printf '%s' "${!secret_name}" | bunx wrangler secret put \
