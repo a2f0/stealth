@@ -553,11 +553,12 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
     : invitation.status;
   const reportId = invitation.report_id ?? row.checkr_report_id;
   const report = reportId ? await getCheckrReport(context.env, reportId) : null;
-  const screeningStatus = report?.includes_canceled
-    ? report.result
-      ? "partially_canceled"
-      : "canceled"
-    : invitationStatus;
+  const screeningStatus =
+    report?.status === "complete" && report.includes_canceled
+      ? report.result
+        ? "partially_canceled"
+        : "canceled"
+      : invitationStatus;
   const complete =
     (report?.status === "complete" && !report.includes_canceled) ||
     (row.status === "complete" &&

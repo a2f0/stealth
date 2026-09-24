@@ -11,7 +11,6 @@ import {
   createEmployeeRequirements,
   deleteEmployeeRequirement,
   downloadEmployeeForm,
-  EmployeeFormsApiError,
   type EmployeeRequirement,
   type EmployeeRequirementKind,
   type EmployeeRequirementStatus,
@@ -182,10 +181,8 @@ export function EmployeeForms({
       setNotice(success);
     } catch (cause) {
       const message = messageFrom(cause);
-      if (cause instanceof EmployeeFormsApiError && cause.status === 409) {
-        setRequirements(undefined);
-        await load();
-      }
+      setRequirements(undefined);
+      await load();
       setError(message);
     } finally {
       setBusy(false);

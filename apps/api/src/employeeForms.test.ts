@@ -772,6 +772,7 @@ describe("employee forms", () => {
               WHERE id = ?`)
       .run(id);
     let reportResult: string | null = null;
+    let reportStatus = "pending";
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input) => {
       if (String(input).includes("/invitations/invitation-1?")) {
@@ -785,7 +786,7 @@ describe("employee forms", () => {
         id: "report-1",
         includes_canceled: true,
         result: reportResult,
-        status: "complete",
+        status: reportStatus,
       });
     }) as typeof fetch;
     try {
@@ -794,6 +795,28 @@ describe("employee forms", () => {
         .request(`/${id}/checkr/refresh`, { method: "POST" });
       expect(refreshed.status).toBe(200);
       expect(await refreshed.json()).toMatchObject({
+        invitationStatus: "completed",
+        reportStatus: "pending",
+      });
+      expect(
+        fixture.database
+          .query(`SELECT status, checkr_invitation_status
+                  FROM employee_requirements WHERE id = ?`)
+          .get(id),
+      ).toEqual({
+        status: "in_progress",
+        checkr_invitation_status: "completed",
+      });
+      const blockedRemoval = await fixture
+        .app("owner", "owner")
+        .request(`/${id}`, { method: "DELETE" });
+      expect(blockedRemoval.status).toBe(409);
+      reportStatus = "complete";
+      const canceled = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/refresh`, { method: "POST" });
+      expect(canceled.status).toBe(200);
+      expect(await canceled.json()).toMatchObject({
         invitationStatus: "canceled",
         result: null,
       });
