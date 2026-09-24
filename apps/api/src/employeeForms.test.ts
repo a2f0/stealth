@@ -1142,7 +1142,7 @@ describe("employee forms", () => {
         method: "DELETE",
       });
       expect(removal.status).toBe(409);
-      fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "";
+      delete fixture.bindings.CHECKR_BACKGROUND_PACKAGE;
       const mismatched = await fixture
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));

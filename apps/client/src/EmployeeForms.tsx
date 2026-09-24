@@ -341,7 +341,9 @@ function RequirementItem({
         {canManage && (
           <>
             {requirement.kind !== "form" &&
-              (requirement.checkrAvailable || requirement.checkrStarted) && (
+              (requirement.checkrAvailable ||
+                requirement.checkrStarted ||
+                requirement.checkrPendingStart) && (
                 <CheckrControl
                   action={action}
                   busy={busy}
@@ -349,7 +351,9 @@ function RequirementItem({
                 />
               )}
             {(requirement.kind === "form" ||
-              (!requirement.checkrAvailable && !requirement.checkrStarted) ||
+              (!requirement.checkrAvailable &&
+                !requirement.checkrStarted &&
+                !requirement.checkrPendingStart) ||
               ["expired", "canceled", "deleted"].includes(
                 requirement.checkrInvitationStatus ?? "",
               )) && (

@@ -549,6 +549,11 @@ async function claimCheckrStart(
 ) {
   const now = new Date();
   const nonce = crypto.randomUUID();
+  const packageSlug =
+    checkrPackage(
+      context.env,
+      row.kind as "background_check" | "credit_check",
+    ) || row.checkr_start_package;
   return context.env.DB.prepare(
     `UPDATE employee_requirements
      SET checkr_start_nonce = CASE
@@ -580,14 +585,8 @@ async function claimCheckrStart(
       nonce,
       now.toISOString(),
       now.toISOString(),
-      checkrPackage(
-        context.env,
-        row.kind as "background_check" | "credit_check",
-      ),
-      checkrPackage(
-        context.env,
-        row.kind as "background_check" | "credit_check",
-      ),
+      packageSlug,
+      packageSlug,
       now.toISOString(),
       row.id,
       context.get("organizationId"),
