@@ -38,7 +38,10 @@ verify_cors_headers() {
   local headers="$2"
   local normalized_headers
 
-  normalized_headers="$(tr -d '\r' <<<"$headers" | tr '[:upper:]' '[:lower:]')"
+  # curl includes every attempt when --retry is used; inspect the final one.
+  normalized_headers="$(tr -d '\r' <<<"$headers" |
+    tr '[:upper:]' '[:lower:]' |
+    awk '/^http\// { last_response = "" } { last_response = last_response $0 ORS } END { printf "%s", last_response }')"
   if ! grep -Fqx 'access-control-allow-origin: https://app.tearleads.de' \
     <<<"$normalized_headers" ||
     ! grep -Fqx 'access-control-allow-credentials: true' \
