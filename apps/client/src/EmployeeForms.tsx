@@ -21,6 +21,10 @@ import {
   updateEmployeeRequirement,
   uploadEmployeeForm,
 } from "./employeeFormsApi";
+import {
+  canCompleteRequirement,
+  reviewRevisionForStatus,
+} from "./employeeOnboarding";
 import type {
   OrganizationInvitation,
   OrganizationMember,
@@ -536,10 +540,12 @@ function RequirementStatusControl({
         void action(
           () =>
             updateEmployeeRequirement(requirement.id, {
-              documentRevision:
-                event.target.value === "complete"
-                  ? (reviewedRevision ?? -1)
-                  : requirement.documentRevision,
+              documentRevision: reviewRevisionForStatus(
+                requirement.kind,
+                requirement.documentRevision,
+                reviewedRevision,
+                event.target.value as EmployeeRequirementStatus,
+              ),
               status: event.target.value as EmployeeRequirementStatus,
             }),
           "Status updated.",
@@ -555,8 +561,11 @@ function RequirementStatusControl({
       )}
       <option
         disabled={
-          requirement.kind === "form" &&
-          reviewedRevision !== requirement.documentRevision
+          !canCompleteRequirement(
+            requirement.kind,
+            requirement.documentRevision,
+            reviewedRevision,
+          )
         }
         value="complete"
       >

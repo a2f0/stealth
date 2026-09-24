@@ -399,6 +399,32 @@ describe("employee forms", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("does not link a form after cleanup claims its upload", async () => {
+    const fixture = await createFixture();
+    const id = await createRequirement(fixture, "form", "W-4");
+    fixture.beforeDocumentUpdate(() => {
+      fixture.database
+        .query(
+          "UPDATE deleted_object_cleanup SET cleanup_token = 'worker' WHERE id LIKE 'employee-form-upload:%'",
+        )
+        .run();
+    });
+    const form = new FormData();
+    form.set(
+      "file",
+      new File(["stale"], "tax.pdf", { type: "application/pdf" }),
+    );
+    const uploaded = await fixture
+      .app("employee", "member")
+      .request(`/${id}/document`, { body: form, method: "POST" });
+    expect(uploaded.status).toBe(409);
+    expect(
+      fixture.database
+        .query("SELECT document_key FROM employee_requirements WHERE id = ?")
+        .get(id),
+    ).toEqual({ document_key: null });
+  });
+
   it("rejects oversized multipart uploads before parsing them", async () => {
     const fixture = await createFixture();
     const id = await createRequirement(fixture, "form", "W-4");
@@ -446,6 +472,42 @@ describe("employee forms", () => {
       method: "DELETE",
     });
     expect(removal.status).toBe(409);
+  });
+
+  it("does not transfer a former member's forms to a reused email", async () => {
+    const fixture = await createFixture();
+    const id = await createRequirement(fixture, "form", "W-4");
+    const form = new FormData();
+    form.set(
+      "file",
+      new File(["private tax form"], "tax.pdf", { type: "application/pdf" }),
+    );
+    const uploaded = await fixture
+      .app("employee", "member")
+      .request(`/${id}/document`, { body: form, method: "POST" });
+    expect(uploaded.status).toBe(200);
+    fixture.database
+      .query("DELETE FROM member WHERE id = 'employee-member'")
+      .run();
+    fixture.database
+      .query(`INSERT INTO invitation
+        (id, organizationId, email, role, status, expiresAt, createdAt, inviterId)
+        VALUES ('replacement-invite', ?, 'employee@example.com', 'member',
+                'pending', ?, ?, 'owner')`)
+      .run(orgId, "2026-10-05", now());
+    await assignRenewedInvitationRequirements(
+      fixture.bindings.DB,
+      orgId,
+      "replacement-invite",
+      "employee@example.com",
+    );
+    expect(
+      fixture.database
+        .query(
+          "SELECT invitation_id, assigned_user_id FROM employee_requirements WHERE id = ?",
+        )
+        .get(id),
+    ).toEqual({ invitation_id: null, assigned_user_id: "employee" });
   });
 
   it("starts and refreshes a Checkr screening with the configured package", async () => {
@@ -961,7 +1023,13 @@ async function createFixture() {
     beforeBatch: (() => void) | undefined;
     beforeRun: ((query: string) => void) | undefined;
     afterRun: (() => void) | undefined;
-  } = { beforeBatch: undefined, beforeRun: undefined, afterRun: undefined };
+    beforeDocumentUpdate: (() => void) | undefined;
+  } = {
+    beforeBatch: undefined,
+    beforeRun: undefined,
+    afterRun: undefined,
+    beforeDocumentUpdate: undefined,
+  };
   const bindings = {
     DB: toD1(database, hooks),
     STORAGE: {
@@ -1013,6 +1081,9 @@ async function createFixture() {
     afterRun: (callback: () => void) => {
       hooks.afterRun = callback;
     },
+    beforeDocumentUpdate: (callback: () => void) => {
+      hooks.beforeDocumentUpdate = callback;
+    },
     database,
     files,
     storageState,
@@ -1025,6 +1096,7 @@ function toD1(
     beforeBatch: (() => void) | undefined;
     beforeRun: ((query: string) => void) | undefined;
     afterRun: (() => void) | undefined;
+    beforeDocumentUpdate: (() => void) | undefined;
   },
 ) {
   return {
@@ -1048,6 +1120,14 @@ function toD1(
         },
         first: async () => database.query(query).get(...values),
         run: async () => {
+          if (
+            query.includes("SET document_key = ?") &&
+            hooks.beforeDocumentUpdate
+          ) {
+            const before = hooks.beforeDocumentUpdate;
+            hooks.beforeDocumentUpdate = undefined;
+            before();
+          }
           const callback = hooks.beforeRun;
           hooks.beforeRun = undefined;
           callback?.(query);

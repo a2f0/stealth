@@ -7,6 +7,7 @@ CREATE TABLE employee_requirements (
   invitation_id TEXT REFERENCES invitation (id) ON DELETE SET NULL,
   member_id TEXT REFERENCES member (id) ON DELETE SET NULL,
   target_email TEXT NOT NULL,
+  assigned_user_id TEXT,
   kind TEXT NOT NULL CHECK (kind IN ('form', 'background_check', 'credit_check')),
   title TEXT NOT NULL,
   due_date TEXT NOT NULL,

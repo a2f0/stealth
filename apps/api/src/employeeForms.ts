@@ -121,13 +121,14 @@ employeeForms.post("/", async (context) => {
   const organizationId = context.get("organizationId");
   const target = await context.env.DB.prepare(
     memberId
-      ? `SELECT user.email FROM member JOIN user ON user.id = member.userId
+      ? `SELECT user.email, user.id AS user_id
+         FROM member JOIN user ON user.id = member.userId
          WHERE member.id = ? AND member.organizationId = ?`
-      : `SELECT email FROM invitation
+      : `SELECT email, NULL AS user_id FROM invitation
          WHERE id = ? AND organizationId = ? AND status = 'pending'`,
   )
     .bind(memberId ?? invitationId, organizationId)
-    .first<{ email: string }>();
+    .first<{ email: string; user_id: string | null }>();
   if (!target) return context.json({ error: "Person not found." }, 404);
 
   const now = new Date().toISOString();
@@ -138,8 +139,9 @@ employeeForms.post("/", async (context) => {
       context.env.DB.prepare(
         `INSERT INTO employee_requirements
          (id, organization_id, invitation_id, member_id, target_email,
+          assigned_user_id,
           kind, title, due_date, created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          WHERE EXISTS (
            SELECT 1 FROM ${memberId ? "member" : "invitation"}
            WHERE id = ? AND organizationId = ?
@@ -151,6 +153,7 @@ employeeForms.post("/", async (context) => {
         invitationId,
         memberId,
         target.email.toLowerCase(),
+        target.user_id,
         requirement.kind,
         requirement.title.trim(),
         requirement.dueDate,
@@ -294,6 +297,10 @@ employeeForms.post("/:id/document", async (context) => {
            document_revision = document_revision + 1,
            status = 'submitted', completed_at = NULL, updated_at = ?
        WHERE id = ? AND organization_id = ? AND document_key IS ?
+         AND EXISTS (
+           SELECT 1 FROM deleted_object_cleanup
+           WHERE object_key = ? AND cleanup_token IS NULL
+         )
          AND (? = 1 OR EXISTS (
            SELECT 1 FROM member WHERE member.id = employee_requirements.member_id
              AND member.organizationId = ? AND member.userId = ?
@@ -307,6 +314,7 @@ employeeForms.post("/:id/document", async (context) => {
         row.id,
         context.get("organizationId"),
         row.document_key,
+        key,
         canManageOrganization(context.get("organizationRole")) ? 1 : 0,
         context.get("organizationId"),
         context.get("authSession").user.id,
@@ -772,10 +780,13 @@ export async function assignAcceptedInvitationRequirements(
 ) {
   const statement = database.prepare(
     `UPDATE employee_requirements
-     SET invitation_id = NULL, member_id = ?, updated_at = ?
+     SET invitation_id = NULL, member_id = ?,
+         assigned_user_id = (SELECT userId FROM member WHERE id = ?),
+         updated_at = ?
      WHERE organization_id = ? AND invitation_id = ?`,
   );
   const values = [
+    memberId,
     memberId,
     new Date().toISOString(),
     organizationId,
@@ -800,6 +811,7 @@ export async function assignRenewedInvitationRequirements(
     `UPDATE employee_requirements
      SET invitation_id = ?, updated_at = ?
      WHERE organization_id = ? AND member_id IS NULL
+       AND assigned_user_id IS NULL
        AND target_email = ? COLLATE NOCASE
        AND (invitation_id IS NULL OR EXISTS (
          SELECT 1 FROM invitation AS old

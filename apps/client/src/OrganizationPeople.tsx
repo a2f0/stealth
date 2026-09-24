@@ -16,6 +16,7 @@ import {
   createEmployeeRequirements,
   type RequirementDraft,
 } from "./employeeFormsApi";
+import { inviteWithRequirements } from "./employeeOnboarding";
 import {
   getOrganizationPeople,
   type OrganizationInvitation,
@@ -382,29 +383,32 @@ async function sendInvitationWithRequirements({
   requirements: RequirementDraft[];
   role: OrganizationInvitationRole;
 }) {
-  const result = await authClient.organization.inviteMember({
-    email,
-    organizationId,
+  return inviteWithRequirements({
+    assign: (invitationId, drafts) =>
+      createEmployeeRequirements({ invitationId }, drafts),
+    invite: async () => {
+      const result = await authClient.organization.inviteMember({
+        email,
+        organizationId,
+        role,
+      });
+      return {
+        data: result.data
+          ? { id: result.data.id, role: result.data.role }
+          : null,
+        error: result.error
+          ? {
+              message:
+                result.error.message ?? "Could not send this invitation.",
+            }
+          : null,
+      };
+    },
+    onInvited,
+    onSent,
+    requirements,
     role,
   });
-  if (result.error) {
-    throw new Error(result.error.message ?? "Could not send this invitation.");
-  }
-  onInvited();
-  try {
-    if (requirements.length) {
-      const invitationId = result.data?.id;
-      if (!invitationId) throw new Error("Invitation ID unavailable.");
-      await createEmployeeRequirements({ invitationId }, requirements);
-    }
-  } catch (cause) {
-    throw new Error(
-      `Invitation sent, but requirements could not be assigned: ${messageFrom(cause)}`,
-    );
-  } finally {
-    await onSent();
-  }
-  return result.data?.role ?? role;
 }
 
 interface MemberControlsProps {
