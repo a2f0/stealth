@@ -206,7 +206,9 @@ employeeForms.patch("/:id", async (context) => {
      WHERE id = ? AND organization_id = ?
        AND (? IS NULL OR kind <> 'form' OR document_revision = ?)
        AND (? IS NULL OR checkr_invitation_id IS NULL OR
-            checkr_invitation_status IN ('expired', 'canceled', 'deleted'))`,
+            checkr_invitation_status IN ('expired', 'canceled', 'deleted'))
+       AND (? IS NULL OR
+            (checkr_starting_at IS NULL AND checkr_start_nonce IS NULL))`,
   )
     .bind(
       status ?? null,
@@ -220,6 +222,7 @@ employeeForms.patch("/:id", async (context) => {
       context.get("organizationId"),
       status ?? null,
       body.documentRevision ?? null,
+      status ?? null,
       status ?? null,
     )
     .run();
@@ -994,7 +997,9 @@ function isValidRequirementUpdate(row: RequirementRow, body: InputRecord) {
       documentRevision === undefined) ||
     (row.checkr_invitation_id &&
       !isExpiredCheckrInvitation(row) &&
-      status !== undefined)
+      status !== undefined) ||
+    (status !== undefined &&
+      (row.checkr_starting_at !== null || row.checkr_start_nonce !== null))
   );
 }
 

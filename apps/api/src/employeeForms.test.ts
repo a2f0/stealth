@@ -262,6 +262,58 @@ describe("employee forms", () => {
     ).toEqual({ status: "submitted" });
   });
 
+  it("blocks manual completion while a Checkr start is unresolved", async () => {
+    const fixture = await createFixture();
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.database
+      .query(
+        "UPDATE employee_requirements SET checkr_start_nonce = 'pending' WHERE id = ?",
+      )
+      .run(id);
+    const pending = await fixture.app("owner", "owner").request(`/${id}`, {
+      body: JSON.stringify({ status: "complete" }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    });
+    expect(pending.status).toBe(400);
+    const dueDate = await fixture.app("owner", "owner").request(`/${id}`, {
+      body: JSON.stringify({ dueDate: "2026-10-10" }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    });
+    expect(dueDate.status).toBe(200);
+
+    fixture.database
+      .query(
+        "UPDATE employee_requirements SET checkr_start_nonce = NULL WHERE id = ?",
+      )
+      .run(id);
+    fixture.beforeRun((query) => {
+      if (query.includes("SET status = COALESCE")) {
+        fixture.database
+          .query(
+            "UPDATE employee_requirements SET checkr_start_nonce = 'raced' WHERE id = ?",
+          )
+          .run(id);
+      }
+    });
+    const raced = await fixture.app("owner", "owner").request(`/${id}`, {
+      body: JSON.stringify({ status: "complete" }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    });
+    expect(raced.status).toBe(409);
+    expect(
+      fixture.database
+        .query("SELECT status FROM employee_requirements WHERE id = ?")
+        .get(id),
+    ).toEqual({ status: "pending" });
+  });
+
   it("keeps submitted documents private and requires review before completion", async () => {
     const fixture = await createFixture();
     const id = await createRequirement(fixture, "form", "W-4");
