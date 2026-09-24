@@ -199,9 +199,19 @@ Require a clean worktree before fetching or snapshotting anything:
    - `codex` → Codex (self-review)
    - otherwise → Claude Code (default for Codex invoking this skill)
 
-   Set `REPAIR_ROUND=0` once for reporting. Steps 2–5 re-enter at step 2;
-   preserve the counter across repairs. It records work performed and never
-   limits the loop.
+   Parse `--report-only` once before any branch mutation, and set
+   `REPAIR_ROUND=0` for reporting. Steps 2–5 re-enter at step 2; preserve the
+   counter across repairs. It records work performed and never limits the loop.
+
+   ```bash
+   REPORT_ONLY=false
+   for argument in "$@"; do
+     if [ "$argument" = "--report-only" ]; then
+       REPORT_ONLY=true
+     fi
+   done
+   REPAIR_ROUND=0
+   ```
 
 2. **Sync with the base, then snapshot the candidate head**: before reviewing,
    bring the branch up to date with its base, so the review — and the head that
@@ -246,7 +256,7 @@ Require a clean worktree before fetching or snapshotting anything:
      esac
    fi
    [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
-   if [ "${REPORT_ONLY:-false}" = true ]; then
+   if [ "$REPORT_ONLY" = true ]; then
      git merge-base --is-ancestor "$FETCHED_BASE" HEAD || { echo "Error: report-only review cannot ship a branch behind $BASE_REF; sync it and run a fresh review" >&2; exit 1; }
    fi
    ```
@@ -270,7 +280,7 @@ Require a clean worktree before fetching or snapshotting anything:
    fork:
 
    ```bash
-   if [ "${REPORT_ONLY:-false}" != true ]; then
+   if [ "$REPORT_ONLY" != true ]; then
      PRE_SYNC_HEAD=$(git rev-parse HEAD)
      git -c core.hooksPath=/dev/null merge -S --no-edit "$FETCHED_BASE" || {
        git -c core.hooksPath=/dev/null merge --abort

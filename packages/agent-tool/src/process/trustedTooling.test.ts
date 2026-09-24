@@ -156,14 +156,20 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
       path.join(repositoryRoot, skillRoot, "cross-agent-review/SKILL.md"),
       "utf8",
     );
-    const mergeGuard = review.indexOf('if [ "$REPAIR_ROUNDS" -ne 0 ]; then');
+    const reportOnlyInit = review.indexOf("REPORT_ONLY=false");
+    const reportOnlyParse = review.indexOf(
+      'if [ "$argument" = "--report-only" ]; then',
+    );
+    const mergeGuard = review.indexOf('if [ "$REPORT_ONLY" != true ]; then');
     const merge = review.indexOf(
       'git -c core.hooksPath=/dev/null merge -S --no-edit "$FETCHED_BASE"',
     );
     const push = review.indexOf(
       'git push --no-verify "$FEATURE_REMOTE" "HEAD:$BRANCH"',
     );
-    expect(mergeGuard).toBeGreaterThan(-1);
+    expect(reportOnlyInit).toBeGreaterThan(-1);
+    expect(reportOnlyParse).toBeGreaterThan(reportOnlyInit);
+    expect(mergeGuard).toBeGreaterThan(reportOnlyParse);
     expect(merge).toBeGreaterThan(mergeGuard);
     expect(push).toBeGreaterThan(merge);
 
