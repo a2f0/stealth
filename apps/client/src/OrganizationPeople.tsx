@@ -94,7 +94,11 @@ export function OrganizationPeople({
       <EmployeeForms
         canManage={canManage}
         invitations={state.data.invitations}
-        key={`${organization.id}-${formsVersion}`}
+        key={`${organization.id}-${formsVersion}-${state.data.members
+          .map((member) => member.id)
+          .join(",")}-${state.data.invitations
+          .map((invitation) => `${invitation.id}:${invitation.status}`)
+          .join(",")}`}
         members={state.data.members}
       />
       {canManage && state.data.invitations.length > 0 && (

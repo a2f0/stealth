@@ -594,7 +594,7 @@ async function launchCheckrScreening(
       candidateId,
     );
     if (existing) {
-      return storeCheckrInvitation(context, row, nonce, existing, false);
+      return await storeCheckrInvitation(context, row, nonce, existing, false);
     }
     if (!(await screeningTargetActive(context, row.id))) {
       await releaseUnresolvedCheckrStart(
@@ -624,7 +624,7 @@ async function launchCheckrScreening(
     );
     if (!invitation.id)
       throw new Error("Checkr did not return an invitation ID.");
-    return storeCheckrInvitation(context, row, nonce, invitation, true);
+    return await storeCheckrInvitation(context, row, nonce, invitation, true);
   } catch (cause) {
     await context.env.DB.prepare(
       `UPDATE employee_requirements SET checkr_starting_at = NULL
