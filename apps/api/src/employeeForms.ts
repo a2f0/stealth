@@ -430,7 +430,14 @@ employeeForms.post("/:id/checkr/start", async (context) => {
   if (row.checkr_invitation_id && !isExpiredCheckrInvitation(row)) {
     return context.json({ error: "Screening already started." }, 409);
   }
-  if (!checkrConfigured(context.env, row.kind)) {
+  if (
+    !checkrConfigured(context.env, row.kind) &&
+    !(
+      row.checkr_start_nonce &&
+      row.checkr_start_package &&
+      context.env.CHECKR_API_KEY
+    )
+  ) {
     return context.json(
       { error: "Checkr is not configured for this screening." },
       503,
@@ -481,13 +488,16 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
     : invitation.status;
   const reportId = invitation.report_id ?? row.checkr_report_id;
   const report = reportId ? await getCheckrReport(context.env, reportId) : null;
+  const screeningStatus = report?.includes_canceled
+    ? "canceled"
+    : invitationStatus;
   const complete =
-    report?.status === "complete" ||
+    (report?.status === "complete" && !report.includes_canceled) ||
     (row.status === "complete" &&
       isExpiredCheckrStatus(row.checkr_invitation_status));
   const nextStatus = complete
     ? "complete"
-    : isExpiredCheckrStatus(invitationStatus)
+    : isExpiredCheckrStatus(screeningStatus)
       ? "pending"
       : "in_progress";
   const now = new Date().toISOString();
@@ -503,9 +513,9 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
        AND checkr_refresh_revision = ?`,
   )
     .bind(
-      invitationStatus,
+      screeningStatus,
       reportId,
-      report?.result ?? null,
+      report?.includes_canceled ? null : (report?.result ?? null),
       nextStatus,
       nextStatus,
       now,
@@ -520,7 +530,7 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
     return context.json({ error: "Screening changed. Please refresh." }, 409);
   }
   return context.json({
-    invitationStatus,
+    invitationStatus: screeningStatus,
     reportStatus: report?.status ?? null,
     result: report?.result ?? null,
   });

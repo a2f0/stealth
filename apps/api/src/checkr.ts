@@ -19,6 +19,7 @@ interface CheckrInvitationList {
 
 interface CheckrReport {
   id: string;
+  includes_canceled?: boolean;
   result: string | null;
   status: string;
 }

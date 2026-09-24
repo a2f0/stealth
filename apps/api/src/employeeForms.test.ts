@@ -726,6 +726,60 @@ describe("employee forms", () => {
     }
   });
 
+  it("does not complete a report with canceled screenings", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET checkr_invitation_id = 'invitation-1',
+                  checkr_invitation_status = 'pending', status = 'in_progress'
+              WHERE id = ?`)
+      .run(id);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      if (String(input).includes("/invitations/invitation-1?")) {
+        return Response.json({
+          id: "invitation-1",
+          report_id: "report-1",
+          status: "completed",
+        });
+      }
+      return Response.json({
+        id: "report-1",
+        includes_canceled: true,
+        result: null,
+        status: "complete",
+      });
+    }) as typeof fetch;
+    try {
+      const refreshed = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/refresh`, { method: "POST" });
+      expect(refreshed.status).toBe(200);
+      expect(await refreshed.json()).toMatchObject({
+        invitationStatus: "canceled",
+        result: null,
+      });
+      expect(
+        fixture.database
+          .query(`SELECT status, completed_at, checkr_invitation_status
+                  FROM employee_requirements WHERE id = ?`)
+          .get(id),
+      ).toEqual({
+        status: "pending",
+        completed_at: null,
+        checkr_invitation_status: "canceled",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("restarts an expired Checkr invitation with a new attempt", async () => {
     const fixture = await createFixture();
     fixture.bindings.CHECKR_API_KEY = "staging-key";
@@ -1088,7 +1142,7 @@ describe("employee forms", () => {
         method: "DELETE",
       });
       expect(removal.status).toBe(409);
-      fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "changed_package";
+      fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "";
       const mismatched = await fixture
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
@@ -1101,6 +1155,7 @@ describe("employee forms", () => {
           .get(id),
       ).toEqual({ checkr_invitation_id: null });
       includeExpected = true;
+      fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "changed_package";
       const recovered = await fixture
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
