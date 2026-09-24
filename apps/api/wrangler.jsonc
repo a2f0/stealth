@@ -14,6 +14,7 @@
     "AUTH_EMAIL_FROM": "security@auth.tearleads.de",
     "BETTER_AUTH_URL": "https://api.tearleads.de",
     "CORS_ORIGIN": "https://app.tearleads.de",
+    "CHECKR_ENV": "production",
     "INBOUND_EMAIL_DOMAIN": "inbox.tearleads.de",
     "PLAID_ENV": "sandbox",
     "PLAID_REDIRECT_URI": "https://app.tearleads.de/finance",

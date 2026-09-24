@@ -33,6 +33,7 @@ api.vars = {
   ...(api.vars as Record<string, unknown>),
   BETTER_AUTH_URL: "https://api-staging.tearleads.de",
   CORS_ORIGIN: "https://app-staging.tearleads.de",
+  CHECKR_ENV: "staging",
   INBOUND_EMAIL_DOMAIN: "inbox-staging.tearleads.de",
   PLAID_ENV: "sandbox",
   PLAID_REDIRECT_URI: "https://app-staging.tearleads.de/finance",

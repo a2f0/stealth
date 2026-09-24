@@ -15,6 +15,7 @@ import {
 import { billing, handleStripeWebhook, syncOrganizationSeats } from "./billing";
 import { businesses } from "./businesses";
 import { contracts } from "./contracts";
+import { employeeForms } from "./employeeForms";
 import { equipment } from "./equipment";
 import { finance } from "./finance";
 import { inbox } from "./inbox";
@@ -90,6 +91,7 @@ app.get("/api", (context) =>
       businesses: "/api/businesses",
       contracts: "/api/contracts",
       equipment: "/api/equipment",
+      employeeForms: "/api/employee-forms",
       finance: "/api/finance",
       inbox: "/api/inbox",
       libraryFolders: "/api/library/folders",
@@ -136,6 +138,10 @@ app.route("/api/signing", signing);
 app.use("/api/equipment", requireAuth, requireOrganization);
 app.use("/api/equipment/*", requireAuth, requireOrganization);
 app.route("/api/equipment", equipment);
+
+app.use("/api/employee-forms", requireAuth, requireOrganization);
+app.use("/api/employee-forms/*", requireAuth, requireOrganization);
+app.route("/api/employee-forms", employeeForms);
 
 app.post("/api/billing/webhook", handleStripeWebhook);
 app.use("/api/billing", requireAuth, requireOrganization);

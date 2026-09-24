@@ -11,6 +11,11 @@ import {
 } from "@tearleads/ui/react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { authClient } from "./authClient";
+import { EmployeeForms, RequirementDraftEditor } from "./EmployeeForms";
+import {
+  createEmployeeRequirements,
+  type RequirementDraft,
+} from "./employeeFormsApi";
 import {
   getOrganizationPeople,
   type OrganizationInvitation,
@@ -35,6 +40,7 @@ export function OrganizationPeople({
   organization: WorkspaceOrganization;
 }) {
   const state = useOrganizationPeopleData(organization.id);
+  const [formsVersion, setFormsVersion] = useState(0);
   const canManage = canManageOrganization(state.data?.memberRole);
   const actions = organizationPeopleActions(
     state,
@@ -67,7 +73,10 @@ export function OrganizationPeople({
         <InviteMemberForm
           key={organization.id}
           memberRole={state.data.memberRole}
-          onSent={state.load}
+          onSent={async () => {
+            await state.load();
+            setFormsVersion((version) => version + 1);
+          }}
           organizationId={organization.id}
         />
       )}
@@ -80,6 +89,12 @@ export function OrganizationPeople({
         }
         onRoleChange={actions.updateMemberRole}
         onTwoFactorRequiredChange={actions.updateTwoFactorRequirement}
+      />
+      <EmployeeForms
+        canManage={canManage}
+        invitations={state.data.invitations}
+        key={`${organization.id}-${formsVersion}`}
+        members={state.data.members}
       />
       {canManage && state.data.invitations.length > 0 && (
         <PendingInvitations
@@ -253,6 +268,7 @@ function InviteMemberForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [requirements, setRequirements] = useState<RequirementDraft[]>([]);
 
   async function invite(event: FormEvent) {
     event.preventDefault();
@@ -262,22 +278,18 @@ function InviteMemberForm({
     setError(undefined);
     setNotice(undefined);
     try {
-      const result = await authClient.organization.inviteMember({
+      const assignedRole = await sendInvitationWithRequirements({
         email: invitedEmail,
+        onInvited: () => setEmail(""),
+        onSent,
         organizationId,
+        requirements,
         role,
       });
-      if (result.error) {
-        throw new Error(
-          result.error.message ?? "Could not send this invitation.",
-        );
-      }
-      const assignedRole = result.data?.role ?? role;
-      setEmail("");
+      setRequirements([]);
       setNotice(
         `Invitation sent to ${invitedEmail} with the ${assignedRole} role.`,
       );
-      await onSent();
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
@@ -337,10 +349,62 @@ function InviteMemberForm({
           </select>
         </Field>
       </div>
+      <div className="inviteRequirements">
+        <h3>Onboarding requirements</h3>
+        <p className="muted">
+          Choose any forms or checks needed from this person and set each due
+          date.
+        </p>
+        <RequirementDraftEditor
+          drafts={requirements}
+          disabled={busy}
+          onChange={setRequirements}
+        />
+      </div>
       {error && <Banner tone="danger">{error}</Banner>}
       {notice && <Banner tone="success">{notice}</Banner>}
     </Card>
   );
+}
+
+async function sendInvitationWithRequirements({
+  email,
+  onInvited,
+  onSent,
+  organizationId,
+  requirements,
+  role,
+}: {
+  email: string;
+  onInvited: () => void;
+  onSent: () => Promise<void>;
+  organizationId: string;
+  requirements: RequirementDraft[];
+  role: OrganizationInvitationRole;
+}) {
+  const result = await authClient.organization.inviteMember({
+    email,
+    organizationId,
+    role,
+  });
+  if (result.error) {
+    throw new Error(result.error.message ?? "Could not send this invitation.");
+  }
+  onInvited();
+  try {
+    if (requirements.length) {
+      const invitationId = result.data?.id;
+      if (!invitationId) throw new Error("Invitation ID unavailable.");
+      await createEmployeeRequirements({ invitationId }, requirements);
+    }
+  } catch (cause) {
+    throw new Error(
+      `Invitation sent, but requirements could not be assigned: ${messageFrom(cause)}`,
+    );
+  } finally {
+    await onSent();
+  }
+  return result.data?.role ?? role;
 }
 
 interface MemberControlsProps {
