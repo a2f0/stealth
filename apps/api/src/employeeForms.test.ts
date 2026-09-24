@@ -743,6 +743,99 @@ describe("employee forms", () => {
     }
   });
 
+  it("keeps a completed screening when an older refresh finishes last", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET checkr_invitation_id = 'check-1',
+                  checkr_invitation_status = 'pending', status = 'in_progress'
+              WHERE id = ?`)
+      .run(id);
+    fixture.beforeRun((query) => {
+      if (
+        query.includes("checkr_refresh_revision = checkr_refresh_revision + 1")
+      ) {
+        fixture.database
+          .query(`UPDATE employee_requirements
+                  SET status = 'complete', checkr_result = 'clear',
+                      checkr_refresh_revision = 1 WHERE id = ?`)
+          .run(id);
+      }
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      Response.json({
+        id: "check-1",
+        deleted_at: null,
+        report_id: null,
+        status: "pending",
+      })) as unknown as typeof fetch;
+    try {
+      const refreshed = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/refresh`, { method: "POST" });
+      expect(refreshed.status).toBe(409);
+      expect(
+        fixture.database
+          .query(
+            "SELECT status, checkr_result FROM employee_requirements WHERE id = ?",
+          )
+          .get(id),
+      ).toEqual({ status: "complete", checkr_result: "clear" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("lets managers remove a screening after a definite Checkr rejection", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      if (String(input).endsWith("/candidates")) {
+        return Response.json({ id: "candidate-1" });
+      }
+      if (String(input).endsWith("/invitations")) {
+        return Response.json(
+          { message: "Package is not enabled." },
+          { status: 400 },
+        );
+      }
+      throw new Error(`Unexpected Checkr request: ${input}`);
+    }) as typeof fetch;
+    try {
+      const rejected = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(rejected.status).toBe(500);
+      expect(
+        fixture.database
+          .query(
+            "SELECT checkr_start_nonce FROM employee_requirements WHERE id = ?",
+          )
+          .get(id),
+      ).toEqual({ checkr_start_nonce: null });
+      const removed = await fixture.app("owner", "owner").request(`/${id}`, {
+        method: "DELETE",
+      });
+      expect(removed.status).toBe(200);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reconciles a lost Checkr response before allowing removal", async () => {
     const fixture = await createFixture();
     fixture.bindings.CHECKR_API_KEY = "staging-key";
@@ -1017,6 +1110,7 @@ async function createFixture() {
   await migration(database, "0043_queue_employee_document_cleanup.sql");
   await migration(database, "0044_guard_employee_screenings.sql");
   await migration(database, "0045_track_employee_form_uploads.sql");
+  await migration(database, "0046_version_employee_screening_refresh.sql");
   const files = new Map<string, File>();
   const storageState = { failPutAfterWrite: false, failDelete: false };
   const hooks: {

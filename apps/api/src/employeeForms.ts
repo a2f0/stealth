@@ -8,6 +8,7 @@ import {
   createCheckrInvitation,
   getCheckrInvitation,
   getCheckrReport,
+  isDefinitiveCheckrRejection,
   listCheckrCandidateInvitations,
 } from "./checkr";
 import { normalizeFilename } from "./filenames";
@@ -46,6 +47,7 @@ interface RequirementRow {
   checkr_start_nonce: string | null;
   checkr_start_nonce_at: string | null;
   checkr_attempt: number;
+  checkr_refresh_revision: number;
 }
 
 type EmployeeFormsEnv = {
@@ -73,6 +75,7 @@ employeeForms.get("/", async (context) => {
             requirement.checkr_result, requirement.checkr_invitation_status,
             requirement.checkr_starting_at, requirement.checkr_start_nonce,
             requirement.checkr_start_nonce_at, requirement.checkr_attempt,
+            requirement.checkr_refresh_revision,
             COALESCE(target.email, invitation.email, requirement.target_email)
               AS target_email,
             target.name AS target_name
@@ -473,8 +476,10 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
   const refreshed = await context.env.DB.prepare(
     `UPDATE employee_requirements
      SET checkr_invitation_status = ?, checkr_report_id = ?,
-         checkr_result = ?, status = ?, completed_at = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ? AND checkr_invitation_id = ?`,
+         checkr_result = ?, status = ?, completed_at = ?, updated_at = ?,
+         checkr_refresh_revision = checkr_refresh_revision + 1
+     WHERE id = ? AND organization_id = ? AND checkr_invitation_id = ?
+       AND checkr_refresh_revision = ?`,
   )
     .bind(
       invitationStatus,
@@ -490,6 +495,7 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
       row.id,
       context.get("organizationId"),
       row.checkr_invitation_id,
+      row.checkr_refresh_revision,
     )
     .run();
   if (!refreshed.meta.changes) {
@@ -567,8 +573,11 @@ async function launchCheckrScreening(
     }
     const candidateId =
       claim.checkr_candidate_id ??
-      (await createCheckrCandidate(context.env, row.target_email ?? "", row.id))
-        .id;
+      (
+        await requestCheckrForStart(context, row.id, nonce, () =>
+          createCheckrCandidate(context.env, row.target_email ?? "", row.id),
+        )
+      ).id;
     if (!candidateId) throw new Error("Checkr did not return a candidate ID.");
     if (!claim.checkr_candidate_id) {
       const stored = await context.env.DB.prepare(
@@ -587,6 +596,7 @@ async function launchCheckrScreening(
       if (!stored.meta.changes) return null;
     }
     if (row.kind === "form") return null;
+    const packageSlug = checkrPackage(context.env, row.kind) ?? "";
     const existing = await findPriorCheckrInvitation(
       context,
       row,
@@ -614,13 +624,15 @@ async function launchCheckrScreening(
     );
     if (!freshNonce) return null;
     nonce = freshNonce;
-    const invitation = await createCheckrInvitation(
-      context.env,
-      candidateId,
-      checkrPackage(context.env, row.kind) ?? "",
-      state,
-      city,
-      nonce,
+    const invitation = await requestCheckrForStart(context, row.id, nonce, () =>
+      createCheckrInvitation(
+        context.env,
+        candidateId,
+        packageSlug,
+        state,
+        city,
+        nonce,
+      ),
     );
     if (!invitation.id)
       throw new Error("Checkr did not return an invitation ID.");
@@ -632,6 +644,22 @@ async function launchCheckrScreening(
     )
       .bind(row.id, context.get("organizationId"), nonce)
       .run();
+    throw cause;
+  }
+}
+
+async function requestCheckrForStart<T>(
+  context: Context<EmployeeFormsEnv>,
+  requirementId: string,
+  nonce: string,
+  request: () => Promise<T>,
+) {
+  try {
+    return await request();
+  } catch (cause) {
+    if (isDefinitiveCheckrRejection(cause)) {
+      await releaseUnresolvedCheckrStart(context, requirementId, nonce, true);
+    }
     throw cause;
   }
 }
@@ -959,7 +987,7 @@ async function findRequirement(context: Context<EmployeeFormsEnv>) {
             completed_at, checkr_candidate_id, checkr_invitation_id,
             checkr_report_id, checkr_result, checkr_invitation_status,
             checkr_starting_at, checkr_start_nonce,
-            checkr_start_nonce_at, checkr_attempt,
+            checkr_start_nonce_at, checkr_attempt, checkr_refresh_revision,
             COALESCE(target.email, invitation.email, requirement.target_email)
               AS target_email,
             target.name AS target_name

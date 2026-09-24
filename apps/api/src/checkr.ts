@@ -22,6 +22,25 @@ interface CheckrReport {
   status: string;
 }
 
+class CheckrRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+export function isDefinitiveCheckrRejection(cause: unknown) {
+  return (
+    cause instanceof CheckrRequestError &&
+    cause.status >= 400 &&
+    cause.status < 500 &&
+    cause.status !== 409 &&
+    cause.status !== 429
+  );
+}
+
 export function checkrPackage(
   env: Bindings,
   kind: "background_check" | "credit_check",
@@ -125,8 +144,9 @@ async function checkrRequest<T>(
       error?: string;
       message?: string;
     } | null;
-    throw new Error(
+    throw new CheckrRequestError(
       `Checkr request failed (${response.status}): ${payload?.message ?? payload?.error ?? "Please check the package and account settings."}`,
+      response.status,
     );
   }
   return response.json() as Promise<T>;
