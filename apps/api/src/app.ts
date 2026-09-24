@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { accountSettings } from "./accountSettings";
 import { adminOrganizations } from "./adminOrganizations";
 import { audits } from "./audits";
 import { createAuth } from "./auth";
@@ -83,6 +84,7 @@ app.get("/api", (context) =>
   context.json({
     endpoints: {
       adminOrganizations: "/api/admin/organizations",
+      accountSettings: "/api/account-settings",
       audits: "/api/audits",
       billing: "/api/billing",
       businesses: "/api/businesses",
@@ -108,6 +110,9 @@ app.get("/api/me", requireAuth, (context) =>
 app.get("/api/admin", requireAuth, requireRole("admin"), (context) =>
   context.json({ user: context.get("authSession").user }),
 );
+
+app.use("/api/account-settings/*", requireAuth);
+app.route("/api/account-settings", accountSettings);
 
 app.use("/api/admin/organizations", requireAuth, requireRole("admin"));
 app.use("/api/admin/organizations/*", requireAuth, requireRole("admin"));

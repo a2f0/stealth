@@ -44,7 +44,7 @@ interface WorkspaceShellProps {
   children: ReactNode;
   contentKey: string | undefined;
   onAccountChange: (sessionToken: string) => Promise<void>;
-  onAccountSecurity: () => void;
+  onAccountSettings: () => void;
   onAddAccount: () => void;
   onNavigate: (pathname: string) => void;
   onOrganizationChange: (organizationId: string) => Promise<void>;
@@ -93,7 +93,7 @@ function Sidebar({
   activeSessionToken,
   canAccessFinance,
   onAccountChange,
-  onAccountSecurity,
+  onAccountSettings,
   onAddAccount,
   onNavigate,
   onOrganizationChange,
@@ -171,9 +171,9 @@ function Sidebar({
               loadError={accountLoadError}
               onAddAccount={onAddAccount}
               onRefreshAccounts={onRefreshAccounts}
-              onSecurity={() => {
+              onSettings={() => {
                 setOpen(false);
-                onAccountSecurity();
+                onAccountSettings();
               }}
               onSignOut={onSignOut}
               onSwitchAccount={onAccountChange}

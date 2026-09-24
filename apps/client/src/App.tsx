@@ -8,7 +8,7 @@ import {
   PageHeader,
 } from "@tearleads/ui/react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { AccountSecurity } from "./AccountSecurity";
+import { AccountSettings } from "./AccountSettings";
 import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
 import { type AuthenticationAction, AuthPage } from "./AuthPage";
@@ -213,7 +213,10 @@ function AuthenticationRoute({
 
 interface AuthenticatedSession extends OrganizationSession {
   session: OrganizationSession["session"] & { token: string };
-  user: WorkspaceUser & { id: string };
+  user: WorkspaceUser & {
+    defaultOrganizationId?: string | null | undefined;
+    id: string;
+  };
 }
 
 function AuthenticatedWorkspace({
@@ -259,6 +262,10 @@ function AuthenticatedWorkspace({
   );
   const addAccount = () => navigate(addAccountPath(currentLocation()));
   const hasWorkspace = workspace.organizations.length > 0;
+  const showContent =
+    hasWorkspace ||
+    !organizationPathRequiresAccess(pathname) ||
+    pathname === "/inbox";
   const organizationRequirement = organizationPathRequiresAccess(pathname)
     ? access.twoFactorRequirement
     : undefined;
@@ -272,7 +279,7 @@ function AuthenticatedWorkspace({
       canAccessFinance={access.can("finance")}
       contentKey={contentKey}
       onAccountChange={accounts.switchAccount}
-      onAccountSecurity={() => navigate("/account/security")}
+      onAccountSettings={() => navigate("/account")}
       onAddAccount={addAccount}
       onNavigate={navigate}
       onOrganizationCreate={workspace.createOrganization}
@@ -288,10 +295,7 @@ function AuthenticatedWorkspace({
           onSignOut={accounts.signOutActiveAccount}
           requirement={organizationRequirement}
         />
-      ) : hasWorkspace ||
-        ["/account/security", "/admin", "/inbox", "/invite"].includes(
-          pathname,
-        ) ? (
+      ) : showContent ? (
         contentForPath(
           pathname,
           library,
@@ -300,6 +304,7 @@ function AuthenticatedWorkspace({
           addAccount,
           access,
           hasRole(session.user.role, "admin"),
+          session.user.defaultOrganizationId,
           Boolean(session.user.twoFactorEnabled),
           async () => {
             await onSessionChanged();
@@ -506,6 +511,7 @@ function contentForPath(
   addAccount: () => void,
   access: ReturnType<typeof useOrganizationAccess>,
   isPlatformAdmin: boolean,
+  defaultOrganizationId: string | null | undefined,
   twoFactorEnabled: boolean,
   onSecurityChanged: () => Promise<unknown>,
 ) {
@@ -534,10 +540,14 @@ function contentForPath(
     );
   }
   if (pathname === "/admin") return <AdminUsers />;
-  if (pathname === "/account/security") {
+  if (pathname === "/account" || pathname === "/account/security") {
     return (
-      <AccountSecurity
-        onSecurityChanged={onSecurityChanged}
+      <AccountSettings
+        defaultOrganizationId={defaultOrganizationId}
+        onNavigate={navigate}
+        onSessionChanged={onSecurityChanged}
+        organizations={workspace.organizations}
+        pathname={pathname}
         twoFactorEnabled={twoFactorEnabled}
       />
     );
@@ -584,7 +594,9 @@ function activePageFor(pathname: string) {
   if (isEquipmentPath(pathname)) return "equipment" as const;
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/admin") return "admin" as const;
-  if (pathname === "/account/security") return "account" as const;
+  if (pathname === "/account" || pathname === "/account/security") {
+    return "account" as const;
+  }
   if (isOrganizationPath(pathname)) return "organization" as const;
   if (pathname === "/invite") return "organization" as const;
   return "library" as const;

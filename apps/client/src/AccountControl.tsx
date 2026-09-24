@@ -9,7 +9,7 @@ interface AccountControlProps {
   loadError: string | undefined;
   onAddAccount: () => void;
   onRefreshAccounts: () => Promise<void>;
-  onSecurity: () => void;
+  onSettings: () => void;
   onSignOut: () => Promise<void>;
   onSwitchAccount: (sessionToken: string) => Promise<void>;
   user: { email: string; name: string };
@@ -21,7 +21,7 @@ export function AccountControl({
   loadError,
   onAddAccount,
   onRefreshAccounts,
-  onSecurity,
+  onSettings,
   onSignOut,
   onSwitchAccount,
   user,
@@ -81,9 +81,9 @@ export function AccountControl({
           busy={busy}
           error={error ?? loadError}
           onAddAccount={onAddAccount}
-          onSecurity={() => {
+          onSettings={() => {
             setOpen(false);
-            onSecurity();
+            onSettings();
           }}
           onSignOut={() => run(onSignOut, "sign-out")}
           onSwitchAccount={(token) => run(() => onSwitchAccount(token), token)}
@@ -100,7 +100,7 @@ function AccountMenu({
   error,
   onAddAccount,
   onSignOut,
-  onSecurity,
+  onSettings,
   onSwitchAccount,
 }: {
   accounts: AccountSession[];
@@ -109,7 +109,7 @@ function AccountMenu({
   error: string | undefined;
   onAddAccount: () => void;
   onSignOut: () => Promise<void>;
-  onSecurity: () => void;
+  onSettings: () => void;
   onSwitchAccount: (token: string) => Promise<void>;
 }) {
   return (
@@ -153,11 +153,11 @@ function AccountMenu({
       <button
         className="menuItem"
         disabled={Boolean(busy)}
-        onClick={onSecurity}
+        onClick={onSettings}
         role="menuitem"
         type="button"
       >
-        <Icon name="security" /> Account security
+        <Icon name="security" /> Account settings
       </button>
       <button
         className="menuItem"
