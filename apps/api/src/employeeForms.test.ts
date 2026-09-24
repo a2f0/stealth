@@ -474,6 +474,31 @@ describe("employee forms", () => {
     expect(removal.status).toBe(409);
   });
 
+  it("allows manual completion after a Checkr invitation expires", async () => {
+    const fixture = await createFixture();
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET checkr_invitation_id = 'expired-check',
+                  checkr_invitation_status = 'expired' WHERE id = ?`)
+      .run(id);
+    const completed = await fixture.app("owner", "owner").request(`/${id}`, {
+      body: JSON.stringify({ status: "complete" }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    });
+    expect(completed.status).toBe(200);
+    expect(
+      fixture.database
+        .query("SELECT status FROM employee_requirements WHERE id = ?")
+        .get(id),
+    ).toEqual({ status: "complete" });
+  });
+
   it("does not transfer a former member's forms to a reused email", async () => {
     const fixture = await createFixture();
     const id = await createRequirement(fixture, "form", "W-4");
