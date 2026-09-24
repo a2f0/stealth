@@ -32,6 +32,95 @@ verify_url() {
 }
 
 verify_url "API" "https://api.tearleads.de/health"
+
+verify_cors_headers() {
+  local label="$1"
+  local headers="$2"
+  local normalized_headers
+
+  # curl includes every attempt when --retry is used; inspect the final one.
+  normalized_headers="$(tr -d '\r' <<<"$headers" |
+    tr '[:upper:]' '[:lower:]' |
+    awk '/^http\// { last_response = "" } { last_response = last_response $0 ORS } END { printf "%s", last_response }')"
+  if ! grep -Fqx 'access-control-allow-origin: https://app.tearleads.de' \
+    <<<"$normalized_headers" ||
+    ! grep -Fqx 'access-control-allow-credentials: true' \
+      <<<"$normalized_headers"; then
+    echo "FAIL: $label lacks credentialed app CORS headers." >&2
+    return 1
+  fi
+  echo "PASS: $label allows credentialed requests from the app."
+}
+
+verify_auth_cors() {
+  local method="$1"
+  local headers
+  local curl_args=(
+    --connect-timeout 10
+    --fail
+    --max-time 30
+    --silent
+    --show-error
+    --retry 10
+    --retry-all-errors
+    --retry-delay 3
+    --retry-max-time 120
+    --dump-header -
+    --output /dev/null
+    --header "Origin: https://app.tearleads.de"
+  )
+
+  if [[ -n "$VERIFY_DOH_URL" ]]; then
+    curl_args+=(--doh-url "$VERIFY_DOH_URL")
+  fi
+  if [[ "$method" == "OPTIONS" ]]; then
+    curl_args+=(
+      --request OPTIONS
+      --header "Access-Control-Request-Method: GET"
+    )
+  fi
+
+  echo "Checking $method auth session CORS..."
+  headers="$(curl "${curl_args[@]}" \
+    "https://api.tearleads.de/api/auth/get-session")"
+  verify_cors_headers "$method auth session response" "$headers"
+}
+
+verify_edge_error_cors() {
+  local response
+  local headers
+  local status
+  local curl_args=(
+    --connect-timeout 10
+    --max-time 30
+    --silent
+    --show-error
+    --dump-header -
+    --output /dev/null
+    --write-out $'\n%{http_code}'
+    --header "Origin: https://app.tearleads.de"
+  )
+
+  if [[ -n "$VERIFY_DOH_URL" ]]; then
+    curl_args+=(--doh-url "$VERIFY_DOH_URL")
+  fi
+
+  # Cloudflare documents this as a test endpoint for its own 522 response.
+  echo "Checking Cloudflare edge error CORS..."
+  response="$(curl "${curl_args[@]}" \
+    "https://api.tearleads.de/cdn-cgi/error/522")"
+  status="${response##*$'\n'}"
+  headers="${response%$'\n'*}"
+  if [[ "$status" != "522" ]]; then
+    echo "FAIL: Expected Cloudflare test error 522; received $status." >&2
+    return 1
+  fi
+  verify_cors_headers "Cloudflare edge error response" "$headers"
+}
+
+verify_auth_cors GET
+verify_auth_cors OPTIONS
+verify_edge_error_cors
 verify_url "app" "https://app.tearleads.de"
 verify_url "website" "https://tearleads.de"
 verify_url "privacy policy" "https://tearleads.de/privacy"

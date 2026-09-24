@@ -10,7 +10,7 @@ desired Worker custom domains:
 - Inbound email: `upload+<organization-id>@inbox.tearleads.de` → `tearleads-api`
 - Website: `tearleads.de`
 - Client: `app.tearleads.de`
-- API: `api.tearleads.de`
+- API: `api.tearleads.de`, with CORS headers on Cloudflare-generated responses
 
 The separate `stacks/staging` stack provisions `stealth-db-staging`,
 `stealth-objects-staging`, staging email routing, and first-level staging
@@ -29,7 +29,8 @@ export CLOUDFLARE_EMAIL_API_TOKEN="..."
 
 The `.secrets` path is ignored by Git and holds only `root.env`. The Terraform
 token needs Zone Read, DNS Write, D1 Edit, R2 Edit, Workers Scripts Edit, and
-Email Routing Rules Write on the `tearleads.de` zone. The separate Email API
+Email Routing Rules Write and Zone Transform Rules Write on the `tearleads.de`
+zone. The separate Email API
 token needs Zone Read and Zone Settings Edit on the same zone so deploys can
 enable subaddressing and verify the subdomain's Email Routing DNS records.
 
