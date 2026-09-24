@@ -8,6 +8,7 @@ import {
   createCheckrInvitation,
   getCheckrInvitation,
   getCheckrReport,
+  listCheckrCandidateInvitations,
 } from "./checkr";
 import { normalizeFilename } from "./filenames";
 import { canManageOrganization } from "./organizationMembers";
@@ -220,6 +221,7 @@ employeeForms.delete("/:id", async (context) => {
   if (!row) return context.json({ error: "Requirement not found." }, 404);
   if (
     row.checkr_starting_at ||
+    row.checkr_start_nonce ||
     (row.checkr_invitation_id && !isExpiredCheckrInvitation(row))
   ) {
     return context.json(
@@ -230,6 +232,7 @@ employeeForms.delete("/:id", async (context) => {
   const deleted = await context.env.DB.prepare(
     `DELETE FROM employee_requirements
      WHERE id = ? AND organization_id = ? AND checkr_starting_at IS NULL
+       AND checkr_start_nonce IS NULL
        AND (checkr_invitation_id IS NULL OR
             checkr_invitation_status IN ('expired', 'canceled', 'deleted'))`,
   )
@@ -419,6 +422,7 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
 interface CheckrStartClaim {
   checkr_candidate_id: string | null;
   checkr_start_nonce: string;
+  checkr_start_nonce_at: string;
 }
 
 async function claimCheckrStart(
@@ -447,9 +451,7 @@ async function claimCheckrStart(
        AND (checkr_invitation_id IS NULL OR
             checkr_invitation_status IN ('expired', 'canceled', 'deleted'))
        AND (checkr_starting_at IS NULL OR checkr_starting_at < ?)
-       AND (checkr_start_nonce_at IS NULL OR checkr_start_nonce_at > ? OR
-            checkr_invitation_id IS NOT NULL)
-     RETURNING checkr_candidate_id, checkr_start_nonce`,
+     RETURNING checkr_candidate_id, checkr_start_nonce, checkr_start_nonce_at`,
   )
     .bind(
       nonce,
@@ -460,7 +462,6 @@ async function claimCheckrStart(
       row.id,
       context.get("organizationId"),
       new Date(now.getTime() - 5 * 60_000).toISOString(),
-      new Date(now.getTime() - 23 * 60 * 60_000).toISOString(),
     )
     .first<CheckrStartClaim>();
 }
@@ -472,6 +473,7 @@ async function launchCheckrScreening(
   state: string,
   city: string,
 ) {
+  let nonce = claim.checkr_start_nonce;
   try {
     const candidateId =
       claim.checkr_candidate_id ??
@@ -495,37 +497,112 @@ async function launchCheckrScreening(
       if (!stored.meta.changes) return null;
     }
     if (row.kind === "form") return null;
+    const existing = await findPriorCheckrInvitation(
+      context,
+      row,
+      claim,
+      candidateId,
+    );
+    if (existing) {
+      return storeCheckrInvitation(context, row, nonce, existing, false);
+    }
+    if (
+      new Date(claim.checkr_start_nonce_at).getTime() <
+      Date.now() - 23 * 60 * 60_000
+    ) {
+      const nextNonce = crypto.randomUUID();
+      const rotated = await context.env.DB.prepare(
+        `UPDATE employee_requirements
+         SET checkr_start_nonce = ?, checkr_start_nonce_at = ?, updated_at = ?
+         WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?
+           AND checkr_starting_at IS NOT NULL`,
+      )
+        .bind(
+          nextNonce,
+          new Date().toISOString(),
+          new Date().toISOString(),
+          row.id,
+          context.get("organizationId"),
+          nonce,
+        )
+        .run();
+      if (!rotated.meta.changes) return null;
+      nonce = nextNonce;
+    }
     const invitation = await createCheckrInvitation(
       context.env,
       candidateId,
       checkrPackage(context.env, row.kind) ?? "",
       state,
       city,
-      claim.checkr_start_nonce,
+      nonce,
     );
     if (!invitation.id)
       throw new Error("Checkr did not return an invitation ID.");
-    const stored = await context.env.DB.prepare(
-      `UPDATE employee_requirements
-       SET checkr_invitation_id = ?, checkr_invitation_status = ?,
-           checkr_report_id = ?, status = 'in_progress',
-           checkr_starting_at = NULL, checkr_start_nonce = NULL,
-           checkr_start_nonce_at = NULL, updated_at = ?
+    return storeCheckrInvitation(context, row, nonce, invitation, true);
+  } catch (cause) {
+    await context.env.DB.prepare(
+      `UPDATE employee_requirements SET checkr_starting_at = NULL
        WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
     )
-      .bind(
-        invitation.id,
-        invitation.status,
-        invitation.report_id,
-        new Date().toISOString(),
-        row.id,
-        context.get("organizationId"),
-        claim.checkr_start_nonce,
-      )
+      .bind(row.id, context.get("organizationId"), nonce)
       .run();
-    if (stored.meta.changes) return invitation;
-    const current = await findRequirement(context);
-    if (current?.checkr_invitation_id === invitation.id) return invitation;
+    throw cause;
+  }
+}
+
+async function findPriorCheckrInvitation(
+  context: Context<EmployeeFormsEnv>,
+  row: RequirementRow,
+  claim: CheckrStartClaim,
+  candidateId: string,
+) {
+  if (!row.checkr_start_nonce || !claim.checkr_candidate_id) return null;
+  const invitations = await listCheckrCandidateInvitations(
+    context.env,
+    candidateId,
+  );
+  const active = invitations.data.filter(
+    (invitation) => !isExpiredCheckrStatus(invitation.status),
+  );
+  if (active.length > 1) {
+    throw new Error("Multiple Checkr invitations need manual reconciliation.");
+  }
+  if (invitations.data.length >= 100 && !active[0]) {
+    throw new Error("Checkr invitations need manual reconciliation.");
+  }
+  return active[0] ?? null;
+}
+
+async function storeCheckrInvitation(
+  context: Context<EmployeeFormsEnv>,
+  row: RequirementRow,
+  nonce: string,
+  invitation: Awaited<ReturnType<typeof createCheckrInvitation>>,
+  cancelIfOrphaned: boolean,
+) {
+  const stored = await context.env.DB.prepare(
+    `UPDATE employee_requirements
+     SET checkr_invitation_id = ?, checkr_invitation_status = ?,
+         checkr_report_id = ?, status = 'in_progress',
+         checkr_starting_at = NULL, checkr_start_nonce = NULL,
+         checkr_start_nonce_at = NULL, updated_at = ?
+     WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
+  )
+    .bind(
+      invitation.id,
+      invitation.status,
+      invitation.report_id,
+      new Date().toISOString(),
+      row.id,
+      context.get("organizationId"),
+      nonce,
+    )
+    .run();
+  if (stored.meta.changes) return invitation;
+  const current = await findRequirement(context);
+  if (current?.checkr_invitation_id === invitation.id) return invitation;
+  if (cancelIfOrphaned) {
     try {
       await cancelCheckrInvitation(context.env, invitation.id);
     } catch (cause) {
@@ -534,16 +611,8 @@ async function launchCheckrScreening(
         cause,
       );
     }
-    return null;
-  } catch (cause) {
-    await context.env.DB.prepare(
-      `UPDATE employee_requirements SET checkr_starting_at = NULL
-       WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
-    )
-      .bind(row.id, context.get("organizationId"), claim.checkr_start_nonce)
-      .run();
-    throw cause;
   }
+  return null;
 }
 
 export async function assignAcceptedInvitationRequirements(
@@ -595,6 +664,7 @@ function toRequirement(row: RequirementRow, manager: boolean, env: Bindings) {
       checkrConfigured(env, row.kind),
     checkrStarted:
       Boolean(row.checkr_invitation_id) && !isExpiredCheckrInvitation(row),
+    checkrPendingStart: Boolean(row.checkr_start_nonce),
     checkrInvitationStatus: row.checkr_invitation_status,
     checkrResult: manager ? row.checkr_result : null,
   };

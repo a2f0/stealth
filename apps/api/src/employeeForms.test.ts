@@ -437,6 +437,126 @@ describe("employee forms", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("reconciles a lost Checkr response before allowing removal", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    let invitationPosts = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/candidates")) {
+        return Response.json({ id: "candidate-1" });
+      }
+      if (url.endsWith("/invitations") && init?.method === "POST") {
+        invitationPosts += 1;
+        return Response.json({ message: "response lost" }, { status: 504 });
+      }
+      if (url.includes("/invitations?candidate_id=")) {
+        return Response.json({
+          data: [
+            {
+              id: "invitation-1",
+              report_id: null,
+              status: "pending",
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected Checkr request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const failed = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(failed.status).toBe(500);
+      const removal = await fixture.app("owner", "owner").request(`/${id}`, {
+        method: "DELETE",
+      });
+      expect(removal.status).toBe(409);
+      const recovered = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(recovered.status).toBe(200);
+      expect(await recovered.json()).toMatchObject({
+        invitationId: "invitation-1",
+      });
+      expect(invitationPosts).toBe(1);
+      expect(
+        fixture.database
+          .query(
+            "SELECT checkr_start_nonce, checkr_invitation_id FROM employee_requirements WHERE id = ?",
+          )
+          .get(id),
+      ).toEqual({
+        checkr_start_nonce: null,
+        checkr_invitation_id: "invitation-1",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("starts a new Checkr attempt after an old failed request is reconciled", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    const invitationKeys: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/candidates")) {
+        return Response.json({ id: "candidate-1" });
+      }
+      if (url.endsWith("/invitations") && init?.method === "POST") {
+        invitationKeys.push(
+          new Headers(init.headers).get("Idempotency-Key") ?? "",
+        );
+        if (invitationKeys.length === 1) {
+          return Response.json({ message: "temporary error" }, { status: 503 });
+        }
+        return Response.json({
+          id: "invitation-2",
+          report_id: null,
+          status: "pending",
+        });
+      }
+      if (url.includes("/invitations?candidate_id=")) {
+        return Response.json({ data: [] });
+      }
+      throw new Error(`Unexpected Checkr request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const first = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(first.status).toBe(500);
+      fixture.database
+        .query(
+          "UPDATE employee_requirements SET checkr_start_nonce_at = ? WHERE id = ?",
+        )
+        .run(new Date(Date.now() - 25 * 60 * 60_000).toISOString(), id);
+      const retry = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(retry.status).toBe(200);
+      expect(invitationKeys).toHaveLength(2);
+      expect(invitationKeys[0]).not.toBe(invitationKeys[1]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 async function createRequirement(

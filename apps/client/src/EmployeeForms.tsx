@@ -356,7 +356,7 @@ function RequirementItem({
               type="date"
               value={requirement.dueDate}
             />
-            {!requirement.checkrStarted && (
+            {!requirement.checkrStarted && !requirement.checkrPendingStart && (
               <Button
                 disabled={busy}
                 onClick={() =>
@@ -412,9 +412,10 @@ function CheckrControl({
   }
   return (
     <div className="checkrStart">
-      {requirement.checkrInvitationStatus && (
+      {(requirement.checkrInvitationStatus ||
+        requirement.checkrPendingStart) && (
         <span className="rowMeta">
-          Checkr: {requirement.checkrInvitationStatus}
+          Checkr: {requirement.checkrInvitationStatus ?? "retry needed"}
         </span>
       )}
       <input
@@ -446,7 +447,7 @@ function CheckrControl({
         }
         size="sm"
       >
-        {requirement.checkrInvitationStatus
+        {requirement.checkrInvitationStatus || requirement.checkrPendingStart
           ? "Restart Checkr check"
           : "Start Checkr check"}
       </Button>

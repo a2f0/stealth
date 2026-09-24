@@ -12,6 +12,7 @@ export type EmployeeRequirementStatus =
 
 export interface EmployeeRequirement {
   checkrAvailable: boolean;
+  checkrPendingStart: boolean;
   checkrStarted: boolean;
   checkrInvitationStatus: string | null;
   checkrResult: string | null;

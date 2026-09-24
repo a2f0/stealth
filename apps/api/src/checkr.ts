@@ -6,8 +6,13 @@ interface CheckrCandidate {
 
 interface CheckrInvitation {
   id: string;
+  package?: string;
   report_id: string | null;
   status: string;
+}
+
+interface CheckrInvitationList {
+  data: CheckrInvitation[];
 }
 
 interface CheckrReport {
@@ -80,6 +85,17 @@ export async function getCheckrInvitation(env: Bindings, id: string) {
     env,
     `/invitations/${encodeURIComponent(id)}`,
   );
+}
+
+export async function listCheckrCandidateInvitations(
+  env: Bindings,
+  candidateId: string,
+) {
+  const query = new URLSearchParams({
+    candidate_id: candidateId,
+    per_page: "100",
+  });
+  return checkrRequest<CheckrInvitationList>(env, `/invitations?${query}`);
 }
 
 export async function getCheckrReport(env: Bindings, id: string) {
