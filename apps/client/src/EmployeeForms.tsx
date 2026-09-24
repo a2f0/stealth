@@ -295,6 +295,7 @@ function RequirementItem({
   canManage: boolean;
   requirement: EmployeeRequirement;
 }) {
+  const [reviewedRevision, setReviewedRevision] = useState<number | null>(null);
   return (
     <li className="requirementItem">
       <div className="requirementItemHeader">
@@ -322,6 +323,7 @@ function RequirementItem({
         <RequirementDocumentControl
           action={action}
           busy={busy}
+          onDownloaded={setReviewedRevision}
           requirement={requirement}
         />
         {canManage && (
@@ -338,6 +340,7 @@ function RequirementItem({
                 action={action}
                 busy={busy}
                 requirement={requirement}
+                reviewedRevision={reviewedRevision}
               />
             )}
             <input
@@ -458,10 +461,12 @@ function CheckrControl({
 function RequirementDocumentControl({
   action,
   busy,
+  onDownloaded,
   requirement,
 }: {
   action: RequirementAction;
   busy: boolean;
+  onDownloaded: (revision: number) => void;
   requirement: EmployeeRequirement;
 }) {
   return (
@@ -492,14 +497,13 @@ function RequirementDocumentControl({
         <Button
           disabled={busy}
           onClick={() =>
-            void action(
-              () =>
-                downloadEmployeeForm(
-                  requirement.id,
-                  requirement.documentFilename ?? "form",
-                ),
-              "Download started.",
-            )
+            void action(async () => {
+              const revision = await downloadEmployeeForm(
+                requirement.id,
+                requirement.documentFilename ?? "form",
+              );
+              onDownloaded(revision);
+            }, "Download started.")
           }
           size="sm"
           variant="ghost"
@@ -515,10 +519,12 @@ function RequirementStatusControl({
   action,
   busy,
   requirement,
+  reviewedRevision,
 }: {
   action: RequirementAction;
   busy: boolean;
   requirement: EmployeeRequirement;
+  reviewedRevision: number | null;
 }) {
   if (requirement.kind === "form" && !requirement.hasDocument) return null;
   return (
@@ -530,7 +536,10 @@ function RequirementStatusControl({
         void action(
           () =>
             updateEmployeeRequirement(requirement.id, {
-              documentRevision: requirement.documentRevision,
+              documentRevision:
+                event.target.value === "complete"
+                  ? (reviewedRevision ?? -1)
+                  : requirement.documentRevision,
               status: event.target.value as EmployeeRequirementStatus,
             }),
           "Status updated.",
@@ -544,7 +553,15 @@ function RequirementStatusControl({
       ) : (
         <option value="in_progress">In progress</option>
       )}
-      <option value="complete">Complete</option>
+      <option
+        disabled={
+          requirement.kind === "form" &&
+          reviewedRevision !== requirement.documentRevision
+        }
+        value="complete"
+      >
+        Complete
+      </option>
     </select>
   );
 }

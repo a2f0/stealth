@@ -142,7 +142,11 @@ export async function downloadEmployeeForm(id: string, filename: string) {
   );
   if (!response.ok) {
     await parseResponse(response);
-    return;
+    throw new Error("Could not download the form.");
+  }
+  const revision = Number(response.headers.get("X-Document-Revision"));
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error("The downloaded form has no review version.");
   }
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement("a");
@@ -150,6 +154,7 @@ export async function downloadEmployeeForm(id: string, filename: string) {
   link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return revision;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {

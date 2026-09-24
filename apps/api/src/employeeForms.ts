@@ -337,6 +337,7 @@ employeeForms.get("/:id/document", async (context) => {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set("Cache-Control", "private, no-store");
+  headers.set("X-Document-Revision", String(row.document_revision));
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set(
     "Content-Disposition",
@@ -354,8 +355,10 @@ employeeForms.post("/:id/checkr/start", async (context) => {
     !row ||
     row.kind === "form" ||
     !row.target_email ||
-    (!row.member_id && !row.invitation_id) ||
-    (row.invitation_id && row.invitation_status !== "pending")
+    (!row.member_id && !row.invitation_id && !row.checkr_start_nonce) ||
+    (row.invitation_id &&
+      row.invitation_status !== "pending" &&
+      !row.checkr_start_nonce)
   ) {
     return context.json({ error: "Screening requirement not found." }, 404);
   }
@@ -389,7 +392,7 @@ employeeForms.post("/:id/checkr/start", async (context) => {
     body.city ?? "",
   );
   if (!invitation)
-    return context.json({ error: "Screening was removed." }, 409);
+    return context.json({ error: "Screening could not be resumed." }, 409);
   return context.json({
     invitationId: invitation.id,
     status: invitation.status,
@@ -499,6 +502,13 @@ async function launchCheckrScreening(
 ) {
   let nonce = claim.checkr_start_nonce;
   try {
+    if (
+      !claim.checkr_candidate_id &&
+      !(await screeningTargetActive(context, row.id))
+    ) {
+      await releaseUnresolvedCheckrStart(context, row.id, nonce, true);
+      return null;
+    }
     const candidateId =
       claim.checkr_candidate_id ??
       (await createCheckrCandidate(context.env, row.target_email ?? "", row.id))
@@ -530,29 +540,24 @@ async function launchCheckrScreening(
     if (existing) {
       return storeCheckrInvitation(context, row, nonce, existing, false);
     }
-    if (
-      new Date(claim.checkr_start_nonce_at).getTime() <
-      Date.now() - 23 * 60 * 60_000
-    ) {
-      const nextNonce = crypto.randomUUID();
-      const rotated = await context.env.DB.prepare(
-        `UPDATE employee_requirements
-         SET checkr_start_nonce = ?, checkr_start_nonce_at = ?, updated_at = ?
-         WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?
-           AND checkr_starting_at IS NOT NULL`,
-      )
-        .bind(
-          nextNonce,
-          new Date().toISOString(),
-          new Date().toISOString(),
-          row.id,
-          context.get("organizationId"),
-          nonce,
-        )
-        .run();
-      if (!rotated.meta.changes) return null;
-      nonce = nextNonce;
+    if (!(await screeningTargetActive(context, row.id))) {
+      await releaseUnresolvedCheckrStart(
+        context,
+        row.id,
+        nonce,
+        new Date(claim.checkr_start_nonce_at).getTime() <
+          Date.now() - 5 * 60_000,
+      );
+      return null;
     }
+    const freshNonce = await rotateExpiredCheckrNonce(
+      context,
+      row.id,
+      claim,
+      nonce,
+    );
+    if (!freshNonce) return null;
+    nonce = freshNonce;
     const invitation = await createCheckrInvitation(
       context.env,
       candidateId,
@@ -573,6 +578,78 @@ async function launchCheckrScreening(
       .run();
     throw cause;
   }
+}
+
+async function rotateExpiredCheckrNonce(
+  context: Context<EmployeeFormsEnv>,
+  requirementId: string,
+  claim: CheckrStartClaim,
+  nonce: string,
+) {
+  if (
+    new Date(claim.checkr_start_nonce_at).getTime() >=
+    Date.now() - 23 * 60 * 60_000
+  ) {
+    return nonce;
+  }
+  const nextNonce = crypto.randomUUID();
+  const rotated = await context.env.DB.prepare(
+    `UPDATE employee_requirements
+     SET checkr_start_nonce = ?, checkr_start_nonce_at = ?, updated_at = ?
+     WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?
+       AND checkr_starting_at IS NOT NULL`,
+  )
+    .bind(
+      nextNonce,
+      new Date().toISOString(),
+      new Date().toISOString(),
+      requirementId,
+      context.get("organizationId"),
+      nonce,
+    )
+    .run();
+  return rotated.meta.changes ? nextNonce : null;
+}
+
+async function screeningTargetActive(
+  context: Context<EmployeeFormsEnv>,
+  requirementId: string,
+) {
+  const active = await context.env.DB.prepare(
+    `SELECT requirement.id FROM employee_requirements AS requirement
+     LEFT JOIN member ON member.id = requirement.member_id
+     LEFT JOIN invitation ON invitation.id = requirement.invitation_id
+     WHERE requirement.id = ? AND requirement.organization_id = ?
+       AND (member.id IS NOT NULL OR invitation.status = 'pending')`,
+  )
+    .bind(requirementId, context.get("organizationId"))
+    .first<{ id: string }>();
+  return Boolean(active);
+}
+
+async function releaseUnresolvedCheckrStart(
+  context: Context<EmployeeFormsEnv>,
+  requirementId: string,
+  nonce: string,
+  clearNonce: boolean,
+) {
+  await context.env.DB.prepare(
+    `UPDATE employee_requirements
+     SET checkr_starting_at = NULL,
+         checkr_start_nonce = CASE WHEN ? = 1 THEN NULL ELSE checkr_start_nonce END,
+         checkr_start_nonce_at = CASE WHEN ? = 1 THEN NULL ELSE checkr_start_nonce_at END,
+         updated_at = ?
+     WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
+  )
+    .bind(
+      clearNonce ? 1 : 0,
+      clearNonce ? 1 : 0,
+      new Date().toISOString(),
+      requirementId,
+      context.get("organizationId"),
+      nonce,
+    )
+    .run();
 }
 
 async function findPriorCheckrInvitation(
@@ -716,8 +793,10 @@ function toRequirement(row: RequirementRow, manager: boolean, env: Bindings) {
     completedAt: row.completed_at,
     checkrAvailable:
       row.kind !== "form" &&
-      Boolean(row.member_id || row.invitation_id) &&
-      (!row.invitation_id || row.invitation_status === "pending") &&
+      Boolean(row.member_id || row.invitation_id || row.checkr_start_nonce) &&
+      (!row.invitation_id ||
+        row.invitation_status === "pending" ||
+        Boolean(row.checkr_start_nonce)) &&
       checkrConfigured(env, row.kind),
     checkrStarted:
       Boolean(row.checkr_invitation_id) && !isExpiredCheckrInvitation(row),

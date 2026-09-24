@@ -272,6 +272,10 @@ describe("employee forms", () => {
     expect(download.status).toBe(200);
     expect(await download.text()).toBe("form contents");
     expect(download.headers.get("cache-control")).toBe("private, no-store");
+    const downloadedRevision = Number(
+      download.headers.get("x-document-revision"),
+    );
+    expect(downloadedRevision).toBe(1);
 
     const replacement = new FormData();
     replacement.set(
@@ -289,14 +293,29 @@ describe("employee forms", () => {
     ).toEqual({ count: 1 });
 
     const staleReview = await fixture.app("owner", "owner").request(`/${id}`, {
-      body: JSON.stringify({ status: "complete", documentRevision: 1 }),
+      body: JSON.stringify({
+        status: "complete",
+        documentRevision: downloadedRevision,
+      }),
       headers: { "Content-Type": "application/json" },
       method: "PATCH",
     });
     expect(staleReview.status).toBe(409);
 
+    const latestDownload = await fixture
+      .app("owner", "owner")
+      .request(`/${id}/document`);
+    expect(await latestDownload.text()).toBe("updated form");
+    const latestRevision = Number(
+      latestDownload.headers.get("x-document-revision"),
+    );
+    expect(latestRevision).toBe(2);
+
     const reviewed = await fixture.app("owner", "owner").request(`/${id}`, {
-      body: JSON.stringify({ status: "complete", documentRevision: 2 }),
+      body: JSON.stringify({
+        status: "complete",
+        documentRevision: latestRevision,
+      }),
       headers: { "Content-Type": "application/json" },
       method: "PATCH",
     });
@@ -600,6 +619,9 @@ describe("employee forms", () => {
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
       expect(failed.status).toBe(500);
+      fixture.database
+        .query("DELETE FROM member WHERE id = 'employee-member'")
+        .run();
       const removal = await fixture.app("owner", "owner").request(`/${id}`, {
         method: "DELETE",
       });
@@ -622,6 +644,99 @@ describe("employee forms", () => {
         checkr_start_nonce: null,
         checkr_invitation_id: "invitation-1",
       });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("reconciles an unresolved screening after its invitation is canceled", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const assigned = await fixture.app("owner", "owner").request(
+      "/",
+      jsonPost({
+        invitationId: "invite",
+        requirements: [
+          {
+            kind: "background_check",
+            title: "Background check",
+            dueDate: "2026-10-01",
+          },
+        ],
+      }),
+    );
+    const id = ((await assigned.json()) as { ids: string[] }).ids[0] ?? "";
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET checkr_candidate_id = 'candidate-1',
+                  checkr_start_nonce = 'unresolved-nonce',
+                  checkr_start_nonce_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), id);
+    fixture.database
+      .query("UPDATE invitation SET status = 'canceled' WHERE id = 'invite'")
+      .run();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      if (String(input).includes("/invitations?candidate_id=")) {
+        return Response.json({
+          data: [{ id: "check-1", report_id: null, status: "pending" }],
+        });
+      }
+      throw new Error(`Unexpected Checkr request: ${input}`);
+    }) as typeof fetch;
+    try {
+      const recovered = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(recovered.status).toBe(200);
+      expect(await recovered.json()).toMatchObject({ invitationId: "check-1" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not order a new screening for a former member", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET checkr_candidate_id = 'candidate-1',
+                  checkr_start_nonce = 'unresolved-nonce',
+                  checkr_start_nonce_at = ? WHERE id = ?`)
+      .run(new Date(Date.now() - 10 * 60_000).toISOString(), id);
+    fixture.database
+      .query("DELETE FROM member WHERE id = 'employee-member'")
+      .run();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      if (String(input).includes("/invitations?candidate_id=")) {
+        return Response.json({ data: [] });
+      }
+      throw new Error(`Unexpected Checkr request: ${input}`);
+    }) as typeof fetch;
+    try {
+      const resumed = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(resumed.status).toBe(409);
+      expect(
+        fixture.database
+          .query(
+            "SELECT checkr_start_nonce FROM employee_requirements WHERE id = ?",
+          )
+          .get(id),
+      ).toEqual({ checkr_start_nonce: null });
+      const removed = await fixture.app("owner", "owner").request(`/${id}`, {
+        method: "DELETE",
+      });
+      expect(removed.status).toBe(200);
     } finally {
       globalThis.fetch = originalFetch;
     }

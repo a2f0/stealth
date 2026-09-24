@@ -19,7 +19,7 @@ describe("api", () => {
     expect(await response.text()).toBe('{"error":"Not found."}');
   });
 
-  it("exposes Retry-After to the cross-origin client", async () => {
+  it("exposes response headers needed by the cross-origin client", async () => {
     const response = await app.request(
       "/api",
       { headers: { Origin: "https://app.test" } },
@@ -31,7 +31,7 @@ describe("api", () => {
       "https://app.test",
     );
     expect(response.headers.get("access-control-expose-headers")).toBe(
-      "Retry-After",
+      "Retry-After,X-Document-Revision",
     );
   });
 
