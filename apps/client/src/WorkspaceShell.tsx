@@ -283,7 +283,7 @@ function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
   return [
     { items: workspace, label: undefined },
     { items: records, label: "Records" },
-    { items: manage, label: "Manage" },
+    { items: manage, label: "Root Admin" },
   ];
 }
 
