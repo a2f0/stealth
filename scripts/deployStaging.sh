@@ -32,9 +32,19 @@ export CLOUDFLARE_ACCOUNT_ID="${TF_VAR_cloudflare_account_id:-}"
 STAGING_D1_DATABASE_ID="$(
   bash "$REPO_ROOT/terraform/scripts/run.sh" staging output -raw d1_database_id
 )"
-export STAGING_D1_DATABASE_ID
+STAGING_D1_DATABASE_NAME="$(
+  bash "$REPO_ROOT/terraform/scripts/run.sh" staging output -raw d1_database_name
+)"
+STAGING_R2_BUCKET_NAME="$(
+  bash "$REPO_ROOT/terraform/scripts/run.sh" staging output -raw r2_bucket_name
+)"
+export STAGING_D1_DATABASE_ID STAGING_D1_DATABASE_NAME STAGING_R2_BUCKET_NAME
 if [[ ! "$STAGING_D1_DATABASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
   echo "ERROR: Staging Terraform has no valid D1 database ID." >&2
+  exit 1
+fi
+if [[ -z "$STAGING_D1_DATABASE_NAME" || -z "$STAGING_R2_BUCKET_NAME" ]]; then
+  echo "ERROR: Staging Terraform has no D1 database or R2 bucket name." >&2
   exit 1
 fi
 

@@ -44,13 +44,13 @@ api.vars = {
 api.d1_databases = [
   {
     binding: "DB",
-    database_name: "stealth-db-staging",
+    database_name: required("STAGING_D1_DATABASE_NAME"),
     database_id: required("STAGING_D1_DATABASE_ID"),
     migrations_dir: "migrations",
   },
 ];
 api.r2_buckets = [
-  { binding: "STORAGE", bucket_name: "stealth-objects-staging" },
+  { binding: "STORAGE", bucket_name: required("STAGING_R2_BUCKET_NAME") },
 ];
 // Staging has its own data and should not run production's scheduled jobs.
 delete api.triggers;

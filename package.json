@@ -41,7 +41,8 @@
     "terraform:staging:apply": "bash terraform/scripts/run.sh staging apply",
     "terraform:staging:plan": "bash terraform/scripts/run.sh staging plan",
     "terraform:validate": "bash terraform/scripts/run.sh validate",
-    "test": "export OPENSSL_CONF=/dev/null; turbo run test && bash scripts/checks/testDeployStaging.sh"
+    "test": "export OPENSSL_CONF=/dev/null; turbo run test && bun run test:staging",
+    "test:staging": "bash scripts/checks/testDeployStaging.sh"
   },
   "workspaces": [
     "apps/*",

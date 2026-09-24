@@ -40,10 +40,10 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 - `--passes <n>` (optional flag, position-independent): forwarded verbatim to
   `cross-agent-review`. **Defaults to `1`** there. Passes inspect one unchanged
   head; they are distinct from repair rounds.
-- `--repair-rounds <n>` (optional flag, position-independent): forwarded verbatim
-  to `cross-agent-review`, which owns the repair loop and bounds it. **Defaults
-  to `2`** there. Use `0` to retain stop-and-report behavior — the review runs and
-  reports, and this flow stops on any blocking finding.
+- `--report-only` (optional flag, position-independent): forwarded verbatim
+  to `cross-agent-review`, which skips base synchronization and repairs. This
+  flow stops on any blocking finding. Without this flag, repairs have no round
+  limit.
 - `--merge-anyway` (optional flag, position-independent): override the merge gate.
   By default the flow stops when `cross-agent-review` reports unresolved blocking
   findings or could not review at all; with this flag it surfaces exactly what it
@@ -272,9 +272,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    resumed PR open it reviews the pushed head.
 
 2. **Review and repair** — invoke `cross-agent-review`, forwarding the
-   review-agent argument, and `--passes <n>` / `--repair-rounds <n>` when given.
+   review-agent argument, and `--passes <n>` / `--report-only` when given.
 
-   That skill owns the review, the severity gate, and the bounded repair loop:
+   That skill owns the review, the severity gate, and the repair loop:
    for each candidate head it first brings the branch up to date with its base
    (a merge of the latest base — local while there is no PR, so this flow's
    single push is preserved), snapshots the head — the pushed PR head when one
@@ -310,8 +310,8 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    **Merge gate** — decide on the reported verdict:
    - **Clean, or non-blocking nits only** — carry that exact `REVIEWED_SHA`
      forward to steps 3–4.
-   - **Unresolved blocking findings** — because the repair rounds were exhausted,
-     `--repair-rounds 0` was given, or the loop stopped to ask for direction —
+   - **Unresolved blocking findings** — because `--report-only` was given or
+     the loop stopped to ask for direction —
      **stop** and report them, unless `--merge-anyway` was given. In the fresh
      path no PR was opened, so stopping here leaves nothing to clean up.
    - **Review could not run** (every agent and fallback failed) — **stop** rather
@@ -326,7 +326,8 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
 
    **Never repair here.** Fixing a finding in this step would produce a head that
    `cross-agent-review` never read, and `REVIEWED_SHA` would no longer describe
-   the commit being merged. Raise `--repair-rounds` instead.
+   the commit being merged. Return to `cross-agent-review` instead; its repair
+   loop has no round limit.
 
 3. **Open the PR — the single push, bound to the reviewed head**:
 
@@ -445,10 +446,9 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
 - **The review gates the merge** — this flow never silently merges over a verdict
   that reports unresolved blocking findings, and never merges an unreviewed head.
 - **Repair belongs to `cross-agent-review`** — including the severity vocabulary
-  (Blocker/Major ≡ [P0]/[P1] are blocking), the round budget, and the re-review
-  of every changed head. This skill only reads the verdict it reports and
-  decides whether to merge. `--repair-rounds` and `--passes` are forwarded, not
-  interpreted.
+  (Blocker/Major ≡ [P0]/[P1] are blocking), and the re-review of every changed
+  head. This skill only reads the verdict it reports and decides whether to
+  merge. `--report-only` and `--passes` are forwarded, not interpreted.
 - **The merged head and base are the reviewed pair** — `cross-agent-review`
   reports the exact head and base it reviewed. This skill re-verifies both once
   the PR is open and immediately before merge; `squash-merge` then binds GitHub's
