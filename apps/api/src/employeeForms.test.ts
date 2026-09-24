@@ -84,6 +84,105 @@ describe("employee forms", () => {
       }),
     );
     expect(otherOrg.status).toBe(404);
+
+    const malformed = await fixture.app("owner", "owner").request(
+      "/",
+      jsonPost({
+        memberId: "employee-member",
+        requirements: [{ kind: ["form"], title: "W-4", dueDate: "2026-10-02" }],
+      }),
+    );
+    expect(malformed.status).toBe(400);
+    const id = await createRequirement(fixture, "form", "W-4");
+    const invalidStatus = await fixture
+      .app("owner", "owner")
+      .request(`/${id}`, {
+        body: JSON.stringify({ status: ["complete"] }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+    expect(invalidStatus.status).toBe(400);
+  });
+
+  it("rejects an invitation accepted during requirement assignment", async () => {
+    const fixture = await createFixture();
+    fixture.beforeBatch(() => {
+      fixture.database
+        .query("UPDATE invitation SET status = 'accepted' WHERE id = 'invite'")
+        .run();
+    });
+    const response = await fixture.app("owner", "owner").request(
+      "/",
+      jsonPost({
+        invitationId: "invite",
+        requirements: [{ kind: "form", title: "W-4", dueDate: "2026-10-02" }],
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM employee_requirements")
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("preserves concurrent status and rejects review of a replaced form", async () => {
+    const fixture = await createFixture();
+    const checkId = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.beforeRun((query) => {
+      if (query.includes("SET status = COALESCE")) {
+        fixture.database
+          .query(
+            "UPDATE employee_requirements SET status = 'complete' WHERE id = ?",
+          )
+          .run(checkId);
+      }
+    });
+    const dueDate = await fixture.app("owner", "owner").request(`/${checkId}`, {
+      body: JSON.stringify({ dueDate: "2026-10-10" }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    });
+    expect(dueDate.status).toBe(200);
+    expect(
+      fixture.database
+        .query(
+          "SELECT status, due_date FROM employee_requirements WHERE id = ?",
+        )
+        .get(checkId),
+    ).toEqual({ status: "complete", due_date: "2026-10-10" });
+
+    const formId = await createRequirement(fixture, "form", "W-4");
+    const form = new FormData();
+    form.set("file", new File(["old"], "old.pdf", { type: "application/pdf" }));
+    await fixture.app("employee", "member").request(`/${formId}/document`, {
+      body: form,
+      method: "POST",
+    });
+    fixture.beforeRun((query) => {
+      if (query.includes("SET status = COALESCE")) {
+        fixture.database
+          .query(
+            "UPDATE employee_requirements SET document_key = 'new-key' WHERE id = ?",
+          )
+          .run(formId);
+      }
+    });
+    const review = await fixture.app("owner", "owner").request(`/${formId}`, {
+      body: JSON.stringify({ status: "complete" }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    });
+    expect(review.status).toBe(409);
+    expect(
+      fixture.database
+        .query("SELECT status FROM employee_requirements WHERE id = ?")
+        .get(formId),
+    ).toEqual({ status: "submitted" });
   });
 
   it("keeps submitted documents private and requires review before completion", async () => {
@@ -299,8 +398,12 @@ async function createFixture() {
   await migration(database, "0042_add_checkr_screenings.sql");
   await migration(database, "0043_queue_employee_document_cleanup.sql");
   const files = new Map<string, File>();
+  const hooks: {
+    beforeBatch: (() => void) | undefined;
+    beforeRun: ((query: string) => void) | undefined;
+  } = { beforeBatch: undefined, beforeRun: undefined };
   const bindings = {
-    DB: toD1(database),
+    DB: toD1(database, hooks),
     STORAGE: {
       put: async (key: string, file: File) => {
         files.set(key, file);
@@ -337,14 +440,30 @@ async function createFixture() {
       };
     },
     bindings,
+    beforeBatch: (callback: () => void) => {
+      hooks.beforeBatch = callback;
+    },
+    beforeRun: (callback: (query: string) => void) => {
+      hooks.beforeRun = callback;
+    },
     database,
   };
 }
 
-function toD1(database: Database) {
+function toD1(
+  database: Database,
+  hooks: {
+    beforeBatch: (() => void) | undefined;
+    beforeRun: ((query: string) => void) | undefined;
+  },
+) {
   return {
-    batch: async (statements: Array<{ execute: () => unknown }>) =>
-      statements.map((statement) => statement.execute()),
+    batch: async (statements: Array<{ execute: () => unknown }>) => {
+      const callback = hooks.beforeBatch;
+      hooks.beforeBatch = undefined;
+      callback?.();
+      return statements.map((statement) => statement.execute());
+    },
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const statement = {
@@ -359,6 +478,9 @@ function toD1(database: Database) {
         },
         first: async () => database.query(query).get(...values),
         run: async () => {
+          const callback = hooks.beforeRun;
+          hooks.beforeRun = undefined;
+          callback?.(query);
           const result = database.query(query).run(...values);
           return { meta: { changes: result.changes } };
         },

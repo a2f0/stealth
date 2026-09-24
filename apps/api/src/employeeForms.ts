@@ -120,13 +120,18 @@ employeeForms.post("/", async (context) => {
   const now = new Date().toISOString();
   const requirements = body.requirements as RequirementInput[];
   const ids = requirements.map(() => crypto.randomUUID());
-  await context.env.DB.batch(
+  const inserted = await context.env.DB.batch(
     requirements.map((requirement, index) =>
       context.env.DB.prepare(
         `INSERT INTO employee_requirements
          (id, organization_id, invitation_id, member_id, kind, title,
           due_date, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM ${memberId ? "member" : "invitation"}
+           WHERE id = ? AND organizationId = ?
+             ${memberId ? "" : "AND status = 'pending'"}
+         )`,
       ).bind(
         ids[index],
         organizationId,
@@ -137,9 +142,17 @@ employeeForms.post("/", async (context) => {
         requirement.dueDate,
         now,
         now,
+        memberId ?? invitationId,
+        organizationId,
       ),
     ),
   );
+  if (inserted.some((result) => result.meta.changes !== 1)) {
+    return context.json(
+      { error: "The invitation or membership changed. Please try again." },
+      409,
+    );
+  }
   return context.json({ ids }, 201);
 });
 
@@ -164,21 +177,35 @@ employeeForms.patch("/:id", async (context) => {
   ) {
     return context.json({ error: "Invalid status or due date." }, 400);
   }
-  const nextStatus = (status ?? row.status) as RequirementStatus;
-  await context.env.DB.prepare(
+  const now = new Date().toISOString();
+  const updated = await context.env.DB.prepare(
     `UPDATE employee_requirements
-     SET status = ?, due_date = ?, completed_at = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ?`,
+     SET status = COALESCE(?, status), due_date = COALESCE(?, due_date),
+         completed_at = CASE
+           WHEN ? IS NULL THEN completed_at
+           WHEN ? = 'complete' THEN ?
+           ELSE NULL
+         END,
+         updated_at = ?
+     WHERE id = ? AND organization_id = ?
+       AND (? IS NULL OR kind <> 'form' OR document_key IS ?)`,
   )
     .bind(
-      nextStatus,
-      dueDate ?? row.due_date,
-      nextStatus === "complete" ? new Date().toISOString() : null,
-      new Date().toISOString(),
+      status ?? null,
+      dueDate ?? null,
+      status ?? null,
+      status ?? null,
+      now,
+      now,
       row.id,
       context.get("organizationId"),
+      status ?? null,
+      row.document_key,
     )
     .run();
+  if (!updated.meta.changes) {
+    return context.json({ error: "The form changed. Please try again." }, 409);
+  }
   return context.json({ ok: true });
 });
 
@@ -478,7 +505,8 @@ function isDate(value: unknown): value is string {
 function isRequirementInput(value: unknown): value is RequirementInput {
   return (
     isRecord(value) &&
-    ["form", "background_check", "credit_check"].includes(String(value.kind)) &&
+    typeof value.kind === "string" &&
+    ["form", "background_check", "credit_check"].includes(value.kind) &&
     typeof value.title === "string" &&
     value.title.trim().length > 0 &&
     value.title.trim().length <= 100 &&
@@ -487,8 +515,9 @@ function isRequirementInput(value: unknown): value is RequirementInput {
 }
 
 function isStatus(value: unknown): value is RequirementStatus {
-  return ["pending", "in_progress", "submitted", "complete"].includes(
-    String(value),
+  return (
+    typeof value === "string" &&
+    ["pending", "in_progress", "submitted", "complete"].includes(value)
   );
 }
 
