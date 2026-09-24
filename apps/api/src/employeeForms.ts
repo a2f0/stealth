@@ -72,7 +72,8 @@ employeeForms.get("/", async (context) => {
             requirement.checkr_result, requirement.checkr_invitation_status,
             requirement.checkr_starting_at, requirement.checkr_start_nonce,
             requirement.checkr_start_nonce_at, requirement.checkr_attempt,
-            COALESCE(target.email, invitation.email) AS target_email,
+            COALESCE(target.email, invitation.email, requirement.target_email)
+              AS target_email,
             target.name AS target_name
      FROM employee_requirements AS requirement
      LEFT JOIN member ON member.id = requirement.member_id
@@ -119,12 +120,13 @@ employeeForms.post("/", async (context) => {
   const organizationId = context.get("organizationId");
   const target = await context.env.DB.prepare(
     memberId
-      ? `SELECT id FROM member WHERE id = ? AND organizationId = ?`
-      : `SELECT id FROM invitation
+      ? `SELECT user.email FROM member JOIN user ON user.id = member.userId
+         WHERE member.id = ? AND member.organizationId = ?`
+      : `SELECT email FROM invitation
          WHERE id = ? AND organizationId = ? AND status = 'pending'`,
   )
     .bind(memberId ?? invitationId, organizationId)
-    .first<{ id: string }>();
+    .first<{ email: string }>();
   if (!target) return context.json({ error: "Person not found." }, 404);
 
   const now = new Date().toISOString();
@@ -134,9 +136,9 @@ employeeForms.post("/", async (context) => {
     requirements.map((requirement, index) =>
       context.env.DB.prepare(
         `INSERT INTO employee_requirements
-         (id, organization_id, invitation_id, member_id, kind, title,
-          due_date, created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+         (id, organization_id, invitation_id, member_id, target_email,
+          kind, title, due_date, created_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          WHERE EXISTS (
            SELECT 1 FROM ${memberId ? "member" : "invitation"}
            WHERE id = ? AND organizationId = ?
@@ -147,6 +149,7 @@ employeeForms.post("/", async (context) => {
         organizationId,
         invitationId,
         memberId,
+        target.email.toLowerCase(),
         requirement.kind,
         requirement.title.trim(),
         requirement.dueDate,
@@ -265,16 +268,33 @@ employeeForms.post("/:id/document", async (context) => {
   }
   const key = `organizations/${context.get("organizationId")}/employee-forms/${row.id}/${crypto.randomUUID()}`;
   const filename = normalizeFilename(file.name, "form", 200);
-  await context.env.STORAGE.put(key, file, {
-    httpMetadata: { contentType: file.type },
-  });
+  await context.env.DB.prepare(
+    `INSERT INTO deleted_object_cleanup
+       (id, organization_id, object_key, deleted_at, cleanup_token,
+        cleanup_claimed_at)
+     VALUES (?, ?, ?, ?, NULL, NULL)`,
+  )
+    .bind(
+      `employee-form-upload:${crypto.randomUUID()}`,
+      context.get("organizationId"),
+      key,
+      new Date().toISOString(),
+    )
+    .run();
   try {
+    await context.env.STORAGE.put(key, file, {
+      httpMetadata: { contentType: file.type },
+    });
     const updated = await context.env.DB.prepare(
       `UPDATE employee_requirements
        SET document_key = ?, document_filename = ?, document_size = ?,
            document_revision = document_revision + 1,
            status = 'submitted', completed_at = NULL, updated_at = ?
-       WHERE id = ? AND organization_id = ? AND document_key IS ?`,
+       WHERE id = ? AND organization_id = ? AND document_key IS ?
+         AND (? = 1 OR EXISTS (
+           SELECT 1 FROM member WHERE member.id = employee_requirements.member_id
+             AND member.organizationId = ? AND member.userId = ?
+         ))`,
     )
       .bind(
         key,
@@ -284,17 +304,20 @@ employeeForms.post("/:id/document", async (context) => {
         row.id,
         context.get("organizationId"),
         row.document_key,
+        canManageOrganization(context.get("organizationRole")) ? 1 : 0,
+        context.get("organizationId"),
+        context.get("authSession").user.id,
       )
       .run();
     if (!updated.meta.changes) {
-      await context.env.STORAGE.delete(key);
+      await context.env.STORAGE.delete(key).catch(console.error);
       return context.json(
         { error: "The form changed. Please try again." },
         409,
       );
     }
   } catch (cause) {
-    await context.env.STORAGE.delete(key);
+    await context.env.STORAGE.delete(key).catch(console.error);
     throw cause;
   }
   return context.json({ filename, status: "submitted" });
@@ -331,6 +354,7 @@ employeeForms.post("/:id/checkr/start", async (context) => {
     !row ||
     row.kind === "form" ||
     !row.target_email ||
+    (!row.member_id && !row.invitation_id) ||
     (row.invitation_id && row.invitation_status !== "pending")
   ) {
     return context.json({ error: "Screening requirement not found." }, 404);
@@ -641,6 +665,38 @@ export async function assignAcceptedInvitationRequirements(
   }
 }
 
+export async function assignRenewedInvitationRequirements(
+  database: D1Database,
+  organizationId: string,
+  invitationId: string,
+  email: string,
+) {
+  const statement = database.prepare(
+    `UPDATE employee_requirements
+     SET invitation_id = ?, updated_at = ?
+     WHERE organization_id = ? AND member_id IS NULL
+       AND target_email = ? COLLATE NOCASE
+       AND (invitation_id IS NULL OR EXISTS (
+         SELECT 1 FROM invitation AS old
+         WHERE old.id = employee_requirements.invitation_id
+           AND old.status <> 'pending'
+       ))`,
+  );
+  const values = [
+    invitationId,
+    new Date().toISOString(),
+    organizationId,
+    email,
+  ];
+  if (typeof statement.bind === "function") {
+    await statement.bind(...values).run();
+  } else {
+    await (
+      statement as unknown as { run: (...values: string[]) => unknown }
+    ).run(...values);
+  }
+}
+
 function toRequirement(row: RequirementRow, manager: boolean, env: Bindings) {
   return {
     id: row.id,
@@ -660,6 +716,7 @@ function toRequirement(row: RequirementRow, manager: boolean, env: Bindings) {
     completedAt: row.completed_at,
     checkrAvailable:
       row.kind !== "form" &&
+      Boolean(row.member_id || row.invitation_id) &&
       (!row.invitation_id || row.invitation_status === "pending") &&
       checkrConfigured(env, row.kind),
     checkrStarted:
@@ -764,7 +821,8 @@ async function findRequirement(context: Context<EmployeeFormsEnv>) {
             checkr_report_id, checkr_result, checkr_invitation_status,
             checkr_starting_at, checkr_start_nonce,
             checkr_start_nonce_at, checkr_attempt,
-            COALESCE(target.email, invitation.email) AS target_email,
+            COALESCE(target.email, invitation.email, requirement.target_email)
+              AS target_email,
             target.name AS target_name
      FROM employee_requirements AS requirement
      LEFT JOIN member ON member.id = requirement.member_id

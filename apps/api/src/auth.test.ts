@@ -739,6 +739,18 @@ describe("password authentication", () => {
     );
     expect(firstInvite.status).toBe(200);
     const firstInvitation = (await firstInvite.json()) as { id: string };
+    fixture.database
+      .query(`INSERT INTO employee_requirements
+        (id, organization_id, invitation_id, target_email, kind, title,
+         due_date, created_at, updated_at)
+        VALUES ('renewed-form', ?, ?, ?, 'form', 'W-4', '2026-10-01', ?, ?)`)
+      .run(
+        organization.id,
+        firstInvitation.id,
+        invitedEmail,
+        new Date().toISOString(),
+        new Date().toISOString(),
+      );
     const invite = await post(
       fixture.auth,
       "/organization/invite-member",
@@ -757,6 +769,13 @@ describe("password authentication", () => {
         .query("SELECT status FROM invitation WHERE id = ?")
         .get(firstInvitation.id),
     ).toEqual({ status: "canceled" });
+    expect(
+      fixture.database
+        .query(
+          "SELECT invitation_id FROM employee_requirements WHERE id = 'renewed-form'",
+        )
+        .get(),
+    ).toEqual({ invitation_id: invitation.id });
     expect(
       fixture.messages.filter(({ subject }) => subject.startsWith("You're")),
     ).toMatchObject({
@@ -814,6 +833,13 @@ describe("password authentication", () => {
       )
       .get(invitedEmail, organization.id) as { id: string; role: string };
     expect(invitedMember.role).toBe("admin");
+    expect(
+      fixture.database
+        .query(
+          "SELECT member_id, invitation_id FROM employee_requirements WHERE id = 'renewed-form'",
+        )
+        .get(),
+    ).toEqual({ member_id: invitedMember.id, invitation_id: null });
     const ownerMember = fixture.database
       .query(
         `SELECT member.id

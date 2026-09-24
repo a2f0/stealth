@@ -3,8 +3,10 @@ import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
+import { purgeDeletedObjects } from "./deletedObjectCleanup";
 import {
   assignAcceptedInvitationRequirements,
+  assignRenewedInvitationRequirements,
   employeeForms,
 } from "./employeeForms";
 import type { Bindings } from "./types";
@@ -126,6 +128,52 @@ describe("employee forms", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("retains requirements when an invitation is renewed", async () => {
+    const fixture = await createFixture();
+    const response = await fixture.app("owner", "owner").request(
+      "/",
+      jsonPost({
+        invitationId: "invite",
+        requirements: [{ kind: "form", title: "W-4", dueDate: "2026-10-02" }],
+      }),
+    );
+    expect(response.status).toBe(201);
+    fixture.database
+      .query("UPDATE invitation SET status = 'canceled' WHERE id = 'invite'")
+      .run();
+    fixture.database
+      .query(`INSERT INTO invitation
+        (id, organizationId, email, role, status, expiresAt, createdAt, inviterId)
+        VALUES ('invite-2', ?, 'invitee@example.com', 'member', 'pending', ?, ?, 'owner')`)
+      .run(orgId, "2026-10-05", now());
+    await assignRenewedInvitationRequirements(
+      fixture.bindings.DB,
+      orgId,
+      "invite-2",
+      "invitee@example.com",
+    );
+    expect(
+      fixture.database
+        .query("SELECT invitation_id FROM employee_requirements")
+        .get(),
+    ).toEqual({ invitation_id: "invite-2" });
+    fixture.database
+      .query(`INSERT INTO member (id, organizationId, userId, role, createdAt)
+              VALUES ('new-member', ?, 'invitee', 'member', ?)`)
+      .run(orgId, now());
+    await assignAcceptedInvitationRequirements(
+      fixture.bindings.DB,
+      orgId,
+      "invite-2",
+      "new-member",
+    );
+    expect(
+      fixture.database
+        .query("SELECT invitation_id, member_id FROM employee_requirements")
+        .get(),
+    ).toEqual({ invitation_id: null, member_id: "new-member" });
+  });
+
   it("preserves concurrent status and rejects review of a replaced form", async () => {
     const fixture = await createFixture();
     const checkId = await createRequirement(
@@ -207,6 +255,13 @@ describe("employee forms", () => {
         method: "POST",
       });
     expect(upload.status).toBe(200);
+    expect(
+      fixture.database
+        .query(
+          "SELECT COUNT(*) AS count FROM deleted_object_cleanup WHERE id LIKE 'employee-form-upload:%'",
+        )
+        .get(),
+    ).toEqual({ count: 0 });
     const unrelated = await fixture
       .app("owner", "member")
       .request(`/${id}/document`);
@@ -254,11 +309,80 @@ describe("employee forms", () => {
     fixture.database
       .query("DELETE FROM member WHERE id = 'employee-member'")
       .run();
+    const formerMember = await fixture
+      .app("employee", "member")
+      .request(`/${id}/document`);
+    expect(formerMember.status).toBe(404);
     expect(
       fixture.database
         .query("SELECT COUNT(*) AS count FROM deleted_object_cleanup")
         .get(),
-    ).toEqual({ count: 2 });
+    ).toEqual({ count: 1 });
+  });
+
+  it("purges an uploaded form after an interrupted request", async () => {
+    const fixture = await createFixture();
+    const id = await createRequirement(fixture, "form", "W-4");
+    fixture.storageState.failPutAfterWrite = true;
+    fixture.storageState.failDelete = true;
+    const form = new FormData();
+    form.set(
+      "file",
+      new File(["private"], "tax.pdf", { type: "application/pdf" }),
+    );
+    const failed = await fixture
+      .app("employee", "member")
+      .request(`/${id}/document`, { body: form, method: "POST" });
+    expect(failed.status).toBe(500);
+    expect(fixture.files.size).toBe(1);
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM deleted_object_cleanup")
+        .get(),
+    ).toEqual({ count: 1 });
+    fixture.storageState.failDelete = false;
+    await purgeDeletedObjects(fixture.bindings, {
+      abandonedClaimedBefore: new Date(Date.now() + 60_000).toISOString(),
+      deletedBefore: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(fixture.files.size).toBe(0);
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM deleted_object_cleanup")
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("retains active screenings after a membership is removed", async () => {
+    const fixture = await createFixture();
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET checkr_invitation_id = 'active-check', checkr_invitation_status = 'pending'
+              WHERE id = ?`)
+      .run(id);
+    fixture.database
+      .query("DELETE FROM member WHERE id = 'employee-member'")
+      .run();
+    expect(
+      fixture.database
+        .query(
+          "SELECT member_id, target_email, checkr_invitation_id FROM employee_requirements WHERE id = ?",
+        )
+        .get(id),
+    ).toEqual({
+      member_id: null,
+      target_email: "employee@example.com",
+      checkr_invitation_id: "active-check",
+    });
+    const removal = await fixture.app("owner", "owner").request(`/${id}`, {
+      method: "DELETE",
+    });
+    expect(removal.status).toBe(409);
   });
 
   it("starts and refreshes a Checkr screening with the configured package", async () => {
@@ -615,7 +739,9 @@ async function createFixture() {
   await migration(database, "0042_add_checkr_screenings.sql");
   await migration(database, "0043_queue_employee_document_cleanup.sql");
   await migration(database, "0044_guard_employee_screenings.sql");
+  await migration(database, "0045_track_employee_form_uploads.sql");
   const files = new Map<string, File>();
+  const storageState = { failPutAfterWrite: false, failDelete: false };
   const hooks: {
     beforeBatch: (() => void) | undefined;
     beforeRun: ((query: string) => void) | undefined;
@@ -625,8 +751,12 @@ async function createFixture() {
     STORAGE: {
       put: async (key: string, file: File) => {
         files.set(key, file);
+        if (storageState.failPutAfterWrite) {
+          throw new Error("Upload interrupted.");
+        }
       },
       delete: async (key: string) => {
+        if (storageState.failDelete) throw new Error("Storage unavailable.");
         files.delete(key);
       },
       get: async (key: string) => {
@@ -665,6 +795,8 @@ async function createFixture() {
       hooks.beforeRun = callback;
     },
     database,
+    files,
+    storageState,
   };
 }
 
