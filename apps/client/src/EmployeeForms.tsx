@@ -412,6 +412,11 @@ function CheckrControl({
   }
   return (
     <div className="checkrStart">
+      {requirement.checkrInvitationStatus && (
+        <span className="rowMeta">
+          Checkr: {requirement.checkrInvitationStatus}
+        </span>
+      )}
       <input
         aria-label={`Work state for ${requirement.title}`}
         autoCapitalize="characters"
@@ -441,7 +446,9 @@ function CheckrControl({
         }
         size="sm"
       >
-        Start Checkr check
+        {requirement.checkrInvitationStatus
+          ? "Restart Checkr check"
+          : "Start Checkr check"}
       </Button>
     </div>
   );
@@ -522,6 +529,7 @@ function RequirementStatusControl({
         void action(
           () =>
             updateEmployeeRequirement(requirement.id, {
+              documentRevision: requirement.documentRevision,
               status: event.target.value as EmployeeRequirementStatus,
             }),
           "Status updated.",

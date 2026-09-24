@@ -51,7 +51,7 @@ export async function createCheckrInvitation(
   packageSlug: string,
   state: string,
   city: string,
-  requirementId: string,
+  idempotencyKey: string,
 ) {
   const body = new URLSearchParams({
     candidate_id: candidateId,
@@ -62,14 +62,17 @@ export async function createCheckrInvitation(
   if (city) body.set("work_locations[][city]", city);
   return checkrRequest<CheckrInvitation>(env, "/invitations", {
     body,
-    headers: { "Idempotency-Key": invitationKey(requirementId) },
+    headers: { "Idempotency-Key": idempotencyKey },
     method: "POST",
   });
 }
 
-function invitationKey(requirementId: string) {
-  const lastDigit = Number.parseInt(requirementId.slice(-1), 16);
-  return `${requirementId.slice(0, -1)}${(lastDigit ^ 8).toString(16)}`;
+export async function cancelCheckrInvitation(env: Bindings, id: string) {
+  await checkrRequest<CheckrInvitation>(
+    env,
+    `/invitations/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function getCheckrInvitation(env: Bindings, id: string) {

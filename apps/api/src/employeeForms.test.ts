@@ -167,13 +167,13 @@ describe("employee forms", () => {
       if (query.includes("SET status = COALESCE")) {
         fixture.database
           .query(
-            "UPDATE employee_requirements SET document_key = 'new-key' WHERE id = ?",
+            "UPDATE employee_requirements SET document_key = 'new-key', document_revision = document_revision + 1 WHERE id = ?",
           )
           .run(formId);
       }
     });
     const review = await fixture.app("owner", "owner").request(`/${formId}`, {
-      body: JSON.stringify({ status: "complete" }),
+      body: JSON.stringify({ status: "complete", documentRevision: 1 }),
       headers: { "Content-Type": "application/json" },
       method: "PATCH",
     });
@@ -233,8 +233,15 @@ describe("employee forms", () => {
         .get(),
     ).toEqual({ count: 1 });
 
+    const staleReview = await fixture.app("owner", "owner").request(`/${id}`, {
+      body: JSON.stringify({ status: "complete", documentRevision: 1 }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+    });
+    expect(staleReview.status).toBe(409);
+
     const reviewed = await fixture.app("owner", "owner").request(`/${id}`, {
-      body: JSON.stringify({ status: "complete" }),
+      body: JSON.stringify({ status: "complete", documentRevision: 2 }),
       headers: { "Content-Type": "application/json" },
       method: "PATCH",
     });
@@ -265,6 +272,9 @@ describe("employee forms", () => {
       body: string | null;
       idempotencyKey: string | null;
     }> = [];
+    const screeningRace: { deletionStatus: number | null } = {
+      deletionStatus: null,
+    };
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input, init) => {
       requests.push({
@@ -275,6 +285,11 @@ describe("employee forms", () => {
       if (String(input).endsWith("/candidates"))
         return Response.json({ id: "candidate-1" });
       if (String(input).endsWith("/invitations") && init?.method === "POST") {
+        screeningRace.deletionStatus = (
+          await fixture.app("owner", "owner").request(`/${id}`, {
+            method: "DELETE",
+          })
+        ).status;
         return Response.json({
           id: "invitation-1",
           report_id: null,
@@ -309,6 +324,7 @@ describe("employee forms", () => {
           jsonPost({ state: "NY", city: "New York" }),
         );
       expect(started.status).toBe(200);
+      expect(screeningRace.deletionStatus).toBe(409);
       expect(requests[1]?.url).toBe(
         "https://api.checkr-staging.com/v1/invitations",
       );
@@ -336,6 +352,87 @@ describe("employee forms", () => {
         requirements: Array<{ checkrResult: string | null }>;
       };
       expect(body.requirements[0]?.checkrResult).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("restarts an expired Checkr invitation with a new attempt", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_ENV = "staging";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    const invitationKeys: string[] = [];
+    let invitationCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/candidates")) {
+        return Response.json({ id: "candidate-1" });
+      }
+      if (url.endsWith("/invitations") && init?.method === "POST") {
+        invitationCount += 1;
+        invitationKeys.push(
+          new Headers(init.headers).get("Idempotency-Key") ?? "",
+        );
+        return Response.json({
+          id: `invitation-${invitationCount}`,
+          report_id: null,
+          status: "pending",
+        });
+      }
+      if (url.endsWith("/invitations/invitation-1")) {
+        return Response.json({
+          id: "invitation-1",
+          report_id: null,
+          status: "expired",
+        });
+      }
+      throw new Error(`Unexpected Checkr request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const first = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(first.status).toBe(200);
+      const refreshed = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/refresh`, { method: "POST" });
+      expect(refreshed.status).toBe(200);
+      const visible = await fixture.app("owner", "owner").request("/");
+      const body = (await visible.json()) as {
+        requirements: Array<{
+          checkrStarted: boolean;
+          checkrInvitationStatus: string;
+          status: string;
+        }>;
+      };
+      expect(body.requirements[0]).toMatchObject({
+        checkrStarted: false,
+        checkrInvitationStatus: "expired",
+        status: "pending",
+      });
+      const restarted = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(restarted.status).toBe(200);
+      expect(await restarted.json()).toMatchObject({
+        invitationId: "invitation-2",
+      });
+      expect(invitationKeys).toHaveLength(2);
+      expect(invitationKeys[0]).not.toBe(invitationKeys[1]);
+      expect(
+        fixture.database
+          .query(
+            "SELECT checkr_invitation_id, checkr_attempt FROM employee_requirements WHERE id = ?",
+          )
+          .get(id),
+      ).toEqual({ checkr_invitation_id: "invitation-2", checkr_attempt: 1 });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -397,6 +494,7 @@ async function createFixture() {
   await migration(database, "0041_create_employee_requirements.sql");
   await migration(database, "0042_add_checkr_screenings.sql");
   await migration(database, "0043_queue_employee_document_cleanup.sql");
+  await migration(database, "0044_guard_employee_screenings.sql");
   const files = new Map<string, File>();
   const hooks: {
     beforeBatch: (() => void) | undefined;

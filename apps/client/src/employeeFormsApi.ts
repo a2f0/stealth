@@ -17,6 +17,7 @@ export interface EmployeeRequirement {
   checkrResult: string | null;
   completedAt: string | null;
   documentFilename: string | null;
+  documentRevision: number;
   documentSize: number | null;
   dueDate: string;
   hasDocument: boolean;
@@ -62,7 +63,11 @@ export async function createEmployeeRequirements(
 
 export async function updateEmployeeRequirement(
   id: string,
-  update: { dueDate?: string; status?: EmployeeRequirementStatus },
+  update: {
+    documentRevision?: number;
+    dueDate?: string;
+    status?: EmployeeRequirementStatus;
+  },
 ) {
   const response = await fetch(`${endpoint}/${encodeURIComponent(id)}`, {
     body: JSON.stringify(update),

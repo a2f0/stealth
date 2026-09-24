@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import {
+  cancelCheckrInvitation,
   checkrConfigured,
   checkrPackage,
   createCheckrCandidate,
@@ -28,6 +29,7 @@ interface RequirementRow {
   document_key: string | null;
   document_filename: string | null;
   document_size: number | null;
+  document_revision: number;
   invitation_id: string | null;
   invitation_status: string | null;
   member_id: string | null;
@@ -39,6 +41,10 @@ interface RequirementRow {
   checkr_report_id: string | null;
   checkr_result: string | null;
   checkr_invitation_status: string | null;
+  checkr_starting_at: string | null;
+  checkr_start_nonce: string | null;
+  checkr_start_nonce_at: string | null;
+  checkr_attempt: number;
 }
 
 type EmployeeFormsEnv = {
@@ -57,11 +63,14 @@ employeeForms.get("/", async (context) => {
     `SELECT requirement.id, requirement.kind, requirement.title,
             requirement.due_date, requirement.status, requirement.document_key,
             requirement.document_filename, requirement.document_size,
+            requirement.document_revision,
             requirement.invitation_id, invitation.status AS invitation_status,
             requirement.member_id,
             requirement.completed_at, requirement.checkr_candidate_id,
             requirement.checkr_invitation_id, requirement.checkr_report_id,
             requirement.checkr_result, requirement.checkr_invitation_status,
+            requirement.checkr_starting_at, requirement.checkr_start_nonce,
+            requirement.checkr_start_nonce_at, requirement.checkr_attempt,
             COALESCE(target.email, invitation.email) AS target_email,
             target.name AS target_name
      FROM employee_requirements AS requirement
@@ -166,15 +175,7 @@ employeeForms.patch("/:id", async (context) => {
   if (!isRecord(body)) return context.json({ error: "Invalid update." }, 400);
   const status = body.status;
   const dueDate = body.dueDate;
-  if (
-    (status !== undefined && !isStatus(status)) ||
-    (dueDate !== undefined && !isDate(dueDate)) ||
-    (status === undefined && dueDate === undefined) ||
-    (row.kind === "form" && status === "in_progress") ||
-    (row.kind !== "form" && status === "submitted") ||
-    (row.kind === "form" && status === "complete" && !row.document_key) ||
-    (row.checkr_invitation_id && status !== undefined)
-  ) {
+  if (!isValidRequirementUpdate(row, body)) {
     return context.json({ error: "Invalid status or due date." }, 400);
   }
   const now = new Date().toISOString();
@@ -188,7 +189,8 @@ employeeForms.patch("/:id", async (context) => {
          END,
          updated_at = ?
      WHERE id = ? AND organization_id = ?
-       AND (? IS NULL OR kind <> 'form' OR document_key IS ?)`,
+       AND (? IS NULL OR kind <> 'form' OR document_revision = ?)
+       AND (? IS NULL OR checkr_invitation_id IS NULL)`,
   )
     .bind(
       status ?? null,
@@ -200,7 +202,8 @@ employeeForms.patch("/:id", async (context) => {
       row.id,
       context.get("organizationId"),
       status ?? null,
-      row.document_key,
+      body.documentRevision ?? null,
+      status ?? null,
     )
     .run();
   if (!updated.meta.changes) {
@@ -215,17 +218,29 @@ employeeForms.delete("/:id", async (context) => {
   }
   const row = await findRequirement(context);
   if (!row) return context.json({ error: "Requirement not found." }, 404);
-  if (row.checkr_invitation_id) {
+  if (
+    row.checkr_starting_at ||
+    (row.checkr_invitation_id && !isExpiredCheckrInvitation(row))
+  ) {
     return context.json(
       { error: "A started Checkr screening cannot be removed." },
       409,
     );
   }
-  await context.env.DB.prepare(
-    `DELETE FROM employee_requirements WHERE id = ? AND organization_id = ?`,
+  const deleted = await context.env.DB.prepare(
+    `DELETE FROM employee_requirements
+     WHERE id = ? AND organization_id = ? AND checkr_starting_at IS NULL
+       AND (checkr_invitation_id IS NULL OR
+            checkr_invitation_status IN ('expired', 'canceled', 'deleted'))`,
   )
     .bind(row.id, context.get("organizationId"))
     .run();
+  if (!deleted.meta.changes) {
+    return context.json(
+      { error: "Screening is changing. Try again later." },
+      409,
+    );
+  }
   return context.json({ ok: true });
 });
 
@@ -254,6 +269,7 @@ employeeForms.post("/:id/document", async (context) => {
     const updated = await context.env.DB.prepare(
       `UPDATE employee_requirements
        SET document_key = ?, document_filename = ?, document_size = ?,
+           document_revision = document_revision + 1,
            status = 'submitted', completed_at = NULL, updated_at = ?
        WHERE id = ? AND organization_id = ? AND document_key IS ?`,
     )
@@ -316,7 +332,7 @@ employeeForms.post("/:id/checkr/start", async (context) => {
   ) {
     return context.json({ error: "Screening requirement not found." }, 404);
   }
-  if (row.checkr_invitation_id) {
+  if (row.checkr_invitation_id && !isExpiredCheckrInvitation(row)) {
     return context.json({ error: "Screening already started." }, 409);
   }
   if (!checkrConfigured(context.env, row.kind)) {
@@ -332,51 +348,21 @@ employeeForms.post("/:id/checkr/start", async (context) => {
       400,
     );
   }
-  const candidateId =
-    row.checkr_candidate_id ??
-    (await createCheckrCandidate(context.env, row.target_email, row.id)).id;
-  if (!candidateId) throw new Error("Checkr did not return a candidate ID.");
-  if (!row.checkr_candidate_id) {
-    await context.env.DB.prepare(
-      `UPDATE employee_requirements SET checkr_candidate_id = ?, updated_at = ?
-       WHERE id = ? AND organization_id = ? AND checkr_candidate_id IS NULL`,
-    )
-      .bind(
-        candidateId,
-        new Date().toISOString(),
-        row.id,
-        context.get("organizationId"),
-      )
-      .run();
-  }
-  const invitation = await createCheckrInvitation(
-    context.env,
-    candidateId,
-    checkrPackage(context.env, row.kind) ?? "",
+  const claim = await claimCheckrStart(context, row);
+  if (!claim)
+    return context.json(
+      { error: "Screening is changing. Try again later." },
+      409,
+    );
+  const invitation = await launchCheckrScreening(
+    context,
+    row,
+    claim,
     body.state,
     body.city ?? "",
-    row.id,
   );
-  if (!invitation.id)
-    throw new Error("Checkr did not return an invitation ID.");
-  const updated = await context.env.DB.prepare(
-    `UPDATE employee_requirements
-     SET checkr_invitation_id = ?, checkr_invitation_status = ?,
-         checkr_report_id = ?, status = 'in_progress', updated_at = ?
-     WHERE id = ? AND organization_id = ? AND checkr_invitation_id IS NULL`,
-  )
-    .bind(
-      invitation.id,
-      invitation.status,
-      invitation.report_id,
-      new Date().toISOString(),
-      row.id,
-      context.get("organizationId"),
-    )
-    .run();
-  if (!updated.meta.changes) {
-    return context.json({ error: "Screening already started." }, 409);
-  }
+  if (!invitation)
+    return context.json({ error: "Screening was removed." }, 409);
   return context.json({
     invitationId: invitation.id,
     status: invitation.status,
@@ -398,29 +384,167 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
   const reportId = invitation.report_id ?? row.checkr_report_id;
   const report = reportId ? await getCheckrReport(context.env, reportId) : null;
   const complete = report?.status === "complete";
-  await context.env.DB.prepare(
+  const refreshed = await context.env.DB.prepare(
     `UPDATE employee_requirements
      SET checkr_invitation_status = ?, checkr_report_id = ?,
          checkr_result = ?, status = ?, completed_at = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ?`,
+     WHERE id = ? AND organization_id = ? AND checkr_invitation_id = ?`,
   )
     .bind(
       invitation.status,
       reportId,
       report?.result ?? null,
-      complete ? "complete" : "in_progress",
+      complete
+        ? "complete"
+        : isExpiredCheckrStatus(invitation.status)
+          ? "pending"
+          : "in_progress",
       complete ? new Date().toISOString() : null,
       new Date().toISOString(),
       row.id,
       context.get("organizationId"),
+      row.checkr_invitation_id,
     )
     .run();
+  if (!refreshed.meta.changes) {
+    return context.json({ error: "Screening changed. Please refresh." }, 409);
+  }
   return context.json({
     invitationStatus: invitation.status,
     reportStatus: report?.status ?? null,
     result: report?.result ?? null,
   });
 });
+
+interface CheckrStartClaim {
+  checkr_candidate_id: string | null;
+  checkr_start_nonce: string;
+}
+
+async function claimCheckrStart(
+  context: Context<EmployeeFormsEnv>,
+  row: RequirementRow,
+) {
+  const now = new Date();
+  const nonce = crypto.randomUUID();
+  return context.env.DB.prepare(
+    `UPDATE employee_requirements
+     SET checkr_start_nonce = CASE
+           WHEN checkr_invitation_id IS NOT NULL THEN ?
+           ELSE COALESCE(checkr_start_nonce, ?)
+         END,
+         checkr_start_nonce_at = CASE
+           WHEN checkr_invitation_id IS NOT NULL OR checkr_start_nonce_at IS NULL
+             THEN ? ELSE checkr_start_nonce_at
+         END,
+         checkr_starting_at = ?,
+         checkr_attempt = CASE WHEN checkr_invitation_id IS NOT NULL
+           THEN checkr_attempt + 1 ELSE checkr_attempt END,
+         checkr_invitation_id = NULL, checkr_invitation_status = NULL,
+         checkr_report_id = NULL, checkr_result = NULL,
+         status = 'pending', updated_at = ?
+     WHERE id = ? AND organization_id = ?
+       AND (checkr_invitation_id IS NULL OR
+            checkr_invitation_status IN ('expired', 'canceled', 'deleted'))
+       AND (checkr_starting_at IS NULL OR checkr_starting_at < ?)
+       AND (checkr_start_nonce_at IS NULL OR checkr_start_nonce_at > ? OR
+            checkr_invitation_id IS NOT NULL)
+     RETURNING checkr_candidate_id, checkr_start_nonce`,
+  )
+    .bind(
+      nonce,
+      nonce,
+      now.toISOString(),
+      now.toISOString(),
+      now.toISOString(),
+      row.id,
+      context.get("organizationId"),
+      new Date(now.getTime() - 5 * 60_000).toISOString(),
+      new Date(now.getTime() - 23 * 60 * 60_000).toISOString(),
+    )
+    .first<CheckrStartClaim>();
+}
+
+async function launchCheckrScreening(
+  context: Context<EmployeeFormsEnv>,
+  row: RequirementRow,
+  claim: CheckrStartClaim,
+  state: string,
+  city: string,
+) {
+  try {
+    const candidateId =
+      claim.checkr_candidate_id ??
+      (await createCheckrCandidate(context.env, row.target_email ?? "", row.id))
+        .id;
+    if (!candidateId) throw new Error("Checkr did not return a candidate ID.");
+    if (!claim.checkr_candidate_id) {
+      const stored = await context.env.DB.prepare(
+        `UPDATE employee_requirements
+         SET checkr_candidate_id = ?, updated_at = ?
+         WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
+      )
+        .bind(
+          candidateId,
+          new Date().toISOString(),
+          row.id,
+          context.get("organizationId"),
+          claim.checkr_start_nonce,
+        )
+        .run();
+      if (!stored.meta.changes) return null;
+    }
+    if (row.kind === "form") return null;
+    const invitation = await createCheckrInvitation(
+      context.env,
+      candidateId,
+      checkrPackage(context.env, row.kind) ?? "",
+      state,
+      city,
+      claim.checkr_start_nonce,
+    );
+    if (!invitation.id)
+      throw new Error("Checkr did not return an invitation ID.");
+    const stored = await context.env.DB.prepare(
+      `UPDATE employee_requirements
+       SET checkr_invitation_id = ?, checkr_invitation_status = ?,
+           checkr_report_id = ?, status = 'in_progress',
+           checkr_starting_at = NULL, checkr_start_nonce = NULL,
+           checkr_start_nonce_at = NULL, updated_at = ?
+       WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
+    )
+      .bind(
+        invitation.id,
+        invitation.status,
+        invitation.report_id,
+        new Date().toISOString(),
+        row.id,
+        context.get("organizationId"),
+        claim.checkr_start_nonce,
+      )
+      .run();
+    if (stored.meta.changes) return invitation;
+    const current = await findRequirement(context);
+    if (current?.checkr_invitation_id === invitation.id) return invitation;
+    try {
+      await cancelCheckrInvitation(context.env, invitation.id);
+    } catch (cause) {
+      console.error(
+        "Could not cancel a screening whose requirement disappeared.",
+        cause,
+      );
+    }
+    return null;
+  } catch (cause) {
+    await context.env.DB.prepare(
+      `UPDATE employee_requirements SET checkr_starting_at = NULL
+       WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
+    )
+      .bind(row.id, context.get("organizationId"), claim.checkr_start_nonce)
+      .run();
+    throw cause;
+  }
+}
 
 export async function assignAcceptedInvitationRequirements(
   database: D1Database,
@@ -458,6 +582,7 @@ function toRequirement(row: RequirementRow, manager: boolean, env: Bindings) {
     hasDocument: Boolean(row.document_key),
     documentFilename: row.document_filename,
     documentSize: row.document_size,
+    documentRevision: row.document_revision,
     invitationId: row.invitation_id,
     invitationStatus: row.invitation_status,
     memberId: row.member_id,
@@ -468,7 +593,8 @@ function toRequirement(row: RequirementRow, manager: boolean, env: Bindings) {
       row.kind !== "form" &&
       (!row.invitation_id || row.invitation_status === "pending") &&
       checkrConfigured(env, row.kind),
-    checkrStarted: Boolean(row.checkr_invitation_id),
+    checkrStarted:
+      Boolean(row.checkr_invitation_id) && !isExpiredCheckrInvitation(row),
     checkrInvitationStatus: row.checkr_invitation_status,
     checkrResult: manager ? row.checkr_result : null,
   };
@@ -481,6 +607,7 @@ interface InputRecord {
   status?: unknown;
   dueDate?: unknown;
   file?: unknown;
+  documentRevision?: unknown;
   kind?: unknown;
   title?: unknown;
   state?: unknown;
@@ -521,6 +648,31 @@ function isStatus(value: unknown): value is RequirementStatus {
   );
 }
 
+function isValidRequirementUpdate(row: RequirementRow, body: InputRecord) {
+  const { status, dueDate, documentRevision } = body;
+  return !(
+    (status !== undefined && !isStatus(status)) ||
+    (dueDate !== undefined && !isDate(dueDate)) ||
+    (status === undefined && dueDate === undefined) ||
+    (row.kind === "form" && status === "in_progress") ||
+    (row.kind !== "form" && status === "submitted") ||
+    (row.kind === "form" && status === "complete" && !row.document_key) ||
+    (row.kind === "form" &&
+      status !== undefined &&
+      (!Number.isSafeInteger(documentRevision) ||
+        Number(documentRevision) < 0)) ||
+    (row.checkr_invitation_id && status !== undefined)
+  );
+}
+
+function isExpiredCheckrStatus(status: string | null) {
+  return status === "expired" || status === "canceled" || status === "deleted";
+}
+
+function isExpiredCheckrInvitation(row: RequirementRow) {
+  return isExpiredCheckrStatus(row.checkr_invitation_status);
+}
+
 function isUsState(value: unknown): value is string {
   return typeof value === "string" && /^[A-Z]{2}$/.test(value);
 }
@@ -535,10 +687,13 @@ async function findRequirement(context: Context<EmployeeFormsEnv>) {
   return context.env.DB.prepare(
     `SELECT requirement.id, requirement.kind, requirement.title,
             requirement.due_date, requirement.status, requirement.document_key,
-            document_filename, document_size, invitation_id,
+            document_filename, document_size, document_revision,
+            invitation_id,
             invitation.status AS invitation_status, member_id,
             completed_at, checkr_candidate_id, checkr_invitation_id,
             checkr_report_id, checkr_result, checkr_invitation_status,
+            checkr_starting_at, checkr_start_nonce,
+            checkr_start_nonce_at, checkr_attempt,
             COALESCE(target.email, invitation.email) AS target_email,
             target.name AS target_name
      FROM employee_requirements AS requirement
