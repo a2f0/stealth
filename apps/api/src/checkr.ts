@@ -8,6 +8,7 @@ interface CheckrInvitation {
   deleted_at?: string | null;
   id: string;
   package?: string;
+  tags?: string[];
   report_id: string | null;
   status: string;
 }
@@ -77,6 +78,7 @@ export async function createCheckrInvitation(
   state: string,
   city: string,
   idempotencyKey: string,
+  attemptTag: string,
 ) {
   const body = new URLSearchParams({
     candidate_id: candidateId,
@@ -85,6 +87,7 @@ export async function createCheckrInvitation(
     "work_locations[][state]": state,
   });
   if (city) body.set("work_locations[][city]", city);
+  body.set("tags[]", attemptTag);
   return checkrRequest<CheckrInvitation>(env, "/invitations", {
     body,
     headers: { "Idempotency-Key": idempotencyKey },

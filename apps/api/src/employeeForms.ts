@@ -46,6 +46,7 @@ interface RequirementRow {
   checkr_starting_at: string | null;
   checkr_start_nonce: string | null;
   checkr_start_nonce_at: string | null;
+  checkr_start_package: string | null;
   checkr_attempt: number;
   checkr_refresh_revision: number;
 }
@@ -75,6 +76,7 @@ employeeForms.get("/", async (context) => {
             requirement.checkr_result, requirement.checkr_invitation_status,
             requirement.checkr_starting_at, requirement.checkr_start_nonce,
             requirement.checkr_start_nonce_at, requirement.checkr_attempt,
+            requirement.checkr_start_package,
             requirement.checkr_refresh_revision,
             COALESCE(target.email, invitation.email, requirement.target_email)
               AS target_email,
@@ -198,6 +200,8 @@ employeeForms.patch("/:id", async (context) => {
            WHEN ? = 'complete' THEN ?
            ELSE NULL
          END,
+         checkr_refresh_revision = checkr_refresh_revision +
+           CASE WHEN ? IS NOT NULL AND kind <> 'form' THEN 1 ELSE 0 END,
          updated_at = ?
      WHERE id = ? AND organization_id = ?
        AND (? IS NULL OR kind <> 'form' OR document_revision = ?)
@@ -210,6 +214,7 @@ employeeForms.patch("/:id", async (context) => {
       status ?? null,
       status ?? null,
       now,
+      status ?? null,
       now,
       row.id,
       context.get("organizationId"),
@@ -522,6 +527,7 @@ interface CheckrStartClaim {
   checkr_candidate_id: string | null;
   checkr_start_nonce: string;
   checkr_start_nonce_at: string;
+  checkr_start_package: string;
 }
 
 async function claimCheckrStart(
@@ -541,6 +547,9 @@ async function claimCheckrStart(
              THEN ? ELSE checkr_start_nonce_at
          END,
          checkr_starting_at = ?,
+         checkr_start_package = CASE
+           WHEN checkr_start_nonce IS NULL OR checkr_invitation_id IS NOT NULL
+             THEN ? ELSE COALESCE(checkr_start_package, ?) END,
          checkr_attempt = CASE WHEN checkr_invitation_id IS NOT NULL
            THEN checkr_attempt + 1 ELSE checkr_attempt END,
          checkr_invitation_id = NULL, checkr_invitation_status = NULL,
@@ -550,13 +559,22 @@ async function claimCheckrStart(
        AND (checkr_invitation_id IS NULL OR
             checkr_invitation_status IN ('expired', 'canceled', 'deleted'))
        AND (checkr_starting_at IS NULL OR checkr_starting_at < ?)
-     RETURNING checkr_candidate_id, checkr_start_nonce, checkr_start_nonce_at`,
+     RETURNING checkr_candidate_id, checkr_start_nonce,
+               checkr_start_nonce_at, checkr_start_package`,
   )
     .bind(
       nonce,
       nonce,
       now.toISOString(),
       now.toISOString(),
+      checkrPackage(
+        context.env,
+        row.kind as "background_check" | "credit_check",
+      ),
+      checkrPackage(
+        context.env,
+        row.kind as "background_check" | "credit_check",
+      ),
       now.toISOString(),
       row.id,
       context.get("organizationId"),
@@ -606,7 +624,6 @@ async function launchCheckrScreening(
       if (!stored.meta.changes) return null;
     }
     if (row.kind === "form") return null;
-    const packageSlug = checkrPackage(context.env, row.kind) ?? "";
     const existing = await findPriorCheckrInvitation(
       context,
       row,
@@ -638,10 +655,11 @@ async function launchCheckrScreening(
       createCheckrInvitation(
         context.env,
         candidateId,
-        packageSlug,
+        claim.checkr_start_package,
         state,
         city,
         nonce,
+        checkrAttemptTag(nonce),
       ),
     );
     if (!invitation.id)
@@ -758,7 +776,10 @@ async function findPriorCheckrInvitation(
     candidateId,
   );
   const active = invitations.data.filter(
-    (invitation) => !isExpiredCheckrStatus(invitation.status),
+    (invitation) =>
+      !isExpiredCheckrStatus(invitation.status) &&
+      invitation.package === claim.checkr_start_package &&
+      invitation.tags?.includes(checkrAttemptTag(claim.checkr_start_nonce)),
   );
   if (active.length > 1) {
     throw new Error("Multiple Checkr invitations need manual reconciliation.");
@@ -767,6 +788,10 @@ async function findPriorCheckrInvitation(
     throw new Error("Checkr invitations need manual reconciliation.");
   }
   return active[0] ?? null;
+}
+
+function checkrAttemptTag(nonce: string) {
+  return `tearleads-screening:${nonce}`;
 }
 
 async function storeCheckrInvitation(
@@ -1001,7 +1026,8 @@ async function findRequirement(context: Context<EmployeeFormsEnv>) {
             completed_at, checkr_candidate_id, checkr_invitation_id,
             checkr_report_id, checkr_result, checkr_invitation_status,
             checkr_starting_at, checkr_start_nonce,
-            checkr_start_nonce_at, checkr_attempt, checkr_refresh_revision,
+            checkr_start_nonce_at, checkr_start_package,
+            checkr_attempt, checkr_refresh_revision,
             COALESCE(target.email, invitation.email, requirement.target_email)
               AS target_email,
             target.name AS target_name
