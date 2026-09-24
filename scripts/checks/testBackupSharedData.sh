@@ -27,7 +27,8 @@ file_mode() {
   esac
 }
 
-if PATH="$FIXTURE/bin:$PATH" bash "$BACKUP_SCRIPT" "$FIXTURE/output" > "$FIXTURE/without-password.log" 2>&1; then
+if PATH="$FIXTURE/bin:$PATH" bash "$BACKUP_SCRIPT" "$FIXTURE/output" \
+  </dev/null > "$FIXTURE/without-password.log" 2>&1; then
   echo 'Noninteractive backup succeeded without an encryption choice' >&2
   exit 1
 fi
