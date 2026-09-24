@@ -107,6 +107,10 @@ for source_dir in "${SOURCE_DIRS[@]}"; do
     echo "backupSharedData: source directory cannot be the root directory: $source_dir" >&2
     exit 1
   fi
+  if [[ "$OUTPUT_ABS" == "$source_abs" || "$OUTPUT_ABS" == "$source_abs/"* ]]; then
+    echo "backupSharedData: output directory cannot be inside a source directory: $OUTPUT_ABS" >&2
+    exit 1
+  fi
 done
 
 # Zip from repo root to maintain relative paths in archive. Encrypted mode

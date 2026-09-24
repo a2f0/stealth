@@ -33,6 +33,14 @@ if PATH="$FIXTURE/bin:$PATH" bash "$BACKUP_SCRIPT" "$FIXTURE/output" > "$FIXTURE
 fi
 [[ -z "$(find "$FIXTURE/output" -type f -print)" ]]
 
+ln -s "$FIXTURE/source/.secrets" "$FIXTURE/secret-alias"
+if PATH="$FIXTURE/bin:$PATH" bash "$BACKUP_SCRIPT" "$FIXTURE/secret-alias/backups" \
+  --no-password > "$FIXTURE/nested-output.log" 2>&1; then
+  echo 'Backup accepted an output directory inside its source' >&2
+  exit 1
+fi
+[[ -z "$(find "$FIXTURE/source/.secrets" -name '*.zip*' -print)" ]]
+
 PATH="$FIXTURE/bin:$PATH" bash "$BACKUP_SCRIPT" "$FIXTURE/output" --password fixture-passphrase > /dev/null
 encrypted_archive="$(find "$FIXTURE/output" -name '*.zip.gpg' -print -quit)"
 [[ -n "$encrypted_archive" && "$(file_mode "$encrypted_archive")" == 600 ]]
