@@ -601,7 +601,16 @@ function resolvePreflightRuntimes(
       "No trusted git executable was found outside the repository.",
     );
   }
-  const optionalRuntimes = ["gh", "node", "shellcheck", "terraform", "tflint"]
+  const optionalRuntimes = [
+    "gh",
+    "node",
+    "gpg",
+    "gpg-agent",
+    "gpgconf",
+    "shellcheck",
+    "terraform",
+    "tflint",
+  ]
     .map((name) => resolveTrustedExecutable(name, environment, repositoryRoot))
     .filter((runtime): runtime is TrustedExecutable => runtime !== null);
   const runtimes = [

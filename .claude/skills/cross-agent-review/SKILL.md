@@ -43,6 +43,9 @@ actually shippable.
   effort.
 - `--report-only` (optional flag, position-independent): surface findings
   without changing the branch, including base synchronization and repairs.
+- Reject the obsolete `--repair-rounds` flag rather than ignoring it. Use
+  `--report-only` for a non-mutating review or omit the flag for unlimited
+  repairs.
 
 `--passes` controls reviews of one unchanged commit. Repairs produce new
 commits to review and have no round limit.

@@ -44,6 +44,9 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
   to `cross-agent-review`, which skips base synchronization and repairs. This
   flow stops on any blocking finding. Without this flag, repairs have no round
   limit.
+- Reject the obsolete `--repair-rounds` flag rather than ignoring it. Use
+  `--report-only` for a non-mutating review or omit the flag for unlimited
+  repairs.
 - `--merge-anyway` (optional flag, position-independent): override the merge gate.
   By default the flow stops when `cross-agent-review` reports unresolved blocking
   findings or could not review at all; with this flag it surfaces exactly what it
