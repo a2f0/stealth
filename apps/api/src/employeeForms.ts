@@ -545,7 +545,7 @@ async function claimCheckrStart(
            THEN checkr_attempt + 1 ELSE checkr_attempt END,
          checkr_invitation_id = NULL, checkr_invitation_status = NULL,
          checkr_report_id = NULL, checkr_result = NULL,
-         status = 'pending', updated_at = ?
+         status = 'pending', completed_at = NULL, updated_at = ?
      WHERE id = ? AND organization_id = ?
        AND (checkr_invitation_id IS NULL OR
             checkr_invitation_status IN ('expired', 'canceled', 'deleted'))
@@ -957,14 +957,16 @@ function isValidRequirementUpdate(row: RequirementRow, body: InputRecord) {
   return !(
     (status !== undefined && !isStatus(status)) ||
     (dueDate !== undefined && !isDate(dueDate)) ||
+    (documentRevision !== undefined &&
+      (!Number.isSafeInteger(documentRevision) ||
+        Number(documentRevision) < 0)) ||
     (status === undefined && dueDate === undefined) ||
     (row.kind === "form" && status === "in_progress") ||
     (row.kind !== "form" && status === "submitted") ||
     (row.kind === "form" && status === "complete" && !row.document_key) ||
     (row.kind === "form" &&
       status !== undefined &&
-      (!Number.isSafeInteger(documentRevision) ||
-        Number(documentRevision) < 0)) ||
+      documentRevision === undefined) ||
     (row.checkr_invitation_id &&
       !isExpiredCheckrInvitation(row) &&
       status !== undefined)

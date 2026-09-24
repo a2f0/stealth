@@ -104,6 +104,35 @@ describe("employee forms", () => {
         method: "PATCH",
       });
     expect(invalidStatus.status).toBe(400);
+    for (const documentRevision of [{ invalid: true }, [1], null]) {
+      const malformedRevision = await fixture
+        .app("owner", "owner")
+        .request(`/${id}`, {
+          body: JSON.stringify({
+            dueDate: "2026-10-10",
+            documentRevision,
+          }),
+          headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+        });
+      expect(malformedRevision.status).toBe(400);
+    }
+    const checkId = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    const malformedCheckRevision = await fixture
+      .app("owner", "owner")
+      .request(`/${checkId}`, {
+        body: JSON.stringify({
+          status: "in_progress",
+          documentRevision: { invalid: true },
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+    expect(malformedCheckRevision.status).toBe(400);
   });
 
   it("rejects an invitation accepted during requirement assignment", async () => {
@@ -705,6 +734,19 @@ describe("employee forms", () => {
         checkrInvitationStatus: "expired",
         status: "pending",
       });
+      const manuallyCompleted = await fixture
+        .app("owner", "owner")
+        .request(`/${id}`, {
+          body: JSON.stringify({ status: "complete" }),
+          headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+        });
+      expect(manuallyCompleted.status).toBe(200);
+      expect(
+        fixture.database
+          .query("SELECT completed_at FROM employee_requirements WHERE id = ?")
+          .get(id),
+      ).toMatchObject({ completed_at: expect.any(String) });
       const restarted = await fixture
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
@@ -717,10 +759,14 @@ describe("employee forms", () => {
       expect(
         fixture.database
           .query(
-            "SELECT checkr_invitation_id, checkr_attempt FROM employee_requirements WHERE id = ?",
+            "SELECT checkr_invitation_id, checkr_attempt, completed_at FROM employee_requirements WHERE id = ?",
           )
           .get(id),
-      ).toEqual({ checkr_invitation_id: "invitation-2", checkr_attempt: 1 });
+      ).toEqual({
+        checkr_invitation_id: "invitation-2",
+        checkr_attempt: 1,
+        completed_at: null,
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
