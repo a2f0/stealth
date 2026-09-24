@@ -153,12 +153,16 @@ export function EmployeeForms({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       setRequirements(await listEmployeeRequirements());
       setError(undefined);
     } catch (cause) {
       setError(messageFrom(cause));
+    } finally {
+      setLoading(false);
     }
   }, []);
   useEffect(() => {
@@ -196,8 +200,12 @@ export function EmployeeForms({
           members={members}
         />
       )}
-      {!requirements ? (
+      {!requirements && loading ? (
         <LoadingState label="Loading requirements…" />
+      ) : !requirements ? (
+        <Button onClick={() => void load()} size="sm" type="button">
+          Retry loading requirements
+        </Button>
       ) : requirements.length === 0 ? (
         <p className="muted">No requirements assigned yet.</p>
       ) : (
