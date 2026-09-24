@@ -6,7 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TIER="${1:-prod}"
 if [[ "$TIER" == "staging" || "$TIER" == "prod" ]]; then
-  shift
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
 else
   TIER="prod"
 fi

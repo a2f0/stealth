@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 SOURCE_DIRS_REL=(".secrets")
@@ -28,10 +29,18 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       PASSWORD="$2"
+      if [[ -z "$PASSWORD" ]]; then
+        echo "backupSharedData: --password cannot be empty" >&2
+        exit 1
+      fi
       shift 2
       ;;
     --password=*)
       PASSWORD="${1#*=}"
+      if [[ -z "$PASSWORD" ]]; then
+        echo "backupSharedData: --password cannot be empty" >&2
+        exit 1
+      fi
       shift
       ;;
     --no-password)
@@ -92,7 +101,8 @@ elif [[ "$NO_PASSWORD" == "true" ]]; then
 elif [[ -t 0 && -t 1 ]]; then
   ZIP_ARGS+=(-e)
 else
-  : # Non-interactive without password - create unencrypted backup
+  echo "backupSharedData: non-interactive backups require --password or explicit --no-password" >&2
+  exit 1
 fi
 
 # Zip from repo root to maintain relative paths in archive
