@@ -398,10 +398,13 @@ be enabled once for the zone, as described in the inbound email setup above.
 
 Run `bun run backup:shared-data` to archive `.secrets` and, when present,
 `.test_files` under `~/stealth-backups`. Pass an output directory as the first
-argument. In an interactive terminal, `zip` prompts for encryption; for an
-unattended backup, use `--password <password>` or `--no-password` explicitly.
-Without a terminal, a password option is required. The
-password option exposes the passphrase in the process list.
+argument. Password-protected backups are `.zip.gpg` files encrypted with GPG
+AES-256 authenticated encryption; GPG prompts in an interactive terminal.
+For an unattended backup, use `--password <password>` or explicitly choose an
+unencrypted `.zip` with `--no-password`. Without a terminal, one of those
+options is required. The password option exposes the passphrase in the backup
+command's process list. To restore an encrypted backup, run
+`gpg --decrypt backup.zip.gpg > backup.zip` and extract the resulting ZIP.
 
 Organization owners can soft-delete an organization from its general settings.
 The organization and its workspace data become inaccessible immediately and

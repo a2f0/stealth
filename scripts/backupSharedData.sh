@@ -69,9 +69,26 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$PASSWORD" && "$NO_PASSWORD" == true ]]; then
+  echo "backupSharedData: --password and --no-password cannot be combined" >&2
+  exit 1
+fi
+if [[ -z "$PASSWORD" && "$NO_PASSWORD" != true && ! -t 0 ]]; then
+  echo "backupSharedData: non-interactive backups require --password or explicit --no-password" >&2
+  exit 1
+fi
+
 if ! command -v zip >/dev/null 2>&1; then
   echo "backupSharedData: 'zip' command not found." >&2
   exit 1
+fi
+if [[ "$NO_PASSWORD" != true ]] && ! command -v gpg >/dev/null 2>&1; then
+  echo "backupSharedData: 'gpg' command not found." >&2
+  exit 1
+fi
+
+if [[ "$NO_PASSWORD" != true ]]; then
+  ARCHIVE_NAME="${ARCHIVE_NAME}.gpg"
 fi
 
 mkdir -p "$OUTPUT_DIR"
@@ -92,22 +109,20 @@ for source_dir in "${SOURCE_DIRS[@]}"; do
   fi
 done
 
-ZIP_ARGS=(-r)
-if [[ -n "$PASSWORD" ]]; then
-  echo "backupSharedData: WARNING: --password exposes the passphrase in the process list. Prefer interactive -e mode in multi-user environments." >&2
-  ZIP_ARGS+=(-P "$PASSWORD")
-elif [[ "$NO_PASSWORD" == "true" ]]; then
-  : # No encryption
-elif [[ -t 0 && -t 1 ]]; then
-  ZIP_ARGS+=(-e)
+# Zip from repo root to maintain relative paths in archive. Encrypted mode
+# streams directly into GPG so the plaintext archive is never written to disk.
+if [[ "$NO_PASSWORD" == true ]]; then
+  (cd "$REPO_ROOT" && zip -r "$ARCHIVE_PATH" "${SOURCE_DIRS_REL[@]}" >/dev/null)
+elif [[ -n "$PASSWORD" ]]; then
+  echo "backupSharedData: WARNING: --password exposes the passphrase in the backup command's process list." >&2
+  (cd "$REPO_ROOT" && zip -r - "${SOURCE_DIRS_REL[@]}" 2>/dev/null) |
+    gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
+      --symmetric --cipher-algo AES256 --force-aead --output "$ARCHIVE_PATH" \
+      3<<<"$PASSWORD"
 else
-  echo "backupSharedData: non-interactive backups require --password or explicit --no-password" >&2
-  exit 1
+  (cd "$REPO_ROOT" && zip -r - "${SOURCE_DIRS_REL[@]}" 2>/dev/null) |
+    gpg --symmetric --cipher-algo AES256 --force-aead --output "$ARCHIVE_PATH"
 fi
-
-# Zip from repo root to maintain relative paths in archive
-# Symlinks are followed by default (zip dereferences them)
-(cd "$REPO_ROOT" && zip "${ZIP_ARGS[@]}" "$ARCHIVE_PATH" "${SOURCE_DIRS_REL[@]}" >/dev/null)
 
 echo "Created backup: $ARCHIVE_PATH"
 echo "Backed up directories: ${SOURCE_DIRS_REL[*]}"

@@ -199,19 +199,12 @@ Require a clean worktree before fetching or snapshotting anything:
    - `claude` → Claude Code (self-review)
    - otherwise → Codex (default for Claude Code invoking this skill)
 
-   Parse `--report-only` once before any branch mutation, and set
-   `REPAIR_ROUND=0` for reporting. Steps 2–5 re-enter at step 2; preserve the
-   counter across repairs. It records work performed and never limits the loop.
-
-   ```bash
-   REPORT_ONLY=false
-   for argument in "$@"; do
-     if [ "$argument" = "--report-only" ]; then
-       REPORT_ONLY=true
-     fi
-   done
-   REPAIR_ROUND=0
-   ```
+   Treat the invocation arguments as workflow inputs; skill arguments are not
+   automatically shell positional parameters. Before any branch mutation, set
+   `REPORT_ONLY=true` exactly when `--report-only` was supplied, and set it to
+   `false` otherwise. Set `REPAIR_ROUND=0` for reporting. Steps 2–5 re-enter at
+   step 2; preserve the counter across repairs. It records work performed and
+   never limits the loop.
 
 2. **Sync with the base, then snapshot the candidate head**: before reviewing,
    bring the branch up to date with its base, so the review — and the head that
