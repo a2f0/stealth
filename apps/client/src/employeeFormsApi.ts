@@ -42,6 +42,15 @@ export interface RequirementDraft {
 
 const endpoint = `${apiUrl}/api/employee-forms`;
 
+export class EmployeeFormsApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 export async function listEmployeeRequirements() {
   const response = await fetch(endpoint, { credentials: "include" });
   return (
@@ -162,7 +171,8 @@ async function parseResponse<T>(response: Response): Promise<T> {
   const body = (await response.json().catch(() => null)) as {
     error?: string;
   } | null;
-  throw new Error(
+  throw new EmployeeFormsApiError(
     body?.error ?? `Request failed with status ${response.status}.`,
+    response.status,
   );
 }

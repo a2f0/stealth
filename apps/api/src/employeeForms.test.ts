@@ -1205,6 +1205,84 @@ describe("employee forms", () => {
     }
   });
 
+  it("replays a recent idempotent start when invitation tags are omitted", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    const invitationKeys: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/candidates")) {
+        return Response.json({ id: "candidate-1" });
+      }
+      if (url.endsWith("/invitations") && init?.method === "POST") {
+        invitationKeys.push(
+          new Headers(init.headers).get("Idempotency-Key") ?? "",
+        );
+        if (invitationKeys.length === 1) {
+          return Response.json({ message: "response lost" }, { status: 504 });
+        }
+        return Response.json({
+          id: "invitation-1",
+          package: "background_package",
+          report_id: null,
+          status: "pending",
+        });
+      }
+      if (url.includes("/invitations?candidate_id=")) {
+        return Response.json({
+          data: [
+            {
+              id: "invitation-1",
+              package: "background_package",
+              report_id: null,
+              status: "pending",
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected Checkr request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const failed = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(failed.status).toBe(500);
+      fixture.database
+        .query(
+          "UPDATE employee_requirements SET checkr_start_nonce_at = ? WHERE id = ?",
+        )
+        .run(new Date(Date.now() - 25 * 60 * 60_000).toISOString(), id);
+      const stale = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(stale.status).toBe(409);
+      expect(invitationKeys).toHaveLength(1);
+      fixture.database
+        .query(
+          "UPDATE employee_requirements SET checkr_start_nonce_at = ? WHERE id = ?",
+        )
+        .run(new Date().toISOString(), id);
+      const recovered = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(recovered.status).toBe(200);
+      expect(invitationKeys).toHaveLength(2);
+      expect(invitationKeys[0]).toBe(invitationKeys[1]);
+      expect(await recovered.json()).toMatchObject({
+        invitationId: "invitation-1",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reconciles an unresolved screening after its invitation is canceled", async () => {
     const fixture = await createFixture();
     fixture.bindings.CHECKR_API_KEY = "staging-key";

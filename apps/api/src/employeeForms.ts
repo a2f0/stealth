@@ -813,13 +813,23 @@ async function findPriorCheckrInvitation(
     throw new CheckrReconciliationRequired();
   }
   if (matched[0]) return matched[0];
-  if (
-    active.some(
-      (invitation) =>
-        invitation.package === undefined || !Array.isArray(invitation.tags),
-    ) ||
-    invitations.data.length >= 100
-  ) {
+  const ambiguous = active.some(
+    (invitation) =>
+      invitation.package === undefined || !Array.isArray(invitation.tags),
+  );
+  if (ambiguous) {
+    const nonceStillIdempotent =
+      new Date(claim.checkr_start_nonce_at).getTime() >=
+      Date.now() - 23 * 60 * 60_000;
+    if (
+      !nonceStillIdempotent ||
+      !(await screeningTargetActive(context, row.id))
+    ) {
+      throw new CheckrReconciliationRequired();
+    }
+    return null;
+  }
+  if (invitations.data.length >= 100) {
     throw new CheckrReconciliationRequired();
   }
   return null;
