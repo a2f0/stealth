@@ -372,6 +372,50 @@ describe("employee forms", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("keeps a form when the database commits but its response is lost", async () => {
+    const fixture = await createFixture();
+    const id = await createRequirement(fixture, "form", "W-4");
+    fixture.afterRun(() => {
+      throw new Error("D1 response lost.");
+    });
+    const form = new FormData();
+    form.set(
+      "file",
+      new File(["saved form"], "tax.pdf", { type: "application/pdf" }),
+    );
+    const uploaded = await fixture
+      .app("employee", "member")
+      .request(`/${id}/document`, { body: form, method: "POST" });
+    expect(uploaded.status).toBe(200);
+    expect(fixture.files.size).toBe(1);
+    const downloaded = await fixture
+      .app("employee", "member")
+      .request(`/${id}/document`);
+    expect(await downloaded.text()).toBe("saved form");
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM deleted_object_cleanup")
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("rejects oversized multipart uploads before parsing them", async () => {
+    const fixture = await createFixture();
+    const id = await createRequirement(fixture, "form", "W-4");
+    const form = new FormData();
+    form.set(
+      "file",
+      new File([new Uint8Array(11 * 1024 * 1024)], "large.pdf", {
+        type: "application/pdf",
+      }),
+    );
+    const upload = await fixture
+      .app("employee", "member")
+      .request(`/${id}/document`, { body: form, method: "POST" });
+    expect(upload.status).toBe(413);
+    expect(fixture.files.size).toBe(0);
+  });
+
   it("retains active screenings after a membership is removed", async () => {
     const fixture = await createFixture();
     const id = await createRequirement(
@@ -439,7 +483,7 @@ describe("employee forms", () => {
           status: "pending",
         });
       }
-      if (String(input).endsWith("/invitations/invitation-1")) {
+      if (String(input).includes("/invitations/invitation-1?")) {
         return Response.json({
           id: "invitation-1",
           report_id: "report-1",
@@ -529,7 +573,7 @@ describe("employee forms", () => {
           status: "pending",
         });
       }
-      if (url.endsWith("/invitations/invitation-1")) {
+      if (url.includes("/invitations/invitation-1?")) {
         return Response.json({
           id: "invitation-1",
           report_id: null,
@@ -576,6 +620,62 @@ describe("employee forms", () => {
           )
           .get(id),
       ).toEqual({ checkr_invitation_id: "invitation-2", checkr_attempt: 1 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("retrieves a canceled Checkr invitation for restart", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET checkr_candidate_id = 'candidate-1',
+                  checkr_invitation_id = 'invitation-1',
+                  checkr_invitation_status = 'pending', status = 'in_progress'
+              WHERE id = ?`)
+      .run(id);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/invitations/invitation-1?include_deleted=true")) {
+        return Response.json({
+          id: "invitation-1",
+          deleted_at: new Date().toISOString(),
+          report_id: null,
+          status: "pending",
+        });
+      }
+      if (url.endsWith("/invitations") && init?.method === "POST") {
+        return Response.json({
+          id: "invitation-2",
+          report_id: null,
+          status: "pending",
+        });
+      }
+      throw new Error(`Unexpected Checkr request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const refreshed = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/refresh`, { method: "POST" });
+      expect(refreshed.status).toBe(200);
+      expect(await refreshed.json()).toMatchObject({
+        invitationStatus: "deleted",
+      });
+      const restarted = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(restarted.status).toBe(200);
+      expect(await restarted.json()).toMatchObject({
+        invitationId: "invitation-2",
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -860,7 +960,8 @@ async function createFixture() {
   const hooks: {
     beforeBatch: (() => void) | undefined;
     beforeRun: ((query: string) => void) | undefined;
-  } = { beforeBatch: undefined, beforeRun: undefined };
+    afterRun: (() => void) | undefined;
+  } = { beforeBatch: undefined, beforeRun: undefined, afterRun: undefined };
   const bindings = {
     DB: toD1(database, hooks),
     STORAGE: {
@@ -909,6 +1010,9 @@ async function createFixture() {
     beforeRun: (callback: (query: string) => void) => {
       hooks.beforeRun = callback;
     },
+    afterRun: (callback: () => void) => {
+      hooks.afterRun = callback;
+    },
     database,
     files,
     storageState,
@@ -920,6 +1024,7 @@ function toD1(
   hooks: {
     beforeBatch: (() => void) | undefined;
     beforeRun: ((query: string) => void) | undefined;
+    afterRun: (() => void) | undefined;
   },
 ) {
   return {
@@ -947,6 +1052,11 @@ function toD1(
           hooks.beforeRun = undefined;
           callback?.(query);
           const result = database.query(query).run(...values);
+          if (query.includes("SET document_key = ?") && hooks.afterRun) {
+            const after = hooks.afterRun;
+            hooks.afterRun = undefined;
+            after();
+          }
           return { meta: { changes: result.changes } };
         },
       };

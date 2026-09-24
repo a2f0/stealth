@@ -5,6 +5,7 @@ interface CheckrCandidate {
 }
 
 interface CheckrInvitation {
+  deleted_at?: string | null;
   id: string;
   package?: string;
   report_id: string | null;
@@ -83,7 +84,7 @@ export async function cancelCheckrInvitation(env: Bindings, id: string) {
 export async function getCheckrInvitation(env: Bindings, id: string) {
   return checkrRequest<CheckrInvitation>(
     env,
-    `/invitations/${encodeURIComponent(id)}`,
+    `/invitations/${encodeURIComponent(id)}?include_deleted=true`,
   );
 }
 

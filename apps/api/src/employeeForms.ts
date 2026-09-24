@@ -54,6 +54,7 @@ type EmployeeFormsEnv = {
 };
 const employeeForms = new Hono<EmployeeFormsEnv>();
 const maxDocumentBytes = 10 * 1024 * 1024;
+const maxMultipartBytes = maxDocumentBytes + 256 * 1024;
 const documentTypes = new Set(["application/pdf", "image/jpeg", "image/png"]);
 
 employeeForms.get("/", async (context) => {
@@ -258,8 +259,10 @@ employeeForms.post("/:id/document", async (context) => {
   if (row.kind !== "form") {
     return context.json({ error: "Only forms accept documents." }, 400);
   }
-  const body = (await context.req.parseBody()) as { file?: File | string };
-  const file = body.file;
+  const file = await readBoundedDocumentFile(context.req.raw);
+  if (file === "too_large") {
+    return context.json({ error: "Files must be 10 MB or smaller." }, 413);
+  }
   if (!(file instanceof File) || !documentTypes.has(file.type)) {
     return context.json({ error: "Choose a PDF, JPEG, or PNG file." }, 400);
   }
@@ -317,11 +320,53 @@ employeeForms.post("/:id/document", async (context) => {
       );
     }
   } catch (cause) {
+    const linked = await context.env.DB.prepare(
+      `SELECT document_key FROM employee_requirements
+       WHERE id = ? AND organization_id = ?`,
+    )
+      .bind(row.id, context.get("organizationId"))
+      .first<{ document_key: string | null }>();
+    if (linked?.document_key === key) {
+      return context.json({ filename, status: "submitted" });
+    }
     await context.env.STORAGE.delete(key).catch(console.error);
     throw cause;
   }
   return context.json({ filename, status: "submitted" });
 });
+
+async function readBoundedDocumentFile(request: Request) {
+  const contentType = request.headers.get("content-type");
+  if (!contentType?.startsWith("multipart/form-data") || !request.body) {
+    return null;
+  }
+  const advertisedLength = Number(request.headers.get("content-length"));
+  if (advertisedLength > maxMultipartBytes) return "too_large";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxMultipartBytes) {
+        await reader.cancel();
+        return "too_large";
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const parsed = await new Response(new Blob(chunks), {
+    headers: { "Content-Type": contentType },
+  })
+    .formData()
+    .catch(() => null);
+  const file = parsed?.get("file");
+  return file instanceof File ? file : null;
+}
 
 employeeForms.get("/:id/document", async (context) => {
   const row = await findRequirement(context);
@@ -411,6 +456,9 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
     context.env,
     row.checkr_invitation_id,
   );
+  const invitationStatus = invitation.deleted_at
+    ? "deleted"
+    : invitation.status;
   const reportId = invitation.report_id ?? row.checkr_report_id;
   const report = reportId ? await getCheckrReport(context.env, reportId) : null;
   const complete = report?.status === "complete";
@@ -421,12 +469,12 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
      WHERE id = ? AND organization_id = ? AND checkr_invitation_id = ?`,
   )
     .bind(
-      invitation.status,
+      invitationStatus,
       reportId,
       report?.result ?? null,
       complete
         ? "complete"
-        : isExpiredCheckrStatus(invitation.status)
+        : isExpiredCheckrStatus(invitationStatus)
           ? "pending"
           : "in_progress",
       complete ? new Date().toISOString() : null,
@@ -440,7 +488,7 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
     return context.json({ error: "Screening changed. Please refresh." }, 409);
   }
   return context.json({
-    invitationStatus: invitation.status,
+    invitationStatus,
     reportStatus: report?.status ?? null,
     result: report?.result ?? null,
   });
