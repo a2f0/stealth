@@ -1338,6 +1338,65 @@ describe("employee forms", () => {
     }
   });
 
+  it("ignores tagless invitations from an earlier screening attempt", async () => {
+    const fixture = await createFixture();
+    fixture.bindings.CHECKR_API_KEY = "staging-key";
+    fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
+    const id = await createRequirement(
+      fixture,
+      "background_check",
+      "Background check",
+    );
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET checkr_candidate_id = 'candidate-1',
+                  checkr_start_nonce = 'new-attempt',
+                  checkr_start_nonce_at = ?,
+                  checkr_start_package = 'background_package'
+              WHERE id = ?`)
+      .run(new Date().toISOString(), id);
+    let invitationPosts = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/invitations?candidate_id=")) {
+        return Response.json({
+          data: [
+            {
+              id: "old-invitation",
+              package: "background_package",
+              created_at: new Date(Date.now() - 86_400_000).toISOString(),
+              report_id: "old-canceled-report",
+              status: "completed",
+              tags: [],
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/invitations") && init?.method === "POST") {
+        invitationPosts += 1;
+        return Response.json({
+          id: "new-invitation",
+          report_id: null,
+          status: "pending",
+        });
+      }
+      throw new Error(`Unexpected Checkr request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const started = await fixture
+        .app("owner", "owner")
+        .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
+      expect(started.status).toBe(200);
+      expect(invitationPosts).toBe(1);
+      expect(await started.json()).toMatchObject({
+        invitationId: "new-invitation",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("lets managers reconcile an older tagless Checkr invitation", async () => {
     const fixture = await createFixture();
     fixture.bindings.CHECKR_API_KEY = "staging-key";

@@ -35,15 +35,25 @@ for secret_name in \
   PLAID_CLIENT_ID \
   PLAID_SECRET \
   PLAID_TOKEN_ENCRYPTION_KEY \
-  CHECKR_API_KEY \
-  CHECKR_BACKGROUND_PACKAGE \
-  CHECKR_CREDIT_PACKAGE \
   STRIPE_SECRET_KEY \
   STRIPE_WEBHOOK_SECRET; do
   if [[ -n "${!secret_name:-}" ]]; then
     printf '%s=%s\n' "$secret_name" "${!secret_name}" >>"$auth_env_file"
   fi
 done
+
+if [[ -f "$REPO_ROOT/.secrets/staging.env" ]]; then
+  (
+    unset CHECKR_API_KEY CHECKR_BACKGROUND_PACKAGE CHECKR_CREDIT_PACKAGE
+    source_env_file "$REPO_ROOT/.secrets/staging.env"
+    for secret_name in \
+      CHECKR_API_KEY CHECKR_BACKGROUND_PACKAGE CHECKR_CREDIT_PACKAGE; do
+      if [[ -n "${!secret_name:-}" ]]; then
+        printf '%s=%s\n' "$secret_name" "${!secret_name}" >>"$auth_env_file"
+      fi
+    done
+  )
+fi
 
 cd "$REPO_ROOT/apps/api"
 bunx wrangler dev \

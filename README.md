@@ -266,8 +266,8 @@ enter its ID in **Link invitation**. The app verifies the candidate, package,
 and creation time before linking it. Do not start a new check until the old
 request is reconciled.
 
-Set these optional values in `.secrets/root.env` for local development and
-production deployment, or `.secrets/staging.env` for staging:
+Set these optional values in `.secrets/root.env` for production deployment or
+`.secrets/staging.env` for staging and local development:
 
 ```sh
 CHECKR_API_KEY=your-checkr-secret-key

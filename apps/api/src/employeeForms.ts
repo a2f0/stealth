@@ -856,12 +856,18 @@ async function findPriorCheckrInvitation(
     context.env,
     candidateId,
   );
-  const active = invitations.data.filter(
-    (invitation) =>
+  const attemptAt = Date.parse(claim.checkr_start_nonce_at);
+  const active = invitations.data.filter((invitation) => {
+    const invitationAt = Date.parse(invitation.created_at ?? "");
+    return (
       !isExpiredCheckrStatus(invitation.status) &&
       (invitation.package === claim.checkr_start_package ||
-        invitation.package === undefined),
-  );
+        invitation.package === undefined) &&
+      (!Number.isFinite(invitationAt) ||
+        !Number.isFinite(attemptAt) ||
+        invitationAt >= attemptAt - 60_000)
+    );
+  });
   const matched = active.filter((invitation) =>
     invitation.tags?.includes(checkrAttemptTag(claim.checkr_start_nonce)),
   );
