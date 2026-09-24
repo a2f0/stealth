@@ -515,6 +515,7 @@ employeeForms.post("/:id/checkr/reconcile", async (context) => {
     !Number.isFinite(attemptAt) ||
     createdAt < attemptAt - 60_000 ||
     (Array.isArray(invitation.tags) &&
+      invitation.tags.length > 0 &&
       !invitation.tags.includes(checkrAttemptTag(row.checkr_start_nonce)))
   ) {
     return context.json(
@@ -869,7 +870,9 @@ async function findPriorCheckrInvitation(
   if (matched[0]) return matched[0];
   const ambiguous = active.some(
     (invitation) =>
-      invitation.package === undefined || !Array.isArray(invitation.tags),
+      invitation.package === undefined ||
+      !Array.isArray(invitation.tags) ||
+      invitation.tags.length === 0,
   );
   if (ambiguous) {
     const nonceStillIdempotent =

@@ -1236,7 +1236,7 @@ describe("employee forms", () => {
     }
   });
 
-  it("replays a recent idempotent start when invitation tags are omitted", async () => {
+  it("replays a recent idempotent start when invitation tags are empty", async () => {
     const fixture = await createFixture();
     fixture.bindings.CHECKR_API_KEY = "staging-key";
     fixture.bindings.CHECKR_BACKGROUND_PACKAGE = "background_package";
@@ -1274,6 +1274,7 @@ describe("employee forms", () => {
               package: "background_package",
               report_id: null,
               status: "pending",
+              tags: [],
             },
           ],
         });
@@ -1340,6 +1341,7 @@ describe("employee forms", () => {
         package: "background_package",
         report_id: null,
         status: "pending",
+        tags: [],
       })) as unknown as typeof fetch;
     try {
       const wrongCandidate = await fixture
