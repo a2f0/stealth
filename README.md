@@ -400,7 +400,7 @@ Run `bun run backup:shared-data` to archive `.secrets` and, when present,
 `.test_files` under `~/stealth-backups`. Pass an output directory as the first
 argument. In an interactive terminal, `zip` prompts for encryption; for an
 unattended backup, use `--password <password>` or `--no-password` explicitly.
-Without a terminal or a password option, the archive is unencrypted. The
+Without a terminal, a password option is required. The
 password option exposes the passphrase in the process list.
 
 Organization owners can soft-delete an organization from its general settings.
