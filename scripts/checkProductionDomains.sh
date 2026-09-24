@@ -7,10 +7,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./cloudflareEnv.sh
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/cloudflareEnv.sh"
-load_cloudflare_env
+if [[ "${DEPLOY_TIER:-prod}" == "staging" ]]; then
+  unset TF_VAR_cloudflare_api_token TF_VAR_cloudflare_account_id
+  source_env_file "$(get_repo_root)/.secrets/staging.env"
+  validate_cloudflare_env
+  export CLOUDFLARE_API_TOKEN="${TF_VAR_cloudflare_api_token:-}"
+  export CLOUDFLARE_ACCOUNT_ID="${TF_VAR_cloudflare_account_id:-}"
+else
+  load_cloudflare_env
+fi
 
 API_BASE="https://api.cloudflare.com/client/v4"
 ZONE_NAME="tearleads.de"
+DEPLOY_TIER="${DEPLOY_TIER:-prod}"
+if [[ "$DEPLOY_TIER" != "prod" && "$DEPLOY_TIER" != "staging" ]]; then
+  echo "ERROR: Unknown deployment tier: $DEPLOY_TIER" >&2
+  exit 1
+fi
 
 cloudflare_get() {
   curl -fsS "$1" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
@@ -71,6 +84,12 @@ check_hostname() {
   fi
 }
 
-check_hostname "tearleads.de" "tearleads-website"
-check_hostname "app.tearleads.de" "tearleads-client"
-check_hostname "api.tearleads.de" "tearleads-api"
+if [[ "$DEPLOY_TIER" == "staging" ]]; then
+  check_hostname "staging.tearleads.de" "tearleads-website-staging"
+  check_hostname "app-staging.tearleads.de" "tearleads-client-staging"
+  check_hostname "api-staging.tearleads.de" "tearleads-api-staging"
+else
+  check_hostname "tearleads.de" "tearleads-website"
+  check_hostname "app.tearleads.de" "tearleads-client"
+  check_hostname "api.tearleads.de" "tearleads-api"
+fi

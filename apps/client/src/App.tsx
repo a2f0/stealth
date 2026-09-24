@@ -41,6 +41,7 @@ import { SigningPage } from "./SigningPage";
 import { useOrganizationAccess } from "./useOrganizationAccess";
 import { hasRole, WorkspaceShell, type WorkspaceUser } from "./WorkspaceShell";
 import {
+  isBusinessesPath,
   isContractsPath,
   isEquipmentPath,
   signingTokenForPath,
@@ -527,7 +528,9 @@ function contentForPath(
   if (isFinancePath(pathname)) {
     return <Finance onNavigate={navigate} pathname={pathname} />;
   }
-  if (pathname === "/businesses") return <Businesses />;
+  if (isBusinessesPath(pathname)) {
+    return <Businesses onNavigate={navigate} pathname={pathname} />;
+  }
   if (isContractsPath(pathname)) {
     return <Contracts onNavigate={navigate} pathname={pathname} />;
   }
@@ -589,7 +592,7 @@ function activePageFor(pathname: string) {
     return "audits" as const;
   }
   if (isFinancePath(pathname)) return "finance" as const;
-  if (pathname === "/businesses") return "businesses" as const;
+  if (isBusinessesPath(pathname)) return "businesses" as const;
   if (isContractsPath(pathname)) return "contracts" as const;
   if (isEquipmentPath(pathname)) return "equipment" as const;
   if (pathname === "/inbox") return "inbox" as const;

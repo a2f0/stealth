@@ -41,6 +41,27 @@ export function equipmentIdForPath(pathname: string) {
   }
 }
 
+/** The business list, or one business. */
+export function businessPath(businessId?: string) {
+  return businessId
+    ? `/businesses/${encodeURIComponent(businessId)}`
+    : "/businesses";
+}
+
+export function isBusinessesPath(pathname: string) {
+  return pathname === "/businesses" || pathname.startsWith("/businesses/");
+}
+
+export function businessIdForPath(pathname: string) {
+  const segment = /^\/businesses\/([^/]+)\/?$/.exec(pathname)?.[1];
+  if (!segment) return undefined;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 /** The contract list, or one contract. */
 export function contractPath(contractId?: string) {
   return contractId

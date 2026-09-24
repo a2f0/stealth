@@ -40,6 +40,31 @@
   min-width: 0;
 }
 
+.businessSummaryLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.businessSummaryLink:hover .rowTitle,
+.businessSummaryLink:focus-visible .rowTitle {
+  text-decoration: underline;
+}
+
+.businessDetails {
+  display: grid;
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.businessDetails dt {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.businessDetails dd {
+  margin: var(--space-1) 0 0;
+}
+
 .businessMark {
   display: grid;
   width: 2.25rem;

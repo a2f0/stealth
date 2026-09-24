@@ -1,11 +1,13 @@
 .DS_Store
 .astro
 .secrets
+.test_files
 .env
 .env.*
 !.env.example
 .turbo
 .wrangler
+wrangler.staging.jsonc
 .terraform
 dist
 node_modules

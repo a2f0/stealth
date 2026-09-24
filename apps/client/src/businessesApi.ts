@@ -32,6 +32,10 @@ export function getBusinesses() {
   return request<BusinessListing>("");
 }
 
+export function getBusiness(id: string) {
+  return request<{ business: Business }>(`/${encodeURIComponent(id)}`);
+}
+
 export function createBusiness(input: BusinessInput) {
   return request<{ business: Business }>("", {
     body: JSON.stringify(input),

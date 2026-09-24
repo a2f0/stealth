@@ -43,6 +43,19 @@ businesses.get("/", async (context) => {
   });
 });
 
+businesses.get("/:id", async (context) => {
+  const business = await context.env.DB.prepare(
+    `SELECT id, name, ein, incorporation_date, street_address, city, state,
+            zip, created_at, updated_at
+     FROM businesses
+     WHERE id = ? AND organization_id = ?`,
+  )
+    .bind(context.req.param("id"), context.get("organizationId"))
+    .first<BusinessRow>();
+  if (!business) return context.json({ error: "Business not found." }, 404);
+  return context.json({ business: businessResponse(business) });
+});
+
 businesses.post("/", async (context) => {
   if (!canManage(context)) return managerRequired(context);
   const body: unknown = await context.req.json().catch(() => null);
