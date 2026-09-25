@@ -39,7 +39,7 @@ if [[ "$TARGET" == "--local" && -n "${TEARLEADS_WRANGLER_PERSIST_TO:-}" ]]; then
   wrangler_storage_args+=(--persist-to "$TEARLEADS_WRANGLER_PERSIST_TO")
 fi
 
-cd "$REPO_ROOT/apps/api"
+cd "$REPO_ROOT/packages/api"
 
 legacy_sql="
 SELECT 'upload' AS record_type, id AS record_id, organization_id,

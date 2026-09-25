@@ -9,7 +9,7 @@ trap 'rm -rf "$FIXTURE"' EXIT
 
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/terraform/scripts" \
   "$FIXTURE/terraform/stacks/staging" "$FIXTURE/.secrets" "$FIXTURE/bin" \
-  "$FIXTURE/apps/api" "$FIXTURE/apps/client" "$FIXTURE/apps/website"
+  "$FIXTURE/packages/api" "$FIXTURE/packages/client" "$FIXTURE/packages/website"
 cp "$REPO_ROOT/scripts/deployStaging.sh" "$REPO_ROOT/scripts/cloudflareEnv.sh" "$FIXTURE/scripts/"
 cp "$REPO_ROOT/scripts/createStagingConfigs.ts" "$FIXTURE/scripts/"
 cp "$REPO_ROOT/terraform/scripts/run.sh" "$FIXTURE/terraform/scripts/"
@@ -20,7 +20,7 @@ printf 'verify %s tier=%s token=%s\n' "${BASH_SOURCE[0]##*/}" "${DEPLOY_TIER:-}"
 EOF
 done
 for target in api client website; do
-  cp "$REPO_ROOT/apps/$target/wrangler.jsonc" "$FIXTURE/apps/$target/"
+  cp "$REPO_ROOT/packages/$target/wrangler.jsonc" "$FIXTURE/packages/$target/"
 done
 ln -s "$REPO_ROOT/node_modules" "$FIXTURE/node_modules"
 cat > "$FIXTURE/.secrets/staging.env" <<'EOF'
@@ -73,7 +73,7 @@ PATH="$FIXTURE/bin:$PATH" DRY_RUN=1 bash "$FIXTURE/scripts/deployStaging.sh" > "
   exit 1
 }
 for target in api client website; do
-  [[ "$(grep -cF "wrangler deploy --config $FIXTURE/apps/$target/wrangler.staging.jsonc --dry-run" "$MOCK_LOG" || true)" == 1 ]] || {
+  [[ "$(grep -cF "wrangler deploy --config $FIXTURE/packages/$target/wrangler.staging.jsonc --dry-run" "$MOCK_LOG" || true)" == 1 ]] || {
     echo "Missing $target staging dry-run deployment" >&2
     exit 1
   }
@@ -90,7 +90,7 @@ fi
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 const root = process.argv[1];
-const read = (app) => JSON.parse(readFileSync(join(root, "apps", app, "wrangler.staging.jsonc"), "utf8"));
+const read = (app) => JSON.parse(readFileSync(join(root, "packages", app, "wrangler.staging.jsonc"), "utf8"));
 const api = read("api");
 if (api.name !== "tearleads-api-staging") throw new Error("API Worker name is not staging");
 if (api.vars.BETTER_AUTH_URL !== "https://api-staging.tearleads.de") throw new Error("API URL is not staging");
@@ -107,14 +107,14 @@ if (read("website").name !== "tearleads-website-staging") throw new Error("Websi
 : > "$MOCK_LOG"
 PATH="$FIXTURE/bin:$PATH" DRY_RUN=0 AUTO_APPROVE=1 bash "$FIXTURE/scripts/deployStaging.sh" > "$FIXTURE/output.log"
 for target in api client website; do
-  [[ "$(grep -cF "wrangler deploy --config $FIXTURE/apps/$target/wrangler.staging.jsonc token=test-token account=test-account" "$MOCK_LOG" || true)" -eq 1 ]] || {
+  [[ "$(grep -cF "wrangler deploy --config $FIXTURE/packages/$target/wrangler.staging.jsonc token=test-token account=test-account" "$MOCK_LOG" || true)" -eq 1 ]] || {
     echo "Normal deployment did not target the $target staging Worker with staging credentials" >&2
     exit 1
   }
 done
-[[ "$(grep -cF "wrangler d1 migrations apply DB --remote --config $FIXTURE/apps/api/wrangler.staging.jsonc token=test-token account=test-account" "$MOCK_LOG" || true)" -eq 1 ]]
+[[ "$(grep -cF "wrangler d1 migrations apply DB --remote --config $FIXTURE/packages/api/wrangler.staging.jsonc token=test-token account=test-account" "$MOCK_LOG" || true)" -eq 1 ]]
 for secret_name in BETTER_AUTH_SECRET PLAID_CLIENT_ID PLAID_SECRET PLAID_TOKEN_ENCRYPTION_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
-  [[ "$(grep -cF "wrangler secret put $secret_name --config $FIXTURE/apps/api/wrangler.staging.jsonc token=test-token account=test-account" "$MOCK_LOG" || true)" -eq 1 ]] || {
+  [[ "$(grep -cF "wrangler secret put $secret_name --config $FIXTURE/packages/api/wrangler.staging.jsonc token=test-token account=test-account" "$MOCK_LOG" || true)" -eq 1 ]] || {
     echo "Normal deployment did not upload $secret_name to the staging API" >&2
     exit 1
   }

@@ -55,7 +55,7 @@ if [[ -f "$REPO_ROOT/.secrets/staging.env" ]]; then
   )
 fi
 
-cd "$REPO_ROOT/apps/api"
+cd "$REPO_ROOT/packages/api"
 bunx wrangler dev \
   --env-file "$auth_env_file" \
   --var "CHECKR_ENV:staging" \

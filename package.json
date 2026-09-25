@@ -46,7 +46,6 @@
     "test:staging": "bash scripts/checks/testDeployStaging.sh"
   },
   "workspaces": [
-    "apps/*",
     "packages/*"
   ],
   "lint-staged": {

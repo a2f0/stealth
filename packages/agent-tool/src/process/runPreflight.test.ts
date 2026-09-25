@@ -45,7 +45,7 @@ function assertExternalServerReachable(host: string, port: number) {
 }
 
 /**
- * A Bun-style workspace: apps/web links @scope/lib to packages/lib and an
+ * A Bun-style workspace: packages/web links @scope/lib to packages/lib and an
  * installed @scope/dep into the root store.
  */
 function createWorkspaceFixture(repositoryRoot: string) {
@@ -53,7 +53,7 @@ function createWorkspaceFixture(repositoryRoot: string) {
   const store = path.join(repositoryRoot, "node_modules", ".store", "dep");
   const scope = path.join(
     repositoryRoot,
-    "apps",
+    "packages",
     "web",
     "node_modules",
     "@scope",
@@ -167,7 +167,7 @@ test("preflight denies external network, Git writes, and dependency poisoning", 
     "/private/tmp/preflight-home/checkout",
     "/private/tmp/preflight-home",
     [runtime],
-    ["/Users/example/repo/apps/api/node_modules"],
+    ["/Users/example/repo/packages/api/node_modules"],
     ["/Users/example/repo"],
   );
 
@@ -188,10 +188,10 @@ test("preflight denies external network, Git writes, and dependency poisoning", 
   expect(profile).not.toContain("(remote ip");
   expect(profile).toContain("(allow file-read-metadata)");
   expect(profile).toContain(
-    '(deny file-write* (subpath "/private/tmp/preflight-home/checkout/.git") (subpath "/Users/example/repo/apps/api/node_modules") (subpath "/Users/example/repo"))',
+    '(deny file-write* (subpath "/private/tmp/preflight-home/checkout/.git") (subpath "/Users/example/repo/packages/api/node_modules") (subpath "/Users/example/repo"))',
   );
   expect(profile).toContain(
-    '(subpath "/Users/example/repo/apps/api/node_modules")',
+    '(subpath "/Users/example/repo/packages/api/node_modules")',
   );
   expect(profile).toContain('(subpath "/private/tmp/preflight-home")');
   expect(profile).not.toContain('(subpath "/Users/example")');
@@ -227,7 +227,7 @@ test.skipIf(
     const rootDependencies = path.join(repositoryRoot, "node_modules");
     const nestedDependencies = path.join(
       repositoryRoot,
-      "apps",
+      "packages",
       "api",
       "node_modules",
     );
@@ -391,7 +391,7 @@ test("preflight mounts workspace links to the snapshot copy", () => {
     );
     const mountedScope = path.join(
       checkoutRoot,
-      "apps",
+      "packages",
       "web",
       "node_modules",
       "@scope",
@@ -407,7 +407,9 @@ test("preflight mounts workspace links to the snapshot copy", () => {
       realpathSync(path.join(repositoryRoot, "packages", "gone")),
     );
     expect(readonlyPaths).toContain(
-      realpathSync(path.join(repositoryRoot, "apps", "web", "node_modules")),
+      realpathSync(
+        path.join(repositoryRoot, "packages", "web", "node_modules"),
+      ),
     );
     expect(readonlyPaths).toContain(
       realpathSync(path.join(repositoryRoot, "node_modules")),
@@ -435,11 +437,11 @@ test.skipIf(
         `${JSON.stringify({
           name: "preflight-workspace-test",
           private: true,
-          scripts: { imports: "bun apps/web/imports.ts" },
+          scripts: { imports: "bun packages/web/imports.ts" },
         })}\n`,
       );
       writeFileSync(
-        path.join(repositoryRoot, "apps", "web", "imports.ts"),
+        path.join(repositoryRoot, "packages", "web", "imports.ts"),
         `import { writeFileSync } from "node:fs";\n` +
           `import { dependency } from "@scope/dep";\n` +
           `import { library } from "@scope/lib";\n` +
