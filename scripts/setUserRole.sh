@@ -33,7 +33,7 @@ fi
 escaped_email="${EMAIL//\'/\'\'}"
 sql="UPDATE \"user\" SET \"role\" = '$ROLE' WHERE \"email\" = '$escaped_email' RETURNING \"email\", \"role\";"
 
-cd "$REPO_ROOT/apps/api"
+cd "$REPO_ROOT/packages/api"
 result="$(
   bunx wrangler d1 execute DB "$TARGET" --json --command "$sql"
 )"

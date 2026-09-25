@@ -50,7 +50,7 @@
   },
   "overrides": [
     {
-      "includes": ["apps/client/src/**/*.tsx"],
+      "includes": ["packages/client/src/**/*.tsx"],
       "linter": {
         "rules": {
           "complexity": {
@@ -65,7 +65,7 @@
       }
     },
     {
-      "includes": ["apps/website/src/**/*.astro"],
+      "includes": ["packages/website/src/**/*.astro"],
       "linter": {
         "rules": {
           "correctness": {

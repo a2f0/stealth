@@ -15,12 +15,12 @@ export VITE_WEBSITE_URL="${VITE_WEBSITE_URL:-https://tearleads.de}"
 
 echo "Building app with API URL $VITE_API_URL and website URL $VITE_WEBSITE_URL..."
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
-  bun run --cwd "$REPO_ROOT/apps/client" build
+  bun run --cwd "$REPO_ROOT/packages/client" build
   bunx wrangler deploy \
-    --config "$REPO_ROOT/apps/client/wrangler.jsonc" \
+    --config "$REPO_ROOT/packages/client/wrangler.jsonc" \
     --dry-run
   exit 0
 fi
 
 echo "Deploying app Worker..."
-bun run --cwd "$REPO_ROOT/apps/client" deploy
+bun run --cwd "$REPO_ROOT/packages/client" deploy

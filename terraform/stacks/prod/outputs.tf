@@ -4,7 +4,7 @@ output "zone_id" {
 }
 
 output "d1_database_id" {
-  description = "D1 database ID to place in apps/api/wrangler.jsonc."
+  description = "D1 database ID to place in packages/api/wrangler.jsonc."
   value       = cloudflare_d1_database.main.id
 }
 

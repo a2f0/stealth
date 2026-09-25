@@ -1,17 +1,20 @@
 # Tearleads
 
-A small Bun monorepo for a Cloudflare-native product:
+A small Bun monorepo for a Cloudflare-native product. Every workspace lives
+under `packages/`:
 
-- `apps/api` — Hono API on Cloudflare Workers, with D1 and R2 bindings.
-- `apps/client` — React and Vite application.
-- `apps/website` — static Astro marketing site.
+- `packages/agent-tool` — repository automation shared by the agent workflows.
+- `packages/api` — Hono API on Cloudflare Workers, with D1 and R2 bindings.
+- `packages/client` — React and Vite application.
 - `packages/ui` — the shared design system (tokens, component styles, React
   primitives, icons, and pricing copy) used by the client and the website.
-- `terraform` — D1, R2, and `tearleads.de` Worker-domain infrastructure.
+- `packages/website` — static Astro marketing site.
+
+Infrastructure lives outside the workspaces in `terraform` (D1, R2, and
+`tearleads.de` Worker-domain infrastructure).
 
 The tooling follows the useful core of Tearleads (Bun, Turborepo, TypeScript,
-and Biome) without carrying over its mature product architecture. Repository
-automation shared by the agent workflows lives in `packages/agent-tool`.
+and Biome) without carrying over its mature product architecture.
 
 ## Start locally
 
@@ -21,7 +24,7 @@ account when you are ready to provision remote resources.
 ```sh
 bun install
 bun run hooks:install
-bun run --cwd apps/api db:migrate:local
+bun run --cwd packages/api db:migrate:local
 bun run dev
 ```
 
@@ -32,8 +35,8 @@ Local services use these addresses:
 - Website: <http://localhost:4321>
 
 Wrangler persists the local D1 database and R2 bucket under
-`apps/api/.wrangler/`. The client defaults to the local API. Override it by
-copying `apps/client/.env.example` to `apps/client/.env`.
+`packages/api/.wrangler/`. The client defaults to the local API. Override it by
+copying `packages/client/.env.example` to `packages/client/.env`.
 
 ## Authentication
 
@@ -313,7 +316,7 @@ entitlements. Local development overrides the production IDs in Wrangler with
 these values, so test-mode keys must be paired with test-mode IDs. The public
 Stripe webhook URL is
 `https://api.tearleads.de/api/billing/webhook`. The non-secret Pro price and
-optional Billing Portal configuration IDs belong in `apps/api/wrangler.jsonc`;
+optional Billing Portal configuration IDs belong in `packages/api/wrangler.jsonc`;
 the API deployment script uploads the two secret values as encrypted Worker
 secrets and requires a live-mode API key for production.
 

@@ -10,7 +10,7 @@ const required = (name: string) => {
 };
 
 async function config(app: string): Promise<Record<string, unknown>> {
-  const source = resolve(root, "apps", app, "wrangler.jsonc");
+  const source = resolve(root, "packages", app, "wrangler.jsonc");
   const parsed = ts.parseConfigFileTextToJson(
     source,
     await readFile(source, "utf8"),
@@ -22,7 +22,7 @@ async function config(app: string): Promise<Record<string, unknown>> {
 }
 
 async function save(app: string, value: Record<string, unknown>) {
-  const path = resolve(root, "apps", app, "wrangler.staging.jsonc");
+  const path = resolve(root, "packages", app, "wrangler.staging.jsonc");
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   console.log(`Created ${path}`);
 }

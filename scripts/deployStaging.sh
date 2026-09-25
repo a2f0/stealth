@@ -55,9 +55,9 @@ bun run check
 bun run test
 bun scripts/createStagingConfigs.ts
 
-api_config="$REPO_ROOT/apps/api/wrangler.staging.jsonc"
-client_config="$REPO_ROOT/apps/client/wrangler.staging.jsonc"
-website_config="$REPO_ROOT/apps/website/wrangler.staging.jsonc"
+api_config="$REPO_ROOT/packages/api/wrangler.staging.jsonc"
+client_config="$REPO_ROOT/packages/client/wrangler.staging.jsonc"
+website_config="$REPO_ROOT/packages/website/wrangler.staging.jsonc"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   bunx wrangler deploy --config "$api_config" --dry-run
@@ -81,9 +81,9 @@ fi
 
 VITE_API_URL="https://api-staging.tearleads.de" \
   VITE_WEBSITE_URL="https://staging.tearleads.de" \
-  bun run --cwd "$REPO_ROOT/apps/client" build
+  bun run --cwd "$REPO_ROOT/packages/client" build
 PUBLIC_APP_URL="https://app-staging.tearleads.de" \
-  bun run --cwd "$REPO_ROOT/apps/website" build
+  bun run --cwd "$REPO_ROOT/packages/website" build
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   bunx wrangler deploy --config "$client_config" --dry-run

@@ -513,10 +513,8 @@ export function mountPreflightDependencies(
   };
   const nodeModules = [
     path.join(repositoryRoot, "node_modules"),
-    ...["apps", "packages"].flatMap((directory) =>
-      childDirectories(path.join(repositoryRoot, directory)).map((child) =>
-        path.join(child, "node_modules"),
-      ),
+    ...childDirectories(path.join(repositoryRoot, "packages")).map((child) =>
+      path.join(child, "node_modules"),
     ),
   ];
   const readonlyPaths: string[] = [];

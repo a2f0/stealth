@@ -38,7 +38,7 @@ if [[ "$TARGET" == "--local" && -n "${TEARLEADS_WRANGLER_PERSIST_TO:-}" ]]; then
   wrangler_storage_args+=(--persist-to "$TEARLEADS_WRANGLER_PERSIST_TO")
 fi
 
-cd "$REPO_ROOT/apps/api"
+cd "$REPO_ROOT/packages/api"
 
 eligible_sql='SELECT id, organization_id, deleted_at FROM inbound_emails WHERE deleted_at IS NOT NULL AND datetime(deleted_at) <= datetime('"'"'now'"'"', '"'"'-30 days'"'"') ORDER BY deleted_at ASC, id ASC;'
 eligible_json="$(

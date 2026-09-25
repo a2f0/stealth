@@ -6,12 +6,10 @@ ignore:
   - .git
   - "**/.*"
   - node_modules
-  - apps/*/node_modules
   - packages/*/node_modules
   - dist
-  - apps/*/dist
+  - packages/*/dist
   - .turbo
-  - apps/*/.turbo
   - packages/*/.turbo
-  - apps/*/.astro
-  - apps/*/.wrangler
+  - packages/*/.astro
+  - packages/*/.wrangler

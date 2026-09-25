@@ -21,25 +21,25 @@ const baseConfig = {
   treatConfigHintsAsErrors: true,
   workspaces: {
     ".": rootToolingWorkspace,
-    "apps/api": {
-      entry: ["src/**/*.test.ts"],
-      project: ["src/**/*.ts"],
-    },
-    "apps/client": {
-      entry: [],
-      project: ["src/**/*.{css,ts,tsx}"],
-    },
-    "apps/website": {
-      entry: ["src/pages/**/*.astro"],
-      project: ["src/**/*.{astro,ts}"],
-    },
     "packages/agent-tool": {
       entry: ["src/index.ts", "src/**/*.test.ts"],
       project: ["src/**/*.ts"],
     },
+    "packages/api": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts"],
+    },
+    "packages/client": {
+      entry: [],
+      project: ["src/**/*.{css,ts,tsx}"],
+    },
     "packages/ui": {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.{css,ts,tsx}"],
+    },
+    "packages/website": {
+      entry: ["src/pages/**/*.astro"],
+      project: ["src/**/*.{astro,ts}"],
     },
   },
 } satisfies KnipConfig;
@@ -49,26 +49,26 @@ const productionConfig = {
   treatConfigHintsAsErrors: true,
   workspaces: {
     ".": rootToolingWorkspace,
-    "apps/api": {
+    "packages/agent-tool": {
+      entry: ["src/index.ts!"],
+      project: [],
+    },
+    "packages/api": {
       entry: ["src/**/*.ts!", "!src/**/*.test.ts"],
       project: [],
     },
-    "apps/client": {
+    "packages/client": {
       entry: ["src/**/*.{ts,tsx}!"],
-      project: [],
-    },
-    "apps/website": {
-      entry: ["astro.config.ts!", "src/**/*.{astro,ts}!"],
-      project: [],
-    },
-    "packages/agent-tool": {
-      entry: ["src/index.ts!"],
       project: [],
     },
     // Production mode does not follow CSS @import chains, so the partials
     // that import the font packages are listed as entries themselves.
     "packages/ui": {
       entry: ["src/styles/*.css!"],
+      project: [],
+    },
+    "packages/website": {
+      entry: ["astro.config.ts!", "src/**/*.{astro,ts}!"],
       project: [],
     },
   },
