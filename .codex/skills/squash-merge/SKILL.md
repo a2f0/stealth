@@ -75,7 +75,7 @@ done
 }
 
 resolve_bootstrap_tool() {
-  tool_name=$1
+  tool_name=${1}
   candidate=$(command -v "$tool_name") || {
     echo "Error: $tool_name is unavailable" >&2
     return 1
@@ -118,7 +118,7 @@ FEATURE_REMOTE_URL=$(git remote get-url --push "$FEATURE_REMOTE") || { echo "Err
 FEATURE_REPO=$(gh repo view "$FEATURE_REMOTE_URL" --json nameWithOwner -q .nameWithOwner) || { echo "Error: could not resolve GitHub repository for $FEATURE_REMOTE" >&2; exit 1; }
 FEATURE_REPO_URL=$(gh repo view "$FEATURE_REPO" --json url -q .url) || { echo "Error: could not resolve HTTPS URL for $FEATURE_REPO" >&2; exit 1; }
 PR_LINES=$(gh pr list --head "$BRANCH" --state open --json number,headRepository --template '{{range .}}{{.number}} {{.headRepository.nameWithOwner}}{{"\n"}}{{end}}' -R "$REPO") || { echo "Error: could not list PRs for $BRANCH" >&2; exit 1; }
-PR_NUMBER=$(printf '%s\n' "$PR_LINES" | awk -v repository="$FEATURE_REPO" '$2 == repository { print $1 }')
+PR_NUMBER=$(printf '%s\n' "$PR_LINES" | awk -v repository="$FEATURE_REPO" '$(2) == repository { print $(1) }')
 [ "$(printf '%s\n' "$PR_NUMBER" | awk 'NF { count++ } END { print count + 0 }')" -eq 1 ] || { echo "Error: expected exactly one open PR from $FEATURE_REPO for branch $BRANCH" >&2; exit 1; }
 PR_HEAD_REPO=$(gh pr view "$PR_NUMBER" --json headRepository -q .headRepository.nameWithOwner -R "$REPO")
 [ "$PR_HEAD_REPO" = "$FEATURE_REPO" ] || { echo "Error: PR head repository does not match $FEATURE_REMOTE" >&2; exit 1; }
@@ -268,7 +268,7 @@ as-is.
    git merge-base --is-ancestor "$MERGE_COMMIT" HEAD || { echo "Error: $BASE_BRANCH does not contain merge commit $MERGE_COMMIT; skipping delete" >&2; exit 1; }
 
    REMOTE_BRANCH_LINES=$(git -c credential.helper= -c 'credential.helper=!gh auth git-credential' ls-remote --heads "$FEATURE_REPO_URL" "$MERGED_BRANCH") || { echo "Error: could not inspect $FEATURE_REMOTE/$MERGED_BRANCH; refusing branch deletion" >&2; exit 1; }
-   REMOTE_BRANCH_SHA=$(printf '%s\n' "$REMOTE_BRANCH_LINES" | awk 'NR == 1 { print $1 }')
+   REMOTE_BRANCH_SHA=$(printf '%s\n' "$REMOTE_BRANCH_LINES" | awk 'NR == 1 { print $(1) }')
    if [ -n "$REMOTE_BRANCH_SHA" ]; then
      [ "$REMOTE_BRANCH_SHA" = "$PR_HEAD_SHA" ] || [ "$REMOTE_BRANCH_SHA" = "$MERGE_COMMIT" ] || { echo "Error: $FEATURE_REMOTE/$MERGED_BRANCH moved to $REMOTE_BRANCH_SHA after merge; refusing remote delete" >&2; exit 1; }
      git -c core.hooksPath=/dev/null -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --no-verify --force-with-lease="refs/heads/$MERGED_BRANCH:$REMOTE_BRANCH_SHA" "$FEATURE_REPO_URL" ":refs/heads/$MERGED_BRANCH" || { echo "Error: could not lease-delete $FEATURE_REMOTE/$MERGED_BRANCH" >&2; exit 1; }

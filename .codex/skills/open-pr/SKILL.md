@@ -62,7 +62,7 @@ done
 }
 
 resolve_bootstrap_tool() {
-  tool_name=$1
+  tool_name=${1}
   candidate=$(command -v "$tool_name") || {
     echo "Error: $tool_name is unavailable" >&2
     return 1
@@ -96,7 +96,7 @@ BASE_URL=$(gh repo view "$REPO" --json url -q .url)
 [ -n "$BASE_URL" ] || { echo "Error: repository fetch URL is unavailable" >&2; exit 1; }
 
 resolve_push_remote() {
-  branch_name=$1
+  branch_name=${1}
   for key in "branch.$branch_name.pushRemote" remote.pushDefault \
     "branch.$branch_name.remote"; do
     remote_name=$(git config --get "$key" || true)
@@ -156,7 +156,7 @@ verify_commit_trust() {
   elif [ -n "${TEARLEADS_COMMIT_TRUST_SCRIPT:-}" ]; then
     trust_script=$("$REALPATH_BIN" "$TEARLEADS_COMMIT_TRUST_SCRIPT") || { rm -rf "$trust_dir"; return 1; }
     # Outside every worktree of this repository, not just the current one.
-    if git worktree list --porcelain | awk -v script="$trust_script" 'sub(/^worktree /, "") && (script == $0 || index(script, $0 "/") == 1) { found = 1 } END { exit !found }'; then
+    if git worktree list --porcelain | awk -v script="$trust_script" 'sub(/^worktree /, "") && (script == $(0) || index(script, $(0) "/") == 1) { found = 1 } END { exit !found }'; then
       echo "Error: trusted commit-trust check must be outside every checkout of this repository" >&2
       rm -rf "$trust_dir"
       return 1
@@ -277,7 +277,7 @@ verify_commit_trust() {
        }
        STASH_REF=$(
          git stash list --format='%gd %H' |
-           awk -v stash_oid="$STASH_OID" '$2 == stash_oid { print $1; exit }'
+           awk -v stash_oid="$STASH_OID" '$(2) == stash_oid { print $(1); exit }'
        )
        [ -n "$STASH_REF" ] || {
          echo "Error: restored stash OID is no longer in the stash list" >&2

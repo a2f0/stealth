@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { TrustedExecutable } from "../review/trustedExecutable";
@@ -386,6 +392,32 @@ test("shipping skills share one commit-trust gate and avoid zsh modifiers", () =
     }
   }
   expect(gates.size).toBe(1);
+});
+
+test("skills survive Claude Code argument substitution", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  // Invoking a skill with arguments rewrites every bare `$<digit>` and
+  // `$ARGUMENTS` in its SKILL.md, shell and awk snippets included, so
+  // `tool_name=$1` would run as `tool_name=<second argument>`. Braced shell
+  // parameters (`${1}`) and parenthesized awk fields (`$(1)`) are left alone.
+  const substituted = /\$ARGUMENTS|\$\d+(?!\w)/g;
+  for (const skillRoot of [".claude/skills", ".codex/skills"]) {
+    const skills = readdirSync(path.join(repositoryRoot, skillRoot), {
+      withFileTypes: true,
+    }).filter((entry) => entry.isDirectory());
+    expect(skills.length).toBeGreaterThan(0);
+    for (const skill of skills) {
+      const skillPath = path.join(skillRoot, skill.name, "SKILL.md");
+      const content = readFileSync(
+        path.join(repositoryRoot, skillPath),
+        "utf8",
+      );
+      expect({ skillPath, matches: content.match(substituted) ?? [] }).toEqual({
+        skillPath,
+        matches: [],
+      });
+    }
+  }
 });
 
 test("reset reaches the exact fetched upstream before installing hooks", () => {

@@ -74,7 +74,7 @@ done
 }
 
 resolve_bootstrap_tool() {
-  tool_name=$1
+  tool_name=${1}
   candidate=$(command -v "$tool_name") || {
     echo "Error: $tool_name is unavailable" >&2
     return 1
