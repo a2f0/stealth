@@ -222,7 +222,7 @@ interface OverviewHandlers {
   onSync: (id: string) => Promise<void>;
 }
 
-function FinanceView({
+export function FinanceView({
   data,
   error,
   notice,
@@ -251,6 +251,7 @@ function FinanceView({
           error={error}
           notice={notice}
           overview={page === "overview"}
+          showDataNotice={data?.accounts.length === 0}
           unconfigured={unconfigured}
         />
         {page === "reports" && (
@@ -372,21 +373,24 @@ function FinanceNotices({
   error,
   notice,
   overview,
+  showDataNotice,
   unconfigured,
 }: {
   error: string | undefined;
   notice: string | undefined;
   /** Setup and data-handling notices belong with the connections. */
   overview: boolean;
+  showDataNotice: boolean;
   unconfigured: boolean;
 }) {
-  if (!error && !notice && !overview) return null;
+  if (!error && !notice && !(overview && (unconfigured || showDataNotice)))
+    return null;
   return (
     <div className="stack stackMd">
       {error && <Banner tone="danger">{error}</Banner>}
       {notice && <Banner tone="success">{notice}</Banner>}
       {overview && unconfigured && <FinanceSetupNotice />}
-      {overview && <FinanceDataNotice />}
+      {overview && showDataNotice && <FinanceDataNotice />}
     </div>
   );
 }
