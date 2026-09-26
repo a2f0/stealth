@@ -264,7 +264,7 @@ function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
       page: "finance",
     });
   }
-  const manage: NavigationItem[] = [
+  const admin: NavigationItem[] = [
     {
       href: "/organization",
       icon: "organization",
@@ -272,19 +272,20 @@ function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
       page: "organization",
     },
   ];
-  if (isAdmin) {
-    manage.push({
-      href: "/admin",
-      icon: "shield",
-      label: "Users",
-      page: "admin",
-    });
-  }
-  return [
+  const groups = [
     { items: workspace, label: undefined },
     { items: records, label: "Records" },
-    { items: manage, label: "Root Admin" },
+    { items: admin, label: "Admin" },
   ];
+  if (isAdmin) {
+    groups.push({
+      items: [
+        { href: "/admin", icon: "shield", label: "Users", page: "admin" },
+      ],
+      label: "Root Admin",
+    });
+  }
+  return groups;
 }
 
 function OrganizationSwitcher({
