@@ -6,6 +6,7 @@ import {
   canManageOrganization,
   createOrganizationSlug,
   editableOrganizationRoles,
+  isRootAdminPath,
   organizationPathRequiresAccess,
   organizationRoleValue,
   organizationSettingsPage,
@@ -63,9 +64,18 @@ describe("organization state", () => {
     ]) {
       expect(organizationPathRequiresAccess(path)).toBeTrue();
     }
-    for (const path of ["/account/security", "/admin", "/invite"]) {
+    for (const path of [
+      "/account/security",
+      "/root/users",
+      "/root/organizations",
+      "/invite",
+    ]) {
       expect(organizationPathRequiresAccess(path)).toBeFalse();
     }
+    expect(organizationPathRequiresAccess("/admin")).toBeTrue();
+    expect(isRootAdminPath("/root/users")).toBeTrue();
+    expect(isRootAdminPath("/root/organizations")).toBeTrue();
+    expect(isRootAdminPath("/admin")).toBeFalse();
   });
 
   it("only lets organization managers invite members", () => {

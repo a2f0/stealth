@@ -9,6 +9,7 @@ import {
 } from "@tearleads/ui/react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AccountSettings } from "./AccountSettings";
+import { AdminOrganizations } from "./AdminOrganizations";
 import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
 import { type AuthenticationAction, AuthPage } from "./AuthPage";
@@ -33,6 +34,7 @@ import { getWorkspaceOrganizations } from "./organizationSettingsApi";
 import {
   createOrganizationSlug,
   isOrganizationPath,
+  isRootAdminPath,
   organizationPathRequiresAccess,
   resolveActiveOrganizationId,
   type WorkspaceOrganization,
@@ -328,7 +330,7 @@ function blockedWorkspaceContent(
   workspace: ReturnType<typeof useWorkspaceOrganizations>,
 ) {
   if (workspace.isPending) return <LoadingScreen />;
-  if (pathname === "/admin" && !hasRole(session.user.role, "admin")) {
+  if (isRootAdminPath(pathname) && !hasRole(session.user.role, "admin")) {
     return <AdminAccessDenied onNavigate={() => navigate("/")} />;
   }
   if (organizationPathRequiresAccess(pathname) && access.isPending) {
@@ -542,7 +544,8 @@ function contentForPath(
       <Inbox canAccessFinance={access.can("finance")} onNavigate={navigate} />
     );
   }
-  if (pathname === "/admin") return <AdminUsers />;
+  if (pathname === "/root/users") return <AdminUsers />;
+  if (pathname === "/root/organizations") return <AdminOrganizations />;
   if (pathname === "/account" || pathname === "/account/security") {
     return (
       <AccountSettings
@@ -596,7 +599,8 @@ function activePageFor(pathname: string) {
   if (isContractsPath(pathname)) return "contracts" as const;
   if (isEquipmentPath(pathname)) return "equipment" as const;
   if (pathname === "/inbox") return "inbox" as const;
-  if (pathname === "/admin") return "admin" as const;
+  if (pathname === "/root/users") return "rootUsers" as const;
+  if (pathname === "/root/organizations") return "rootOrganizations" as const;
   if (pathname === "/account" || pathname === "/account/security") {
     return "account" as const;
   }
