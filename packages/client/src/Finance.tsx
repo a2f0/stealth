@@ -222,7 +222,7 @@ interface OverviewHandlers {
   onSync: (id: string) => Promise<void>;
 }
 
-function FinanceView({
+export function FinanceView({
   data,
   error,
   notice,
