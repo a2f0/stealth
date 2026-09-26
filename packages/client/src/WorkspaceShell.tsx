@@ -23,7 +23,6 @@ export interface WorkspaceUser {
 }
 
 type WorkspacePage =
-  | "admin"
   | "account"
   | "audits"
   | "businesses"
@@ -32,7 +31,9 @@ type WorkspacePage =
   | "finance"
   | "inbox"
   | "library"
-  | "organization";
+  | "organization"
+  | "rootOrganizations"
+  | "rootUsers";
 
 interface WorkspaceShellProps {
   accountLoadError: string | undefined;
@@ -280,7 +281,18 @@ function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
   if (isAdmin) {
     groups.push({
       items: [
-        { href: "/admin", icon: "shield", label: "Users", page: "admin" },
+        {
+          href: "/root/users",
+          icon: "shield",
+          label: "Users",
+          page: "rootUsers",
+        },
+        {
+          href: "/root/organizations",
+          icon: "organization",
+          label: "Organizations",
+          page: "rootOrganizations",
+        },
       ],
       label: "Root Admin",
     });

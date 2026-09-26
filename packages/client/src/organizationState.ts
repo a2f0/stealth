@@ -9,9 +9,14 @@ export function isOrganizationPath(pathname: string) {
   return pathname === "/organization" || pathname.startsWith("/organization/");
 }
 
+export function isRootAdminPath(pathname: string) {
+  return pathname === "/root/users" || pathname === "/root/organizations";
+}
+
 export function organizationPathRequiresAccess(pathname: string) {
-  return !["/account", "/account/security", "/admin", "/invite"].includes(
-    pathname,
+  return (
+    !["/account", "/account/security", "/invite"].includes(pathname) &&
+    !isRootAdminPath(pathname)
   );
 }
 

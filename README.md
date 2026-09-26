@@ -73,12 +73,12 @@ D1 with new R2 objects stored below an organization-specific prefix.
 Registration sends a
 one-hour verification link, but unverified users can sign in immediately. The
 library displays a reminder with a resend action until the address is verified.
-Admins can list registered accounts at `/admin` and view the shared inbound
-mailbox at `/inbox`. Each account receives a default organization at signup;
-existing accounts are backfilled by the organization migration. Users can
-rename their organization at `/organization`, and admins can inspect all
-organizations on the `/admin` page. The API independently enforces the admin
-role for administrative data.
+Root admins can list registered accounts at `/root/users` and inspect all
+organizations at `/root/organizations`. The shared inbound mailbox is at
+`/inbox`. Each account receives a default organization at signup; existing
+accounts are backfilled by the organization migration. Organization owners and
+administrators can rename their organization at `/organization`. The API
+independently enforces the platform `admin` role for administrative data.
 
 Organization owners and organization admins can manage groups and group
 members at `/organization`. Groups use Better Auth teams underneath and can
