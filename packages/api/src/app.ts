@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { accountSettings } from "./accountSettings";
+import { adminJobs } from "./adminJobs";
 import { adminOrganizations } from "./adminOrganizations";
 import { audits } from "./audits";
 import { createAuth } from "./auth";
@@ -25,6 +26,7 @@ import { organizationGroups, requireCapability } from "./organizationGroups";
 import { organizationSettings } from "./organizationSettings";
 import { signing } from "./signing";
 import type { Bindings } from "./types";
+import { userDeletion } from "./userDeletion";
 
 const app = new Hono<{
   Bindings: Bindings;
@@ -84,6 +86,7 @@ app.get("/health", (context) =>
 app.get("/api", (context) =>
   context.json({
     endpoints: {
+      adminJobs: "/api/admin/jobs",
       adminOrganizations: "/api/admin/organizations",
       accountSettings: "/api/account-settings",
       audits: "/api/audits",
@@ -115,6 +118,11 @@ app.get("/api/admin", requireAuth, requireRole("admin"), (context) =>
 
 app.use("/api/account-settings/*", requireAuth);
 app.route("/api/account-settings", accountSettings);
+app.route("/api/account-settings/deletion", userDeletion);
+
+app.use("/api/admin/jobs", requireAuth);
+app.use("/api/admin/jobs/*", requireAuth);
+app.route("/api/admin/jobs", adminJobs);
 
 app.use("/api/admin/organizations", requireAuth, requireRole("admin"));
 app.use("/api/admin/organizations/*", requireAuth, requireRole("admin"));

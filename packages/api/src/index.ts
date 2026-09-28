@@ -1,64 +1,18 @@
 import { app } from "./app";
-import { purgePendingAuditIssueImages } from "./auditIssueImages";
-import {
-  purgeStripeWebhookReceipts,
-  reconcileSubscriptionSeats,
-} from "./billing";
-import { purgeExpiredFreeAuditRuns } from "./billingRetention";
-import { maintainContracts } from "./contractReminders";
-import { purgeDeletedObjects } from "./deletedObjectCleanup";
 import { handleEmail } from "./email";
+import { maintenanceTasks, runScheduledMaintenance } from "./maintenance";
 import type { Bindings } from "./types";
 
 export default {
   email: handleEmail,
   fetch: app.fetch,
-  scheduled: (_controller, environment, context) => {
+  scheduled: (controller, environment, context) => {
     context.waitUntil(
-      runScheduledMaintenance({
-        purgeDeletedObjects: () => purgeDeletedObjects(environment),
-        purgeExpiredFreeAuditRuns: () => purgeExpiredFreeAuditRuns(environment),
-        purgePendingAuditIssueImages: () =>
-          purgePendingAuditIssueImages(environment),
-        purgeStripeWebhookReceipts: () =>
-          purgeStripeWebhookReceipts(environment),
-        reconcileSubscriptionSeats: () =>
-          reconcileSubscriptionSeats(environment),
-        maintainContracts: () => maintainContracts(environment),
+      runScheduledMaintenance(maintenanceTasks(environment), {
+        trigger: "scheduled",
+        cron: controller.cron,
+        scheduledTime: controller.scheduledTime,
       }),
     );
   },
 } satisfies ExportedHandler<Bindings>;
-
-interface ScheduledMaintenanceTasks {
-  purgeDeletedObjects: () => Promise<unknown>;
-  purgeExpiredFreeAuditRuns: () => Promise<unknown>;
-  purgePendingAuditIssueImages: () => Promise<unknown>;
-  purgeStripeWebhookReceipts: () => Promise<unknown>;
-  reconcileSubscriptionSeats: () => Promise<unknown>;
-  maintainContracts: () => Promise<unknown>;
-}
-
-export async function runScheduledMaintenance(
-  tasks: ScheduledMaintenanceTasks,
-) {
-  const failures: unknown[] = [];
-  try {
-    await tasks.purgeExpiredFreeAuditRuns();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  const results = await Promise.allSettled([
-    tasks.purgeDeletedObjects(),
-    tasks.purgePendingAuditIssueImages(),
-    tasks.purgeStripeWebhookReceipts(),
-    tasks.reconcileSubscriptionSeats(),
-    tasks.maintainContracts(),
-  ]);
-  for (const result of results) {
-    if (result.status === "rejected") failures.push(result.reason);
-  }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Scheduled maintenance failed.");
-  }
-}

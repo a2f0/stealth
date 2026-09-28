@@ -1,9 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { AdminJobs } from "./AdminJobs";
 import { AdminOrganizations } from "./AdminOrganizations";
 import { AdminUsers } from "./AdminUsers";
 
 describe("root admin pages", () => {
+  it("provides a maintenance jobs page", () => {
+    const markup = renderToStaticMarkup(<AdminJobs />);
+    expect(markup).toContain("Maintenance jobs");
+    expect(markup).toContain("Loading jobs…");
+  });
   it("keeps the user listing on the Users page", () => {
     const markup = renderToStaticMarkup(<AdminUsers />);
 

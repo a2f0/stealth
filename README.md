@@ -80,6 +80,49 @@ accounts are backfilled by the organization migration. Organization owners and
 administrators can rename their organization at `/organization`. The API
 independently enforces the platform `admin` role for administrative data.
 
+Root admins can run maintenance from `/root/jobs`. Each **Run now** action
+requires confirmation and uses the same retention rules and batch sizes as the
+hourly production job (`17 * * * *`, UTC). The API lists jobs at
+`GET /api/admin/jobs` and accepts `POST /api/admin/jobs/:jobId/run` with JSON
+`{"confirm":"<jobId>"}`, an authenticated admin session, and the configured
+client `Origin` header. The response contains the run ID, outcome, timing, and
+result. Keep the page open while a manual run executes; if the connection drops,
+check logs before retrying. This is a synchronous Worker invocation, not a durable
+queue. Staging supports manual runs but has no cron schedule.
+
+Users can request or cancel account deletion under **Account settings → General**.
+Apply migration `0048_create_user_deletion_requests.sql` before deploying this
+feature. The `purgeRequestedUsers` job processes up to 25 requests per run after
+30 days, both hourly and on demand. Accounts remain active during the waiting
+period. Admin and system accounts, members of active organizations, and users
+referenced by retained audit, financial, or contract records are skipped. Contract
+creators, senders, and event actors remain linked to their history. Blocked requests
+rotate through the batch so they do not starve later requests. Organizations and
+their retained records must be managed separately; this does not erase all data
+an organization holds about a person. Users can cancel until their account is
+actually purged. Cancellation and eligibility are rechecked at deletion time.
+
+Both scheduled and manual jobs emit structured `maintenance_job` logs with a
+`runId`, `jobId`, trigger, initiating user ID (manual runs), timestamps, duration,
+and result or failure. User deletion requests, cancellations, and individual
+purge outcomes emit separate events. Failed jobs can have partial effects;
+inspect their logs before retrying. A completed user-purge run reports both
+`purged` and `blocked` counts. Other jobs report their existing result: deletion
+counts, reminder count for contract maintenance, or null for seat reconciliation.
+
+To inspect executions, select the API Worker in Cloudflare **Workers & Pages →
+Observability** and filter on `event = maintenance_job`, `jobId`, or `runId`.
+Both API configurations enable Workers Logs with full head sampling. Cloudflare
+captures invocation metadata, console output, and errors; it does not infer
+application deletion counts. [Workers Logs][workers-logs] retains logs for three
+days on Free and seven days on Paid, subject to service limits. Export logs for
+longer retention; these are operational logs, not an immutable application audit
+ledger. [Cloudflare Audit Logs][cloudflare-audit-logs] records Cloudflare account
+and configuration actions and is separate from this application's user actions.
+
+[workers-logs]: https://developers.cloudflare.com/workers/observability/logs/workers-logs/
+[cloudflare-audit-logs]: https://developers.cloudflare.com/fundamentals/account/account-security/audit-logs/
+
 Organization owners and organization admins can manage groups and group
 members at `/organization`. Groups use Better Auth teams underneath and can
 grant application capabilities. Every organization starts with a Finance group

@@ -10,7 +10,11 @@ export function isOrganizationPath(pathname: string) {
 }
 
 export function isRootAdminPath(pathname: string) {
-  return pathname === "/root/users" || pathname === "/root/organizations";
+  return (
+    pathname === "/root/users" ||
+    pathname === "/root/organizations" ||
+    pathname === "/root/jobs"
+  );
 }
 
 export function organizationPathRequiresAccess(pathname: string) {
