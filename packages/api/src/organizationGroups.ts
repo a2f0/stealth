@@ -1,32 +1,24 @@
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { type Context, Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { AuthVariables } from "./authMiddleware";
+import { getDb } from "./db";
 import {
   canManageOrganization,
   countOrganizationOwners,
   listOrganizationMembers,
 } from "./organizationMembers";
+import {
+  member,
+  organizationGroupCapability,
+  team,
+  teamMember,
+} from "./schema";
 import type { Bindings } from "./types";
 
 const supportedCapabilities = ["finance"] as const;
 type OrganizationCapability = (typeof supportedCapabilities)[number];
-
-interface GroupRow {
-  created_at: string;
-  id: string;
-  name: string;
-  updated_at: string | null;
-}
-
-interface CapabilityRow {
-  capability: OrganizationCapability;
-  team_id: string;
-}
-
-interface TeamMemberRow {
-  team_id: string;
-  user_id: string;
-}
 
 interface GroupInput {
   capabilities: OrganizationCapability[];
@@ -77,15 +69,15 @@ organizationGroups.get("/", async (context) => {
   return context.json({
     groups: groups.map((group) => ({
       capabilities: capabilities
-        .filter(({ team_id: teamId }) => teamId === group.id)
+        .filter(({ teamId }) => teamId === group.id)
         .map(({ capability }) => capability),
-      createdAt: group.created_at,
+      createdAt: group.createdAt,
       id: group.id,
       memberUserIds: groupMembers
-        .filter(({ team_id: teamId }) => teamId === group.id)
-        .map(({ user_id: userId }) => userId),
+        .filter(({ teamId }) => teamId === group.id)
+        .map(({ userId }) => userId),
       name: group.name,
-      updatedAt: group.updated_at,
+      updatedAt: group.updatedAt,
     })),
     members,
   });
@@ -162,17 +154,22 @@ organizationGroups.delete("/:id", async (context) => {
   ) {
     return context.json({ error: "Group not found." }, 404);
   }
-  await context.env.DB.batch([
-    context.env.DB.prepare(
-      `DELETE FROM organization_group_capability
-         WHERE organization_id = ? AND team_id = ?`,
-    ).bind(organizationId, groupId),
-    context.env.DB.prepare('DELETE FROM "teamMember" WHERE "teamId" = ?').bind(
-      groupId,
-    ),
-    context.env.DB.prepare(
-      'DELETE FROM "team" WHERE "id" = ? AND "organizationId" = ?',
-    ).bind(groupId, organizationId),
+  const db = getDb(context.env.DB);
+  await db.batch([
+    db
+      .delete(organizationGroupCapability)
+      .where(
+        and(
+          eq(organizationGroupCapability.organizationId, organizationId),
+          eq(organizationGroupCapability.teamId, groupId),
+        ),
+      ),
+    db.delete(teamMember).where(eq(teamMember.teamId, groupId)),
+    db
+      .delete(team)
+      .where(
+        and(eq(team.id, groupId), eq(team.organizationId, organizationId)),
+      ),
   ]);
   return context.body(null, 204);
 });
@@ -204,18 +201,19 @@ async function listUserCapabilities(
   organizationId: string,
   userId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT DISTINCT access.capability
-       FROM organization_group_capability AS access
-       JOIN "team" ON "team"."id" = access.team_id
-       JOIN "teamMember" ON "teamMember"."teamId" = "team"."id"
-       WHERE access.organization_id = ? AND "team"."organizationId" = ?
-         AND "teamMember"."userId" = ?`,
-    )
-    .bind(organizationId, organizationId, userId)
-    .all<{ capability: OrganizationCapability }>();
-  return result.results.map(({ capability }) => capability);
+  const rows = await getDb(database)
+    .selectDistinct({ capability: organizationGroupCapability.capability })
+    .from(organizationGroupCapability)
+    .innerJoin(team, eq(team.id, organizationGroupCapability.teamId))
+    .innerJoin(teamMember, eq(teamMember.teamId, team.id))
+    .where(
+      and(
+        eq(organizationGroupCapability.organizationId, organizationId),
+        eq(team.organizationId, organizationId),
+        eq(teamMember.userId, userId),
+      ),
+    );
+  return rows.map(({ capability }) => capability as OrganizationCapability);
 }
 
 export async function userHasCapability(
@@ -225,59 +223,56 @@ export async function userHasCapability(
   capability: OrganizationCapability,
 ) {
   return Boolean(
-    await database
-      .prepare(
-        `SELECT 1
-         FROM organization_group_capability AS access
-         JOIN "team" ON "team"."id" = access.team_id
-         JOIN "teamMember" ON "teamMember"."teamId" = "team"."id"
-         WHERE access.organization_id = ? AND access.capability = ?
-           AND "team"."organizationId" = ? AND "teamMember"."userId" = ?
-         LIMIT 1`,
+    await getDb(database)
+      .select({ one: sql`1` })
+      .from(organizationGroupCapability)
+      .innerJoin(team, eq(team.id, organizationGroupCapability.teamId))
+      .innerJoin(teamMember, eq(teamMember.teamId, team.id))
+      .where(
+        and(
+          eq(organizationGroupCapability.organizationId, organizationId),
+          eq(organizationGroupCapability.capability, capability),
+          eq(team.organizationId, organizationId),
+          eq(teamMember.userId, userId),
+        ),
       )
-      .bind(organizationId, capability, organizationId, userId)
-      .first(),
+      .limit(1)
+      .get(),
   );
 }
 
 async function listGroups(database: D1Database, organizationId: string) {
-  const result = await database
-    .prepare(
-      `SELECT "id", "name", "createdAt" AS created_at,
-              "updatedAt" AS updated_at
-       FROM "team" WHERE "organizationId" = ? ORDER BY "name" ASC`,
-    )
-    .bind(organizationId)
-    .all<GroupRow>();
-  return result.results;
+  return getDb(database)
+    .select({
+      id: team.id,
+      name: team.name,
+      createdAt: team.createdAt,
+      updatedAt: team.updatedAt,
+    })
+    .from(team)
+    .where(eq(team.organizationId, organizationId))
+    .orderBy(asc(team.name));
 }
 
 async function listGroupCapabilities(
   database: D1Database,
   organizationId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT team_id, capability FROM organization_group_capability
-       WHERE organization_id = ?`,
-    )
-    .bind(organizationId)
-    .all<CapabilityRow>();
-  return result.results;
+  return getDb(database)
+    .select({
+      teamId: organizationGroupCapability.teamId,
+      capability: organizationGroupCapability.capability,
+    })
+    .from(organizationGroupCapability)
+    .where(eq(organizationGroupCapability.organizationId, organizationId));
 }
 
 async function listGroupMembers(database: D1Database, organizationId: string) {
-  const result = await database
-    .prepare(
-      `SELECT "teamMember"."teamId" AS team_id,
-              "teamMember"."userId" AS user_id
-       FROM "teamMember"
-       JOIN "team" ON "team"."id" = "teamMember"."teamId"
-       WHERE "team"."organizationId" = ?`,
-    )
-    .bind(organizationId)
-    .all<TeamMemberRow>();
-  return result.results;
+  return getDb(database)
+    .select({ teamId: teamMember.teamId, userId: teamMember.userId })
+    .from(teamMember)
+    .innerJoin(team, eq(team.id, teamMember.teamId))
+    .where(eq(team.organizationId, organizationId));
 }
 
 async function groupInput(context: OrganizationContext) {
@@ -318,15 +313,16 @@ async function membersBelongToOrganization(
   userIds: string[],
 ) {
   if (userIds.length === 0) return true;
-  const placeholders = userIds.map(() => "?").join(", ");
-  const result = await database
-    .prepare(
-      `SELECT "userId" FROM "member"
-       WHERE "organizationId" = ? AND "userId" IN (${placeholders})`,
-    )
-    .bind(organizationId, ...userIds)
-    .all<{ userId: string }>();
-  return result.results.length === userIds.length;
+  const rows = await getDb(database)
+    .select({ userId: member.userId })
+    .from(member)
+    .where(
+      and(
+        eq(member.organizationId, organizationId),
+        inArray(member.userId, userIds),
+      ),
+    );
+  return rows.length === userIds.length;
 }
 
 async function groupNameExists(
@@ -335,14 +331,19 @@ async function groupNameExists(
   name: string,
   excludedId?: string,
 ) {
-  const query = `SELECT 1 FROM "team"
-    WHERE "organizationId" = ? AND lower("name") = lower(?)
-    ${excludedId ? 'AND "id" <> ?' : ""} LIMIT 1`;
-  const statement = database.prepare(query);
   return Boolean(
-    excludedId
-      ? await statement.bind(organizationId, name, excludedId).first()
-      : await statement.bind(organizationId, name).first(),
+    await getDb(database)
+      .select({ one: sql`1` })
+      .from(team)
+      .where(
+        and(
+          eq(team.organizationId, organizationId),
+          sql`lower(${team.name}) = lower(${name})`,
+          excludedId ? ne(team.id, excludedId) : undefined,
+        ),
+      )
+      .limit(1)
+      .get(),
   );
 }
 
@@ -352,10 +353,11 @@ async function groupExists(
   groupId: string,
 ) {
   return Boolean(
-    await database
-      .prepare('SELECT 1 FROM "team" WHERE "id" = ? AND "organizationId" = ?')
-      .bind(groupId, organizationId)
-      .first(),
+    await getDb(database)
+      .select({ one: sql`1` })
+      .from(team)
+      .where(and(eq(team.id, groupId), eq(team.organizationId, organizationId)))
+      .get(),
   );
 }
 
@@ -366,61 +368,57 @@ async function writeGroup(
   input: GroupInput,
   create: boolean,
 ) {
+  const db = getDb(database);
   const now = new Date().toISOString();
-  const statements: D1PreparedStatement[] = create
+  const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = create
     ? [
-        database
-          .prepare(
-            `INSERT INTO "team"
-             ("id", "name", "organizationId", "memberCount", "createdAt", "updatedAt")
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            groupId,
-            input.name,
-            organizationId,
-            input.userIds.length,
-            now,
-            now,
-          ),
+        db.insert(team).values({
+          id: groupId,
+          name: input.name,
+          organizationId,
+          memberCount: input.userIds.length,
+          createdAt: now,
+          updatedAt: now,
+        }),
       ]
     : [
-        database
-          .prepare(
-            `UPDATE "team" SET "name" = ?, "memberCount" = ?, "updatedAt" = ?
-             WHERE "id" = ? AND "organizationId" = ?`,
-          )
-          .bind(input.name, input.userIds.length, now, groupId, organizationId),
-        database
-          .prepare(
-            `DELETE FROM organization_group_capability
-             WHERE organization_id = ? AND team_id = ?`,
-          )
-          .bind(organizationId, groupId),
-        database
-          .prepare('DELETE FROM "teamMember" WHERE "teamId" = ?')
-          .bind(groupId),
+        db
+          .update(team)
+          .set({
+            name: input.name,
+            memberCount: input.userIds.length,
+            updatedAt: now,
+          })
+          .where(
+            and(eq(team.id, groupId), eq(team.organizationId, organizationId)),
+          ),
+        db
+          .delete(organizationGroupCapability)
+          .where(
+            and(
+              eq(organizationGroupCapability.organizationId, organizationId),
+              eq(organizationGroupCapability.teamId, groupId),
+            ),
+          ),
+        db.delete(teamMember).where(eq(teamMember.teamId, groupId)),
       ];
   statements.push(
     ...input.capabilities.map((capability) =>
-      database
-        .prepare(
-          `INSERT INTO organization_group_capability
-           (organization_id, team_id, capability) VALUES (?, ?, ?)`,
-        )
-        .bind(organizationId, groupId, capability),
+      db
+        .insert(organizationGroupCapability)
+        .values({ organizationId, teamId: groupId, capability }),
     ),
     ...input.userIds.map((userId) =>
-      database
-        .prepare(
-          `INSERT INTO "teamMember"
-           ("id", "teamId", "userId", "membershipKey", "createdAt")
-           VALUES (?, ?, ?, NULL, ?)`,
-        )
-        .bind(crypto.randomUUID(), groupId, userId, now),
+      db.insert(teamMember).values({
+        id: crypto.randomUUID(),
+        teamId: groupId,
+        userId,
+        membershipKey: null,
+        createdAt: now,
+      }),
     ),
   );
-  await database.batch(statements);
+  await db.batch(statements);
 }
 
 function managerRequired(context: OrganizationContext) {

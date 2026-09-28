@@ -1,3 +1,7 @@
+import { and, asc, count, eq, like, sql } from "drizzle-orm";
+import { getDb } from "./db";
+import { member, user } from "./schema";
+
 interface OrganizationMember {
   id: string;
   role: string;
@@ -10,42 +14,33 @@ interface OrganizationMember {
   };
 }
 
-interface OrganizationMemberRow {
-  email: string;
-  id: string;
-  name: string;
-  role: string;
-  two_factor_enabled: number | boolean;
-  two_factor_required: number | boolean;
-  user_id: string;
-}
-
 export async function listOrganizationMembers(
   database: D1Database,
   organizationId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT member.id, member.role,
-              member.twoFactorRequired AS two_factor_required,
-              user.id AS user_id, user.name, user.email,
-              user.twoFactorEnabled AS two_factor_enabled
-       FROM member
-       JOIN user ON user.id = member.userId
-       WHERE member.organizationId = ?
-       ORDER BY user.name ASC`,
-    )
-    .bind(organizationId)
-    .all<OrganizationMemberRow>();
-  return result.results.map(
+  const rows = await getDb(database)
+    .select({
+      id: member.id,
+      role: member.role,
+      twoFactorRequired: member.twoFactorRequired,
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      twoFactorEnabled: user.twoFactorEnabled,
+    })
+    .from(member)
+    .innerJoin(user, eq(user.id, member.userId))
+    .where(eq(member.organizationId, organizationId))
+    .orderBy(asc(user.name));
+  return rows.map(
     ({
       email,
       id,
       name,
       role,
-      two_factor_enabled: twoFactorEnabled,
-      two_factor_required: twoFactorRequired,
-      user_id: userId,
+      twoFactorEnabled,
+      twoFactorRequired,
+      userId,
     }): OrganizationMember => ({
       id,
       role,
@@ -61,30 +56,31 @@ export async function listMemberDirectory(
   database: D1Database,
   organizationId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT user.id, user.name, user.email
-       FROM member JOIN user ON user.id = member.userId
-       WHERE member.organizationId = ?
-       ORDER BY user.name COLLATE NOCASE ASC`,
-    )
-    .bind(organizationId)
-    .all<{ email: string; id: string; name: string }>();
-  return result.results;
+  return getDb(database)
+    .select({ id: user.id, name: user.name, email: user.email })
+    .from(member)
+    .innerJoin(user, eq(user.id, member.userId))
+    .where(eq(member.organizationId, organizationId))
+    .orderBy(asc(sql`${user.name} collate nocase`));
 }
 
 export async function countOrganizationOwners(
   database: D1Database,
   organizationId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT COUNT(*) AS count FROM member
-       WHERE organizationId = ?
-         AND (',' || replace(role, ' ', '') || ',') LIKE '%,owner,%'`,
+  const result = await getDb(database)
+    .select({ count: count() })
+    .from(member)
+    .where(
+      and(
+        eq(member.organizationId, organizationId),
+        like(
+          sql`(',' || replace(${member.role}, ' ', '') || ',')`,
+          "%,owner,%",
+        ),
+      ),
     )
-    .bind(organizationId)
-    .first<{ count: number }>();
+    .get();
   return result?.count ?? 0;
 }
 

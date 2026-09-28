@@ -1,9 +1,10 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import { organizationSettings } from "./organizationSettings";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const targetOrganizationId = "org_owner-user";
@@ -452,7 +453,7 @@ async function createFixture() {
   insertSession(database, "owner-user", targetOrganizationId);
   insertSession(database, "member-user", targetOrganizationId);
   const bindings = {
-    DB: toD1(database),
+    DB: createTestD1(database),
     STRIPE_PRO_PRICE_ID: proPriceId,
     STRIPE_SECRET_KEY: "sk_live_test",
   } as Bindings;
@@ -557,41 +558,6 @@ function insertSession(
       activeOrganizationId,
       `team_finance_${activeOrganizationId}`,
     );
-}
-
-interface TestStatement {
-  execute: () => unknown;
-}
-
-function toD1(database: Database) {
-  return {
-    batch: async (statements: TestStatement[]) =>
-      statements.map((statement) => statement.execute()),
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({ results: database.query(query).all(...values) }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        execute: () => {
-          const result = database.query(query).run(...values);
-          return {
-            meta: { changes: result.changes },
-            results: [],
-            success: true,
-          };
-        },
-        first: async () => database.query(query).get(...values),
-        run: async () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }
 
 async function applyMigration(database: Database, filename: string) {

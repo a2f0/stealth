@@ -1,4 +1,4 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
@@ -9,6 +9,7 @@ import {
   assignRenewedInvitationRequirements,
   employeeForms,
 } from "./employeeForms";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const orgId = "org_owner";
@@ -242,7 +243,7 @@ describe("employee forms", () => {
       "Background check",
     );
     fixture.beforeRun((query) => {
-      if (query.includes("SET status = COALESCE")) {
+      if (query.includes('"status" = COALESCE(')) {
         fixture.database
           .query(
             "UPDATE employee_requirements SET status = 'complete' WHERE id = ?",
@@ -272,7 +273,7 @@ describe("employee forms", () => {
       method: "POST",
     });
     fixture.beforeRun((query) => {
-      if (query.includes("SET status = COALESCE")) {
+      if (query.includes('"status" = COALESCE(')) {
         fixture.database
           .query(
             "UPDATE employee_requirements SET document_key = 'new-key', document_revision = document_revision + 1 WHERE id = ?",
@@ -324,7 +325,7 @@ describe("employee forms", () => {
       )
       .run(id);
     fixture.beforeRun((query) => {
-      if (query.includes("SET status = COALESCE")) {
+      if (query.includes('"status" = COALESCE(')) {
         fixture.database
           .query(
             "UPDATE employee_requirements SET checkr_start_nonce = 'raced' WHERE id = ?",
@@ -1024,7 +1025,9 @@ describe("employee forms", () => {
       .run(id);
     fixture.beforeRun((query) => {
       if (
-        query.includes("checkr_refresh_revision = checkr_refresh_revision + 1")
+        query.includes(
+          '"checkr_refresh_revision" = "employee_requirements"."checkr_refresh_revision" + 1',
+        )
       ) {
         fixture.database
           .query(`UPDATE employee_requirements
@@ -1687,7 +1690,32 @@ async function createFixture() {
     beforeDocumentUpdate: undefined,
   };
   const bindings = {
-    DB: toD1(database, hooks),
+    DB: createTestD1(database, {
+      beforeExecute: (query, _values, method) => {
+        if (method === "batch") {
+          const callback = hooks.beforeBatch;
+          hooks.beforeBatch = undefined;
+          callback?.();
+          return;
+        }
+        if (method !== "run") return;
+        if (isDocumentUpdate(query) && hooks.beforeDocumentUpdate) {
+          const before = hooks.beforeDocumentUpdate;
+          hooks.beforeDocumentUpdate = undefined;
+          before();
+        }
+        const callback = hooks.beforeRun;
+        hooks.beforeRun = undefined;
+        callback?.(query);
+      },
+      afterExecute: (query, _values, method) => {
+        if (method === "run" && isDocumentUpdate(query) && hooks.afterRun) {
+          const after = hooks.afterRun;
+          hooks.afterRun = undefined;
+          after();
+        }
+      },
+    }),
     STORAGE: {
       put: async (key: string, file: File) => {
         files.set(key, file);
@@ -1746,59 +1774,11 @@ async function createFixture() {
   };
 }
 
-function toD1(
-  database: Database,
-  hooks: {
-    beforeBatch: (() => void) | undefined;
-    beforeRun: ((query: string) => void) | undefined;
-    afterRun: (() => void) | undefined;
-    beforeDocumentUpdate: (() => void) | undefined;
-  },
-) {
-  return {
-    batch: async (statements: Array<{ execute: () => unknown }>) => {
-      const callback = hooks.beforeBatch;
-      hooks.beforeBatch = undefined;
-      callback?.();
-      return statements.map((statement) => statement.execute());
-    },
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({ results: database.query(query).all(...values) }),
-        bind: (...next: SQLQueryBindings[]) => {
-          values = next;
-          return statement;
-        },
-        execute: () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes } };
-        },
-        first: async () => database.query(query).get(...values),
-        run: async () => {
-          if (
-            query.includes("SET document_key = ?") &&
-            hooks.beforeDocumentUpdate
-          ) {
-            const before = hooks.beforeDocumentUpdate;
-            hooks.beforeDocumentUpdate = undefined;
-            before();
-          }
-          const callback = hooks.beforeRun;
-          hooks.beforeRun = undefined;
-          callback?.(query);
-          const result = database.query(query).run(...values);
-          if (query.includes("SET document_key = ?") && hooks.afterRun) {
-            const after = hooks.afterRun;
-            hooks.afterRun = undefined;
-            after();
-          }
-          return { meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
+function isDocumentUpdate(query: string) {
+  return (
+    query.startsWith('update "employee_requirements"') &&
+    query.includes('"document_key" = ?')
+  );
 }
 
 async function migration(database: Database, filename: string) {

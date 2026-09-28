@@ -1,11 +1,20 @@
+import { and, count, desc, eq, exists, isNull, or, sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import { normalizeBusinessDate } from "./businesses";
+import { type Db, getDb } from "./db";
 import { listLinkedEmails, toLinkedEmail } from "./inboundEmailLinks";
 import {
   canManageOrganization,
   listMemberDirectory,
 } from "./organizationMembers";
+import {
+  equipment as equipmentTable,
+  inboundEmailLinks,
+  inboundEmails,
+  member,
+  user,
+} from "./schema";
 import type { Bindings } from "./types";
 
 type EquipmentEnv = {
@@ -42,42 +51,76 @@ interface EquipmentInput {
   type: EquipmentType;
 }
 
-const equipmentSelect = `
-  SELECT item.id, item.type, item.make, item.model, item.serial_number,
-         item.purchase_date, item.assigned_user_id, item.created_at,
-         item.updated_at, assignee.name AS assignee_name,
-         assignee.email AS assignee_email,
-         (SELECT COUNT(*) FROM inbound_email_links AS link
-          JOIN inbound_emails AS email ON email.id = link.email_id
-          WHERE link.organization_id = item.organization_id
-            AND link.target_type = 'equipment' AND link.target_id = item.id
-            AND email.deleted_at IS NULL) AS email_count
-  FROM equipment AS item
-  LEFT JOIN user AS assignee ON assignee.id = item.assigned_user_id`;
+function selectEquipment(db: Db) {
+  return db
+    .select({
+      id: equipmentTable.id,
+      type: equipmentTable.type,
+      make: equipmentTable.make,
+      model: equipmentTable.model,
+      serial_number: equipmentTable.serialNumber,
+      purchase_date: equipmentTable.purchaseDate,
+      assigned_user_id: equipmentTable.assignedUserId,
+      created_at: equipmentTable.createdAt,
+      updated_at: equipmentTable.updatedAt,
+      assignee_name: user.name,
+      assignee_email: user.email,
+      email_count: sql<number>`${db
+        .select({ count: count() })
+        .from(inboundEmailLinks)
+        .innerJoin(
+          inboundEmails,
+          eq(inboundEmails.id, inboundEmailLinks.emailId),
+        )
+        .where(
+          and(
+            eq(inboundEmailLinks.organizationId, equipmentTable.organizationId),
+            eq(inboundEmailLinks.targetType, "equipment"),
+            eq(inboundEmailLinks.targetId, equipmentTable.id),
+            isNull(inboundEmails.deletedAt),
+          ),
+        )}`,
+    })
+    .from(equipmentTable)
+    .leftJoin(user, eq(user.id, equipmentTable.assignedUserId));
+}
 
 // The assignee must be a current member of the organization, checked in the
 // same statement as the write so a concurrent removal cannot slip past it.
-const assigneeIsMember = `(? IS NULL OR EXISTS (
-  SELECT 1 FROM member WHERE organizationId = ? AND userId = ?
-))`;
+function assigneeIsMember(
+  db: Db,
+  organizationId: string,
+  assigneeId: string | null,
+) {
+  return or(
+    sql`${assigneeId} IS NULL`,
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(member)
+        .where(
+          and(
+            eq(member.organizationId, organizationId),
+            sql`${member.userId} = ${assigneeId}`,
+          ),
+        ),
+    ),
+  );
+}
 
 const equipment = new Hono<EquipmentEnv>();
 
 equipment.get("/", async (context) => {
   const organizationId = context.get("organizationId");
   const [items, members] = await Promise.all([
-    context.env.DB.prepare(
-      `${equipmentSelect}
-       WHERE item.organization_id = ?
-       ORDER BY item.created_at DESC, item.id DESC`,
-    )
-      .bind(organizationId)
-      .all<EquipmentRow>(),
+    selectEquipment(getDb(context.env.DB))
+      .where(eq(equipmentTable.organizationId, organizationId))
+      .orderBy(desc(equipmentTable.createdAt), desc(equipmentTable.id)),
     listMemberDirectory(context.env.DB, organizationId),
   ]);
   return context.json({
     canManage: canManage(context),
-    equipment: items.results.map(toEquipment),
+    equipment: items.map(toEquipment),
     members,
     types: equipmentTypes,
   });
@@ -90,28 +133,17 @@ equipment.post("/", async (context) => {
   const organizationId = context.get("organizationId");
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const result = await context.env.DB.prepare(
-    `INSERT INTO equipment
-       (id, organization_id, type, make, model, serial_number, purchase_date,
-        assigned_user_id, created_by, created_at, updated_at)
-     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-     WHERE ${assigneeIsMember}`,
-  )
-    .bind(
-      id,
-      organizationId,
-      input.type,
-      input.make,
-      input.model,
-      input.serialNumber,
-      input.purchaseDate,
-      input.assigneeId,
-      context.get("authSession").user.id,
-      now,
-      now,
-      input.assigneeId,
-      organizationId,
-      input.assigneeId,
+  const db = getDb(context.env.DB);
+  // Drizzle lists every equipment column in schema order, which the selected
+  // values follow.
+  const result = await db
+    .insert(equipmentTable)
+    .select(
+      sql`SELECT ${id}, ${organizationId}, ${input.type}, ${input.make},
+                 ${input.model}, ${input.serialNumber}, ${input.purchaseDate},
+                 ${input.assigneeId}, ${context.get("authSession").user.id},
+                 ${now}, ${now}
+          WHERE ${assigneeIsMember(db, organizationId, input.assigneeId)}`,
     )
     .run();
   if (result.meta.changes !== 1) return assigneeNotMember(context);
@@ -157,21 +189,20 @@ equipment.patch("/:id", async (context) => {
     existing.type,
   );
   if (!changes) return invalidEquipment(context);
-  const columns = Object.keys(changes) as EquipmentColumn[];
-  const assigneeChanges = "assigned_user_id" in changes;
-  const assigneeId = changes.assigned_user_id ?? null;
-  const result = await context.env.DB.prepare(
-    `UPDATE equipment
-     SET ${columns.map((column) => `${column} = ?, `).join("")}updated_at = ?
-     WHERE id = ? AND organization_id = ?
-       ${assigneeChanges ? `AND ${assigneeIsMember}` : ""}`,
-  )
-    .bind(
-      ...columns.map((column) => changes[column] ?? null),
-      new Date().toISOString(),
-      existing.id,
-      organizationId,
-      ...(assigneeChanges ? [assigneeId, organizationId, assigneeId] : []),
+  const assigneeChanges = "assignedUserId" in changes;
+  const assigneeId = changes.assignedUserId ?? null;
+  const db = getDb(context.env.DB);
+  const result = await db
+    .update(equipmentTable)
+    .set({ ...changes, updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(equipmentTable.id, existing.id),
+        eq(equipmentTable.organizationId, organizationId),
+        assigneeChanges
+          ? assigneeIsMember(db, organizationId, assigneeId)
+          : undefined,
+      ),
     )
     .run();
   const updated = await findEquipment(
@@ -194,15 +225,25 @@ equipment.delete("/:id", async (context) => {
   );
   if (!item) return equipmentNotFound(context);
   // Drop email links explicitly rather than relying on the trigger alone.
-  await context.env.DB.batch([
-    context.env.DB.prepare(
-      `DELETE FROM inbound_email_links
-       WHERE organization_id = ? AND target_type = 'equipment'
-         AND target_id = ?`,
-    ).bind(organizationId, item.id),
-    context.env.DB.prepare(
-      `DELETE FROM equipment WHERE id = ? AND organization_id = ?`,
-    ).bind(item.id, organizationId),
+  const db = getDb(context.env.DB);
+  await db.batch([
+    db
+      .delete(inboundEmailLinks)
+      .where(
+        and(
+          eq(inboundEmailLinks.organizationId, organizationId),
+          eq(inboundEmailLinks.targetType, "equipment"),
+          eq(inboundEmailLinks.targetId, item.id),
+        ),
+      ),
+    db
+      .delete(equipmentTable)
+      .where(
+        and(
+          eq(equipmentTable.id, item.id),
+          eq(equipmentTable.organizationId, organizationId),
+        ),
+      ),
   ]);
   return context.body(null, 204);
 });
@@ -211,13 +252,15 @@ function findEquipment(
   database: D1Database,
   organizationId: string,
   id: string,
-) {
-  return database
-    .prepare(
-      `${equipmentSelect} WHERE item.id = ? AND item.organization_id = ?`,
+): Promise<EquipmentRow | undefined> {
+  return selectEquipment(getDb(database))
+    .where(
+      and(
+        eq(equipmentTable.id, id),
+        eq(equipmentTable.organizationId, organizationId),
+      ),
     )
-    .bind(id, organizationId)
-    .first<EquipmentRow>();
+    .get();
 }
 
 /** Validates a new item; optional fields may be omitted. */
@@ -249,12 +292,15 @@ function equipmentInput(body: unknown): EquipmentInput | null {
 }
 
 type EquipmentColumn =
-  | "assigned_user_id"
+  | "assignedUserId"
   | "make"
   | "model"
-  | "purchase_date"
-  | "serial_number"
+  | "purchaseDate"
+  | "serialNumber"
   | "type";
+type EquipmentChanges = Partial<
+  Pick<typeof equipmentTable.$inferInsert, EquipmentColumn>
+>;
 
 /**
  * Validates the fields present in an update, as column changes. An item keeps
@@ -263,7 +309,7 @@ type EquipmentColumn =
 function equipmentChanges(
   body: unknown,
   currentType: string,
-): Partial<Record<EquipmentColumn, string | null>> | null {
+): EquipmentChanges | null {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return null;
   }
@@ -280,17 +326,17 @@ function equipmentChanges(
       ["model", "model", (value) => requiredText(value, 120) ?? undefined],
       [
         "serialNumber",
-        "serial_number",
+        "serialNumber",
         (value) => optionalText(value, normalizeSerial),
       ],
       [
         "purchaseDate",
-        "purchase_date",
+        "purchaseDate",
         (value) => optionalText(value, normalizeBusinessDate),
       ],
       [
         "assigneeId",
-        "assigned_user_id",
+        "assignedUserId",
         (value) => optionalText(value, normalizeUserId),
       ],
     ];
@@ -301,7 +347,8 @@ function equipmentChanges(
     if (valid === undefined) return null;
     changes[column] = valid as string | null;
   }
-  return changes;
+  // The validators keep the required columns non-null.
+  return changes as EquipmentChanges;
 }
 
 function requiredText(value: unknown, maxLength: number) {

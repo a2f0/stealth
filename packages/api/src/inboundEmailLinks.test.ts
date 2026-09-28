@@ -1,12 +1,12 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import { readdir } from "node:fs/promises";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import { createFinanceRouter } from "./finance";
 import { inbox } from "./inbox";
 import { libraryFolders } from "./libraryFolders";
+import { applyMigrations, createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const timestamp = "2026-09-20T12:00:00.000Z";
@@ -318,7 +318,7 @@ async function createFixture() {
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: toD1(database),
+    DB: createTestD1(database),
     EMAIL: {} as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.de",
@@ -542,35 +542,4 @@ function testApp(userId: string) {
   app.route("/api/inbox", inbox);
   app.route("/api/library/folders", libraryFolders);
   return app;
-}
-
-async function applyMigrations(database: Database) {
-  const directory = `${import.meta.dir}/../migrations`;
-  for (const filename of (await readdir(directory)).sort()) {
-    database.exec(await Bun.file(`${directory}/${filename}`).text());
-  }
-}
-
-function toD1(database: Database) {
-  return {
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({
-          results: database.query(query).all(...values),
-          success: true,
-        }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        first: async () => database.query(query).get(...values),
-        run: async () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes }, success: true };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }

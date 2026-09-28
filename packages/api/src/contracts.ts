@@ -1,9 +1,11 @@
+import { and, desc, eq, exists, lte, ne, or, sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import { normalizeBusinessDate } from "./businesses";
 import { sendVoided } from "./contractMail";
 import { InvalidPdfError, inspectPdf, sha256Hex } from "./contractPdf";
 import {
+  batchWrites,
   type ContractRow,
   type EventRow,
   eventStatement,
@@ -17,8 +19,17 @@ import {
   notifyRecipients,
   type RecipientRow,
   recordEvent,
+  rowWhen,
 } from "./contractRecords";
+import { getDb } from "./db";
 import { normalizeFilename } from "./filenames";
+import {
+  contractFields,
+  contractRecipients,
+  contracts as contractsTable,
+  deletedObjectCleanup,
+  user,
+} from "./schema";
 import type { Bindings } from "./types";
 
 type ContractEnv = {
@@ -81,24 +92,36 @@ interface Draft {
 const contracts = new Hono<ContractEnv>();
 
 contracts.get("/", async (context) => {
-  const result = await context.env.DB.prepare(
-    `SELECT contract.id, contract.title, contract.status, contract.due_date,
-            contract.created_at, contract.updated_at, contract.sent_at,
-            contract.completed_at, sender.name AS sender_name,
-            (SELECT COUNT(*) FROM contract_recipients AS recipient
-             WHERE recipient.contract_id = contract.id) AS signer_count,
-            (SELECT COUNT(*) FROM contract_recipients AS recipient
-             WHERE recipient.contract_id = contract.id
-               AND recipient.status = 'signed') AS signed_count
-     FROM contracts AS contract
-     LEFT JOIN user AS sender
-       ON sender.id = COALESCE(contract.sent_by, contract.created_by)
-     WHERE contract.organization_id = ?
-     ORDER BY contract.updated_at DESC, contract.id DESC`,
-  )
-    .bind(context.get("organizationId"))
-    .all<SummaryRow>();
-  return context.json({ contracts: result.results.map(toSummary) });
+  const db = getDb(context.env.DB);
+  const recipientOf = eq(contractRecipients.contractId, contractsTable.id);
+  const rows: SummaryRow[] = await db
+    .select({
+      completed_at: contractsTable.completedAt,
+      created_at: contractsTable.createdAt,
+      due_date: contractsTable.dueDate,
+      id: contractsTable.id,
+      sender_name: user.name,
+      sent_at: contractsTable.sentAt,
+      signed_count: db.$count(
+        contractRecipients,
+        and(recipientOf, eq(contractRecipients.status, "signed")),
+      ),
+      signer_count: db.$count(contractRecipients, recipientOf),
+      status: sql<ContractRow["status"]>`${contractsTable.status}`,
+      title: contractsTable.title,
+      updated_at: contractsTable.updatedAt,
+    })
+    .from(contractsTable)
+    .leftJoin(
+      user,
+      eq(
+        user.id,
+        sql`coalesce(${contractsTable.sentBy}, ${contractsTable.createdBy})`,
+      ),
+    )
+    .where(eq(contractsTable.organizationId, context.get("organizationId")))
+    .orderBy(desc(contractsTable.updatedAt), desc(contractsTable.id));
+  return context.json({ contracts: rows.map(toSummary) });
 });
 
 // Uploads a PDF as a new draft.
@@ -140,27 +163,22 @@ contracts.post("/", async (context) => {
     customMetadata: { contractId: id, organizationId },
     httpMetadata: { contentType: "application/pdf" },
   });
+  const db = getDb(context.env.DB);
   try {
-    await context.env.DB.batch([
-      context.env.DB.prepare(
-        `INSERT INTO contracts
-           (id, organization_id, title, document_object_key,
-            document_filename, document_size, document_sha256,
-            document_page_count, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
+    await db.batch([
+      db.insert(contractsTable).values({
+        createdAt: now,
+        createdBy: userId,
+        documentFilename: filename,
+        documentObjectKey: objectKey,
+        documentPageCount: pageCount,
+        documentSha256: await sha256Hex(bytes),
+        documentSize: bytes.byteLength,
         id,
         organizationId,
         title,
-        objectKey,
-        filename,
-        bytes.byteLength,
-        await sha256Hex(bytes),
-        pageCount,
-        userId,
-        now,
-        now,
-      ),
+        updatedAt: now,
+      }),
       eventStatement(context.env.DB, {
         actorUserId: userId,
         contractId: id,
@@ -223,9 +241,8 @@ contracts.put("/:id/draft", async (context) => {
     contract.document_page_count,
   );
   if (typeof draft === "string") return context.json({ error: draft }, 400);
-  const database = context.env.DB;
-  const saved = await database.batch(
-    draftStatements(database, contract, draft, new Date().toISOString()),
+  const saved = await getDb(context.env.DB).batch(
+    draftStatements(context.env.DB, contract, draft, new Date().toISOString()),
   );
   if (saved[0]?.meta.changes !== 1) return notDraft(context);
   return context.json({ contract: await detailFor(context, contract.id) });
@@ -251,15 +268,17 @@ contracts.post("/:id/send", async (context) => {
   const now = new Date().toISOString();
   // Only the revision that was validated goes out: a save landing meanwhile
   // bumps it and this send is refused.
-  const sent = await database
-    .prepare(
-      `UPDATE contracts
-       SET status = 'sent', sent_at = ?, sent_by = ?, updated_at = ?
-       WHERE id = ? AND organization_id = ? AND status = 'draft'
-         AND revision = ?`,
-    )
-    .bind(now, userId, now, contract.id, organizationId, contract.revision)
-    .run();
+  const sent = await getDb(database)
+    .update(contractsTable)
+    .set({ sentAt: now, sentBy: userId, status: "sent", updatedAt: now })
+    .where(
+      and(
+        eq(contractsTable.id, contract.id),
+        eq(contractsTable.organizationId, organizationId),
+        eq(contractsTable.status, "draft"),
+        eq(contractsTable.revision, contract.revision),
+      ),
+    );
   if (sent.meta.changes !== 1) {
     return context.json(
       { error: "The draft changed while it was being sent. Send it again." },
@@ -311,13 +330,18 @@ contracts.post("/:id/remind", async (context) => {
   const threshold = new Date(now.getTime() - manualReminderGapMs);
   const due: typeof awaiting = [];
   for (const recipient of awaiting) {
-    const claim = await database
-      .prepare(
-        `UPDATE contract_recipients SET last_reminded_at = ?
-         WHERE id = ? AND COALESCE(last_reminded_at, notified_at) <= ?`,
-      )
-      .bind(now.toISOString(), recipient.id, threshold.toISOString())
-      .run();
+    const claim = await getDb(database)
+      .update(contractRecipients)
+      .set({ lastRemindedAt: now.toISOString() })
+      .where(
+        and(
+          eq(contractRecipients.id, recipient.id),
+          lte(
+            sql`coalesce(${contractRecipients.lastRemindedAt}, ${contractRecipients.notifiedAt})`,
+            threshold.toISOString(),
+          ),
+        ),
+      );
     if (claim.meta.changes === 1) due.push(recipient);
   }
   if (awaiting.length > 0 && due.length === 0) {
@@ -356,14 +380,21 @@ contracts.post("/:id/void", async (context) => {
   const reason =
     typeof reasonValue === "string" ? reasonValue.trim().slice(0, 500) : "";
   const now = new Date().toISOString();
-  const voided = await database
-    .prepare(
-      `UPDATE contracts
-       SET status = 'voided', voided_at = ?, void_reason = ?, updated_at = ?
-       WHERE id = ? AND organization_id = ? AND status = 'sent'`,
-    )
-    .bind(now, reason || null, now, contract.id, organizationId)
-    .run();
+  const voided = await getDb(database)
+    .update(contractsTable)
+    .set({
+      status: "voided",
+      updatedAt: now,
+      voidReason: reason || null,
+      voidedAt: now,
+    })
+    .where(
+      and(
+        eq(contractsTable.id, contract.id),
+        eq(contractsTable.organizationId, organizationId),
+        eq(contractsTable.status, "sent"),
+      ),
+    );
   if (voided.meta.changes !== 1) {
     return context.json(
       { error: "Only contracts awaiting signatures can be voided." },
@@ -411,31 +442,54 @@ contracts.delete("/:id", async (context) => {
     ["contract-document", contract.document_object_key],
     ["contract-final", contract.final_object_key],
   ].filter((entry): entry is [string, string] => Boolean(entry[1]));
-  const deleted = await database.batch([
-    ...keys.map(([kind, key]) =>
-      database
-        .prepare(
-          `INSERT OR REPLACE INTO deleted_object_cleanup
-             (id, organization_id, object_key, deleted_at, cleanup_token,
-              cleanup_claimed_at)
-           SELECT ?, ?, ?, ?, NULL, NULL FROM contracts
-           WHERE id = ? AND organization_id = ? AND status <> 'sent'`,
-        )
-        .bind(
-          `${kind}:${contract.id}`,
-          organizationId,
-          key,
-          now,
-          contract.id,
-          organizationId,
+  const db = getDb(database);
+  const deletable = and(
+    eq(contractsTable.organizationId, organizationId),
+    ne(contractsTable.status, "sent"),
+  );
+  const stillDeletable = exists(
+    db
+      .select({ one: sql`1` })
+      .from(contractsTable)
+      .where(and(eq(contractsTable.id, contract.id), deletable)),
+  );
+  // Each file is queued as INSERT OR REPLACE would: rows holding its id or
+  // object key are removed, then its row is inserted.
+  const deleted = await batchWrites(database, [
+    ...keys.flatMap(([kind, key]) => {
+      const id = `${kind}:${contract.id}`;
+      return [
+        db
+          .delete(deletedObjectCleanup)
+          .where(
+            and(
+              or(
+                eq(deletedObjectCleanup.id, id),
+                eq(deletedObjectCleanup.objectKey, key),
+              ),
+              stillDeletable,
+            ),
+          ),
+        db.insert(deletedObjectCleanup).select(
+          rowWhen(
+            database,
+            contract.id,
+            {
+              id,
+              organizationId,
+              objectKey: key,
+              deletedAt: now,
+              cleanupToken: null,
+              cleanupClaimedAt: null,
+            },
+            deletable,
+          ),
         ),
-    ),
-    database
-      .prepare(
-        `DELETE FROM contracts
-         WHERE id = ? AND organization_id = ? AND status <> 'sent'`,
-      )
-      .bind(contract.id, organizationId),
+      ];
+    }),
+    db
+      .delete(contractsTable)
+      .where(and(eq(contractsTable.id, contract.id), deletable)),
   ]);
   // Change counts may include cascaded rows, so any change means it deleted.
   if ((deleted.at(-1)?.meta.changes ?? 0) < 1) {
@@ -455,23 +509,17 @@ async function detailFor(context: ContractContext, id: string) {
     id,
   );
   if (!contract) return null;
-  const [recipients, fields, events, people] = await Promise.all([
+  const [recipients, fields, events, createdBy, sentBy] = await Promise.all([
     listRecipients(database, contract.id),
     listFields(database, contract.id),
     listEvents(database, contract.id),
-    database
-      .prepare(
-        `SELECT
-           (SELECT name FROM user WHERE id = ?) AS created_by_name,
-           (SELECT name FROM user WHERE id = ?) AS sent_by_name`,
-      )
-      .bind(contract.created_by, contract.sent_by)
-      .first<{ created_by_name: string | null; sent_by_name: string | null }>(),
+    userName(database, contract.created_by),
+    userName(database, contract.sent_by),
   ]);
   return {
     completedAt: contract.completed_at,
     createdAt: contract.created_at,
-    createdByName: people?.created_by_name ?? null,
+    createdByName: createdBy?.name ?? null,
     document: {
       filename: contract.document_filename,
       pageCount: contract.document_page_count,
@@ -487,7 +535,7 @@ async function detailFor(context: ContractContext, id: string) {
     recipients: recipients.map(toRecipient),
     reminderIntervalDays: contract.reminder_interval_days,
     sentAt: contract.sent_at,
-    sentByName: people?.sent_by_name ?? null,
+    sentByName: sentBy?.name ?? null,
     signingOrder: contract.signing_order,
     status: contract.status,
     title: contract.title,
@@ -495,6 +543,16 @@ async function detailFor(context: ContractContext, id: string) {
     voidReason: contract.void_reason,
     voidedAt: contract.voided_at,
   };
+}
+
+/** A user's name, if there is such a user. */
+function userName(database: D1Database, id: string | null) {
+  if (id === null) return undefined;
+  return getDb(database)
+    .select({ name: user.name })
+    .from(user)
+    .where(eq(user.id, id))
+    .get();
 }
 
 /** Validates a draft save, returning a message when it is invalid. */
@@ -702,6 +760,23 @@ function sendProblem(recipients: RecipientRow[], fields: FieldRow[]) {
   return unsigned ? `Place a signature field for ${unsigned.name}.` : null;
 }
 
+/** A new signer's columns after their details, as the table defaults them. */
+const unsentRecipient = {
+  status: "pending",
+  tokenNonce: null,
+  tokenHash: null,
+  notifiedAt: null,
+  lastRemindedAt: null,
+  viewedAt: null,
+  signedAt: null,
+  signedIp: null,
+  signedUserAgent: null,
+  signatureImage: null,
+  initialsImage: null,
+  declinedAt: null,
+  declineReason: null,
+};
+
 /**
  * The statements that replace a draft's details, signers, and fields. Each
  * re-checks that the contract is still a draft, so a save racing a send
@@ -713,85 +788,86 @@ function draftStatements(
   draft: Draft,
   now: string,
 ) {
+  const db = getDb(database);
   const recipientIds = new Map(
     draft.recipients.map((recipient) => [recipient.key, crypto.randomUUID()]),
   );
-  const stillDraft = `EXISTS (
-    SELECT 1 FROM contracts WHERE id = ? AND status = 'draft'
-  )`;
+  const isDraft = eq(contractsTable.status, "draft");
+  const stillDraft = exists(
+    db
+      .select({ one: sql`1` })
+      .from(contractsTable)
+      .where(and(eq(contractsTable.id, contract.id), isDraft)),
+  );
   return [
-    database
-      .prepare(
-        `UPDATE contracts
-         SET title = ?, message = ?, signing_order = ?, due_date = ?,
-             reminder_interval_days = ?, updated_at = ?,
-             revision = revision + 1
-         WHERE id = ? AND organization_id = ? AND status = 'draft'`,
-      )
-      .bind(
-        draft.title,
-        draft.message,
-        draft.signingOrder,
-        draft.dueDate,
-        draft.reminderIntervalDays,
-        now,
-        contract.id,
-        contract.organization_id,
-      ),
-    database
-      .prepare(
-        `DELETE FROM contract_fields WHERE contract_id = ? AND ${stillDraft}`,
-      )
-      .bind(contract.id, contract.id),
-    database
-      .prepare(
-        `DELETE FROM contract_recipients
-         WHERE contract_id = ? AND ${stillDraft}`,
-      )
-      .bind(contract.id, contract.id),
-    ...draft.recipients.map((recipient) =>
-      database
-        .prepare(
-          `INSERT INTO contract_recipients
-             (id, contract_id, organization_id, name, email, routing_order,
-              created_at)
-           SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${stillDraft}`,
-        )
-        .bind(
-          recipientIds.get(recipient.key) ?? "",
-          contract.id,
-          contract.organization_id,
-          recipient.name,
-          recipient.email,
-          draft.signingOrder === "parallel" ? 1 : recipient.routingOrder,
-          now,
-          contract.id,
+    db
+      .update(contractsTable)
+      .set({
+        dueDate: draft.dueDate,
+        message: draft.message,
+        reminderIntervalDays: draft.reminderIntervalDays,
+        revision: sql`${contractsTable.revision} + 1`,
+        signingOrder: draft.signingOrder,
+        title: draft.title,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(contractsTable.id, contract.id),
+          eq(contractsTable.organizationId, contract.organization_id),
+          isDraft,
         ),
+      ),
+    db
+      .delete(contractFields)
+      .where(and(eq(contractFields.contractId, contract.id), stillDraft)),
+    db
+      .delete(contractRecipients)
+      .where(and(eq(contractRecipients.contractId, contract.id), stillDraft)),
+    ...draft.recipients.map((recipient) =>
+      db.insert(contractRecipients).select(
+        rowWhen(
+          database,
+          contract.id,
+          {
+            id: recipientIds.get(recipient.key) ?? "",
+            contractId: contract.id,
+            organizationId: contract.organization_id,
+            name: recipient.name,
+            email: recipient.email,
+            routingOrder:
+              draft.signingOrder === "parallel" ? 1 : recipient.routingOrder,
+            ...unsentRecipient,
+            createdAt: now,
+          },
+          isDraft,
+        ),
+      ),
     ),
     ...draft.fields.map((field) =>
-      database
-        .prepare(
-          `INSERT INTO contract_fields
-             (id, contract_id, recipient_id, type, page, x, y, width, height,
-              required, label)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${stillDraft}`,
-        )
-        .bind(
-          crypto.randomUUID(),
+      db.insert(contractFields).select(
+        rowWhen(
+          database,
           contract.id,
-          recipientIds.get(field.recipientKey) ?? "",
-          field.type,
-          field.page,
-          field.x,
-          field.y,
-          field.width,
-          field.height,
-          field.required ? 1 : 0,
-          field.label,
-          contract.id,
+          {
+            id: crypto.randomUUID(),
+            contractId: contract.id,
+            recipientId: recipientIds.get(field.recipientKey) ?? "",
+            type: field.type,
+            page: field.page,
+            x: field.x,
+            y: field.y,
+            width: field.width,
+            height: field.height,
+            required: field.required ? 1 : 0,
+            label: field.label,
+            value: null,
+          },
+          isDraft,
         ),
+      ),
     ),
-  ];
+  ] as const;
 }
 
 function validEmail(email: string) {

@@ -1,4 +1,11 @@
+import { and, asc, count, eq, sql } from "drizzle-orm";
+import { excluded, getDb } from "./db";
 import type { FinanceContext } from "./financeContext";
+import {
+  financeExpenseCategories,
+  financeTransactionAnnotations,
+  plaidTransactions,
+} from "./schema";
 
 interface CategoryRow {
   id: string;
@@ -30,23 +37,31 @@ export async function listExpenseCategories(
   database: D1Database,
   organizationId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT category.id, category.name,
-              COUNT(txn.id) AS transaction_count
-       FROM finance_expense_categories AS category
-       LEFT JOIN finance_transaction_annotations AS annotation
-         ON annotation.expense_category_id = category.id
-       LEFT JOIN plaid_transactions AS txn
-         ON txn.id = annotation.transaction_id
-        AND txn.source_status = 'active'
-       WHERE category.organization_id = ?
-       GROUP BY category.id
-       ORDER BY category.name COLLATE NOCASE ASC`,
+  const rows = await getDb(database)
+    .select({
+      id: financeExpenseCategories.id,
+      name: financeExpenseCategories.name,
+      transaction_count: count(plaidTransactions.id),
+    })
+    .from(financeExpenseCategories)
+    .leftJoin(
+      financeTransactionAnnotations,
+      eq(
+        financeTransactionAnnotations.expenseCategoryId,
+        financeExpenseCategories.id,
+      ),
     )
-    .bind(organizationId)
-    .all<CategoryRow>();
-  return result.results.map(toCategory);
+    .leftJoin(
+      plaidTransactions,
+      and(
+        eq(plaidTransactions.id, financeTransactionAnnotations.transactionId),
+        eq(plaidTransactions.sourceStatus, "active"),
+      ),
+    )
+    .where(eq(financeExpenseCategories.organizationId, organizationId))
+    .groupBy(financeExpenseCategories.id)
+    .orderBy(asc(sql`${financeExpenseCategories.name} collate nocase`));
+  return rows.map(toCategory);
 }
 
 export async function listCategories(context: FinanceContext) {
@@ -67,13 +82,9 @@ export async function createCategory(context: FinanceContext) {
   }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  await context.env.DB.prepare(
-    `INSERT INTO finance_expense_categories
-       (id, organization_id, name, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  )
-    .bind(id, organizationId, name, now, now)
-    .run();
+  await getDb(context.env.DB)
+    .insert(financeExpenseCategories)
+    .values({ id, organizationId, name, createdAt: now, updatedAt: now });
   return context.json({ category: { id, name, transactionCount: 0 } }, 201);
 }
 
@@ -88,12 +99,15 @@ export async function renameCategory(context: FinanceContext) {
   if (await nameTaken(context.env.DB, organizationId, name, id)) {
     return duplicateName(context);
   }
-  await context.env.DB.prepare(
-    `UPDATE finance_expense_categories SET name = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(name, new Date().toISOString(), id, organizationId)
-    .run();
+  await getDb(context.env.DB)
+    .update(financeExpenseCategories)
+    .set({ name, updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(financeExpenseCategories.id, id),
+        eq(financeExpenseCategories.organizationId, organizationId),
+      ),
+    );
   return context.json({ category: { id, name } });
 }
 
@@ -103,16 +117,26 @@ export async function deleteCategory(context: FinanceContext) {
   if (!id || !(await findCategory(context.env.DB, organizationId, id))) {
     return categoryNotFound(context);
   }
+  const db = getDb(context.env.DB);
   // Unassign explicitly rather than relying on the foreign-key action alone.
-  await context.env.DB.batch([
-    context.env.DB.prepare(
-      `UPDATE finance_transaction_annotations SET expense_category_id = NULL
-       WHERE organization_id = ? AND expense_category_id = ?`,
-    ).bind(organizationId, id),
-    context.env.DB.prepare(
-      `DELETE FROM finance_expense_categories
-       WHERE id = ? AND organization_id = ?`,
-    ).bind(id, organizationId),
+  await db.batch([
+    db
+      .update(financeTransactionAnnotations)
+      .set({ expenseCategoryId: null })
+      .where(
+        and(
+          eq(financeTransactionAnnotations.organizationId, organizationId),
+          eq(financeTransactionAnnotations.expenseCategoryId, id),
+        ),
+      ),
+    db
+      .delete(financeExpenseCategories)
+      .where(
+        and(
+          eq(financeExpenseCategories.id, id),
+          eq(financeExpenseCategories.organizationId, organizationId),
+        ),
+      ),
   ]);
   return context.body(null, 204);
 }
@@ -120,15 +144,23 @@ export async function deleteCategory(context: FinanceContext) {
 export async function addDefaultCategories(context: FinanceContext) {
   const organizationId = context.get("organizationId");
   const now = new Date().toISOString();
-  await context.env.DB.batch(
-    defaultExpenseCategories.map((name) =>
-      context.env.DB.prepare(
-        `INSERT OR IGNORE INTO finance_expense_categories
-           (id, organization_id, name, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).bind(crypto.randomUUID(), organizationId, name, now, now),
-    ),
-  );
+  const db = getDb(context.env.DB);
+  const insertCategory = (name: string) =>
+    db
+      .insert(financeExpenseCategories)
+      .values({
+        id: crypto.randomUUID(),
+        organizationId,
+        name,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing();
+  const [firstName, ...otherNames] = defaultExpenseCategories;
+  await db.batch([
+    insertCategory(firstName),
+    ...otherNames.map(insertCategory),
+  ]);
   return listCategories(context);
 }
 
@@ -142,12 +174,17 @@ export async function assignTransactionCategory(context: FinanceContext) {
   }
   const organizationId = context.get("organizationId");
   const database = context.env.DB;
-  const transaction = await database
-    .prepare(
-      `SELECT id FROM plaid_transactions WHERE id = ? AND organization_id = ?`,
+  const db = getDb(database);
+  const transaction = await db
+    .select({ id: plaidTransactions.id })
+    .from(plaidTransactions)
+    .where(
+      and(
+        eq(plaidTransactions.id, transactionId),
+        eq(plaidTransactions.organizationId, organizationId),
+      ),
     )
-    .bind(transactionId, organizationId)
-    .first<{ id: string }>();
+    .get();
   if (!transaction) {
     return context.json({ error: "Transaction not found." }, 404);
   }
@@ -159,19 +196,30 @@ export async function assignTransactionCategory(context: FinanceContext) {
   }
   const now = new Date().toISOString();
   const userId = context.get("authSession").user.id;
-  await database
-    .prepare(
-      `INSERT INTO finance_transaction_annotations
-         (transaction_id, organization_id, note, labels, reviewed,
-          expense_category_id, created_by, updated_by, created_at, updated_at)
-       VALUES (?, ?, '', '[]', 0, ?, ?, ?, ?, ?)
-       ON CONFLICT(transaction_id) DO UPDATE SET
-         expense_category_id = excluded.expense_category_id,
-         updated_by = excluded.updated_by,
-         updated_at = excluded.updated_at`,
-    )
-    .bind(transactionId, organizationId, categoryId, userId, userId, now, now)
-    .run();
+  await db
+    .insert(financeTransactionAnnotations)
+    .values({
+      transactionId,
+      organizationId,
+      note: "",
+      labels: "[]",
+      reviewed: 0,
+      expenseCategoryId: categoryId,
+      createdBy: userId,
+      updatedBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: financeTransactionAnnotations.transactionId,
+      set: {
+        expenseCategoryId: excluded(
+          financeTransactionAnnotations.expenseCategoryId,
+        ),
+        updatedBy: excluded(financeTransactionAnnotations.updatedBy),
+        updatedAt: excluded(financeTransactionAnnotations.updatedAt),
+      },
+    });
   return context.json({ expenseCategoryId: categoryId });
 }
 
@@ -180,13 +228,16 @@ async function findCategory(
   organizationId: string,
   id: string,
 ) {
-  return database
-    .prepare(
-      `SELECT id FROM finance_expense_categories
-       WHERE id = ? AND organization_id = ?`,
+  return getDb(database)
+    .select({ id: financeExpenseCategories.id })
+    .from(financeExpenseCategories)
+    .where(
+      and(
+        eq(financeExpenseCategories.id, id),
+        eq(financeExpenseCategories.organizationId, organizationId),
+      ),
     )
-    .bind(id, organizationId)
-    .first<{ id: string }>();
+    .get();
 }
 
 async function nameTaken(
@@ -195,13 +246,16 @@ async function nameTaken(
   name: string,
   exceptId?: string,
 ) {
-  const existing = await database
-    .prepare(
-      `SELECT id FROM finance_expense_categories
-       WHERE organization_id = ? AND name = ? COLLATE NOCASE`,
+  const existing = await getDb(database)
+    .select({ id: financeExpenseCategories.id })
+    .from(financeExpenseCategories)
+    .where(
+      and(
+        eq(financeExpenseCategories.organizationId, organizationId),
+        sql`${financeExpenseCategories.name} = ${name} collate nocase`,
+      ),
     )
-    .bind(organizationId, name)
-    .first<{ id: string }>();
+    .get();
   return Boolean(existing && existing.id !== exceptId);
 }
 
@@ -233,6 +287,8 @@ function toCategory(row: CategoryRow) {
     transactionCount: row.transaction_count,
   };
 }
+
+/** The value an upsert tried to insert into `column`. */
 
 function invalidName(context: FinanceContext) {
   return context.json(

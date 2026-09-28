@@ -1,7 +1,10 @@
+import { and, eq, isNull } from "drizzle-orm";
 import type { Attachment } from "postal-mime";
 import PostalMime from "postal-mime";
+import { getDb } from "./db";
 import { normalizeFilename } from "./filenames";
 import { organizationIdForInboundAddress } from "./inboundEmailAddress";
+import { inboundEmailAttachments, inboundEmails, organization } from "./schema";
 import type { Bindings } from "./types";
 
 const maxEmailBytes = 25 * 1024 * 1024;
@@ -36,18 +39,19 @@ export async function handleEmail(
     return;
   }
 
-  const organization = await env.DB.prepare(
-    `SELECT id FROM organization
-     WHERE id = ? AND deletedAt IS NULL`,
-  )
-    .bind(organizationId)
-    .first<{ id: string }>();
-  if (!organization) {
+  const recipientOrganization = await getDb(env.DB)
+    .select({ id: organization.id })
+    .from(organization)
+    .where(
+      and(eq(organization.id, organizationId), isNull(organization.deletedAt)),
+    )
+    .get();
+  if (!recipientOrganization) {
     message.setReject("Unknown recipient");
     return;
   }
 
-  await ingestInboundEmail(message, organization.id, env);
+  await ingestInboundEmail(message, recipientOrganization.id, env);
 }
 
 async function ingestInboundEmail(
@@ -88,44 +92,33 @@ async function ingestInboundEmail(
       ),
     );
 
-    const statements = [
-      env.DB.prepare(
-        `INSERT INTO inbound_emails
-         (id, organization_id, message_id, envelope_from, envelope_to, subject,
-          raw_object_key, raw_size, received_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        emailId,
+    const db = getDb(env.DB);
+    await db.batch([
+      db.insert(inboundEmails).values({
+        id: emailId,
         organizationId,
-        normalizeHeaderText(parsed.messageId),
-        normalizeHeaderText(message.from) ?? "",
-        normalizeHeaderText(message.to) ?? "",
-        normalizeHeaderText(parsed.subject),
+        messageId: normalizeHeaderText(parsed.messageId),
+        envelopeFrom: normalizeHeaderText(message.from) ?? "",
+        envelopeTo: normalizeHeaderText(message.to) ?? "",
+        subject: normalizeHeaderText(parsed.subject),
         rawObjectKey,
-        message.rawSize,
-        createdAt,
-      ),
+        rawSize: message.rawSize,
+        receivedAt: createdAt,
+      }),
       ...attachments.map((attachment) =>
-        env.DB.prepare(
-          `INSERT INTO inbound_email_attachments
-           (id, email_id, object_key, filename, content_type, size,
-            disposition, content_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).bind(
-          attachment.id,
+        db.insert(inboundEmailAttachments).values({
+          id: attachment.id,
           emailId,
-          attachment.objectKey,
-          attachment.filename,
-          attachment.contentType,
-          attachment.size,
-          attachment.disposition,
-          attachment.contentId,
+          objectKey: attachment.objectKey,
+          filename: attachment.filename,
+          contentType: attachment.contentType,
+          size: attachment.size,
+          disposition: attachment.disposition,
+          contentId: attachment.contentId,
           createdAt,
-        ),
+        }),
       ),
-    ];
-
-    await env.DB.batch(statements);
+    ]);
   } catch (error) {
     await Promise.allSettled(
       storedObjectKeys.map((objectKey) => env.STORAGE.delete(objectKey)),

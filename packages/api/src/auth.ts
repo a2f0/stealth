@@ -11,15 +11,23 @@ import {
   organization,
   twoFactor,
 } from "better-auth/plugins";
+import { and, eq, isNull, or } from "drizzle-orm";
 import {
   organizationInvitationLimit,
   organizationSeatLimit,
   syncOrganizationSeats,
 } from "./billing";
+import { getDb } from "./db";
 import {
   assignAcceptedInvitationRequirements,
   assignRenewedInvitationRequirements,
 } from "./employeeForms";
+import {
+  organizationGroupCapability,
+  team,
+  teamMember,
+  user as userTable,
+} from "./schema";
 import type { Bindings } from "./types";
 
 type WaitUntil = (promise: Promise<unknown>) => void;
@@ -355,43 +363,29 @@ async function createDefaultFinanceGroup(
   organizationId: string,
   userId: string,
 ) {
+  const db = getDb(database);
   const teamId = crypto.randomUUID();
   const now = new Date().toISOString();
-  await runStatement(
-    database,
-    `INSERT INTO "team"
-     ("id", "name", "organizationId", "memberCount", "createdAt", "updatedAt")
-     VALUES (?, 'Finance', ?, 1, ?, ?)`,
-    [teamId, organizationId, now, now],
-  );
-  await runStatement(
-    database,
-    `INSERT INTO "teamMember"
-     ("id", "teamId", "userId", "membershipKey", "createdAt")
-     VALUES (?, ?, ?, NULL, ?)`,
-    [crypto.randomUUID(), teamId, userId, now],
-  );
-  await runStatement(
-    database,
-    `INSERT INTO "organization_group_capability"
-     ("organization_id", "team_id", "capability") VALUES (?, ?, 'finance')`,
-    [organizationId, teamId],
-  );
-}
-
-async function runStatement(
-  database: D1Database,
-  query: string,
-  values: string[],
-) {
-  const statement = database.prepare(query);
-  if (typeof statement.bind === "function") {
-    await statement.bind(...values).run();
-    return;
-  }
-  await (
-    statement as unknown as { run: (...bindings: string[]) => unknown }
-  ).run(...values);
+  await db.insert(team).values({
+    id: teamId,
+    name: "Finance",
+    organizationId,
+    memberCount: 1,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await db.insert(teamMember).values({
+    id: crypto.randomUUID(),
+    teamId,
+    userId,
+    membershipKey: null,
+    createdAt: now,
+  });
+  await db.insert(organizationGroupCapability).values({
+    organizationId,
+    teamId,
+    capability: "finance",
+  });
 }
 
 async function prepareSession(
@@ -445,17 +439,18 @@ async function updateDefaultOrganization(
   userId: string,
   organizationId: string,
 ) {
-  const statement = database.prepare(
-    'UPDATE "user" SET "defaultOrganizationId" = ? WHERE "id" = ? AND ("defaultOrganizationPinned" = 0 OR "defaultOrganizationId" IS NULL)',
-  );
-  if (typeof statement.bind === "function") {
-    await statement.bind(organizationId, userId).run();
-    return;
-  }
-  await (statement as unknown as { run: (...values: string[]) => unknown }).run(
-    organizationId,
-    userId,
-  );
+  await getDb(database)
+    .update(userTable)
+    .set({ defaultOrganizationId: organizationId })
+    .where(
+      and(
+        eq(userTable.id, userId),
+        or(
+          eq(userTable.defaultOrganizationPinned, 0),
+          isNull(userTable.defaultOrganizationId),
+        ),
+      ),
+    );
 }
 
 type Auth = ReturnType<typeof createAuth>;

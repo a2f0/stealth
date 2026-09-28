@@ -1,8 +1,11 @@
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Context, Next } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { AuthSession } from "./auth";
 import { createAuth } from "./auth";
 import { organizationUserHasSeat } from "./billing";
+import { getDb } from "./db";
+import { invitation, member, organization, team } from "./schema";
 import type { Bindings } from "./types";
 
 export interface AuthVariables {
@@ -119,18 +122,18 @@ async function filterTeamsRequiringAccess(
   next: Next,
 ) {
   const session = context.get("authSession");
-  const memberships = await context.env.DB.prepare(
-    `SELECT member."organizationId", member."twoFactorRequired"
-       FROM "member"
-       JOIN "organization"
-         ON organization.id = member."organizationId"
-       WHERE member."userId" = ?
-         AND organization."deletedAt" IS NULL`,
-  )
-    .bind(session.user.id)
-    .all<{ organizationId: string; twoFactorRequired: boolean | number }>();
+  const memberships = await getDb(context.env.DB)
+    .select({
+      organizationId: member.organizationId,
+      twoFactorRequired: member.twoFactorRequired,
+    })
+    .from(member)
+    .innerJoin(organization, eq(organization.id, member.organizationId))
+    .where(
+      and(eq(member.userId, session.user.id), isNull(organization.deletedAt)),
+    );
   const allowedOrganizationIds = new Set<string>();
-  for (const membership of memberships.results) {
+  for (const membership of memberships) {
     if (
       membership.twoFactorRequired &&
       (!session.user.twoFactorEnabled || !session.session.twoFactorVerified)
@@ -181,28 +184,23 @@ async function authorizeOrganization(
   if (candidates.length === 0) {
     return context.json({ error: "A default organization is required." }, 409);
   }
-  const placeholders = candidates.map(() => "?").join(", ");
-  const memberships = await context.env.DB.prepare(
-    `SELECT member."organizationId", member."role",
-              member."twoFactorRequired"
-       FROM "member"
-       JOIN "organization"
-         ON organization.id = member."organizationId"
-       WHERE member."userId" = ?
-         AND member."organizationId" IN (${placeholders})
-         AND organization."deletedAt" IS NULL`,
-  )
-    .bind(session.user.id, ...candidates)
-    .all<{
-      organizationId: string;
-      role: string;
-      twoFactorRequired: boolean | number;
-    }>();
+  const memberships = await getDb(context.env.DB)
+    .select({
+      organizationId: member.organizationId,
+      role: member.role,
+      twoFactorRequired: member.twoFactorRequired,
+    })
+    .from(member)
+    .innerJoin(organization, eq(organization.id, member.organizationId))
+    .where(
+      and(
+        eq(member.userId, session.user.id),
+        inArray(member.organizationId, candidates),
+        isNull(organization.deletedAt),
+      ),
+    );
   const membershipByOrganization = new Map(
-    memberships.results.map((membership) => [
-      membership.organizationId,
-      membership,
-    ]),
+    memberships.map((membership) => [membership.organizationId, membership]),
   );
   const membership = candidates
     .map((candidate) => membershipByOrganization.get(candidate))
@@ -327,6 +325,8 @@ const organizationResourceSelectors = [
   ["team", "teamId"],
 ] as const;
 
+const organizationResourceTables = { invitation, member, team };
+
 const organizationPluginPathsUsingActiveTeam = new Set([
   "/api/auth/organization/get-active-team",
   "/api/auth/organization/list-team-members",
@@ -343,21 +343,24 @@ function stringProperty(value: Record<string, unknown>, key: string) {
 
 async function organizationIdForRecord(
   database: D1Database,
-  table: "invitation" | "member" | "team",
+  table: keyof typeof organizationResourceTables,
   id: string,
 ) {
-  const record = await database
-    .prepare(`SELECT organizationId FROM "${table}" WHERE id = ?`)
-    .bind(id)
-    .first<{ organizationId: string }>();
+  const resource = organizationResourceTables[table];
+  const record = await getDb(database)
+    .select({ organizationId: resource.organizationId })
+    .from(resource)
+    .where(eq(resource.id, id))
+    .get();
   return record?.organizationId;
 }
 
 async function organizationIdForSlug(database: D1Database, slug: string) {
-  const record = await database
-    .prepare("SELECT id AS organizationId FROM organization WHERE slug = ?")
-    .bind(slug)
-    .first<{ organizationId: string }>();
+  const record = await getDb(database)
+    .select({ organizationId: organization.id })
+    .from(organization)
+    .where(eq(organization.slug, slug))
+    .get();
   return record?.organizationId;
 }
 
@@ -428,22 +431,17 @@ async function authOrganizationTarget(
   ]) {
     const slug = stringValue(slugValue);
     if (!slug) continue;
-    const organization = await context.env.DB.prepare(
-      `SELECT id FROM organization WHERE slug = ? AND deletedAt IS NULL`,
-    )
-      .bind(slug)
-      .first<{ id: string }>();
-    if (organization) targets.add(organization.id);
+    const slugOrganization = await getDb(context.env.DB)
+      .select({ id: organization.id })
+      .from(organization)
+      .where(and(eq(organization.slug, slug), isNull(organization.deletedAt)))
+      .get();
+    if (slugOrganization) targets.add(slugOrganization.id);
   }
 
   const teamId = stringValue(body?.teamId ?? context.req.query("teamId"));
   if (teamId) {
-    await addResourceOrganization(
-      targets,
-      context.env.DB,
-      `SELECT organizationId FROM team WHERE id = ?`,
-      teamId,
-    );
+    await addResourceOrganization(targets, context.env.DB, "team", teamId);
   }
 
   const invitationId = stringValue(
@@ -453,7 +451,7 @@ async function authOrganizationTarget(
     await addResourceOrganization(
       targets,
       context.env.DB,
-      `SELECT organizationId FROM invitation WHERE id = ?`,
+      "invitation",
       invitationId,
     );
   }
@@ -465,12 +463,7 @@ async function authOrganizationTarget(
       ? memberIdOrEmail
       : null);
   if (memberId) {
-    await addResourceOrganization(
-      targets,
-      context.env.DB,
-      `SELECT organizationId FROM member WHERE id = ?`,
-      memberId,
-    );
+    await addResourceOrganization(targets, context.env.DB, "member", memberId);
   }
 
   if (targets.size > 0) {
@@ -491,14 +484,15 @@ async function authOrganizationTarget(
 async function addResourceOrganization(
   targets: Set<string>,
   database: D1Database,
-  query: string,
+  table: keyof typeof organizationResourceTables,
   resourceId: string,
 ) {
-  const resource = await database
-    .prepare(query)
-    .bind(resourceId)
-    .first<{ organizationId: string }>();
-  if (resource) targets.add(resource.organizationId);
+  const organizationId = await organizationIdForRecord(
+    database,
+    table,
+    resourceId,
+  );
+  if (organizationId !== undefined) targets.add(organizationId);
 }
 
 function addStringValue(targets: Set<string>, value: unknown) {

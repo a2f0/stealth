@@ -1,12 +1,15 @@
+import { and, asc, count, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import PostalMime from "postal-mime";
 import type { AuthVariables } from "./authMiddleware";
+import { getDb } from "./db";
 import { organizationInboxAddress } from "./inboundEmailAddress";
 import {
   createEmailLink,
   deleteEmailLink,
   listEmailLinks,
 } from "./inboundEmailLinks";
+import { inboundEmailAttachments, inboundEmails, user } from "./schema";
 import type { Bindings } from "./types";
 
 type InboxEnv = {
@@ -41,38 +44,57 @@ interface InboundEmailAttachmentRow {
   size: number;
 }
 
+const inboundEmailRowColumns = {
+  id: inboundEmails.id,
+  envelope_from: inboundEmails.envelopeFrom,
+  envelope_to: inboundEmails.envelopeTo,
+  subject: inboundEmails.subject,
+  raw_object_key: inboundEmails.rawObjectKey,
+  raw_size: inboundEmails.rawSize,
+  received_at: inboundEmails.receivedAt,
+  deleted_at: inboundEmails.deletedAt,
+  deleted_by_user_id: inboundEmails.deletedByUserId,
+  deleted_by_name: user.name,
+  deleted_by_email: user.email,
+  attachment_count: count(inboundEmailAttachments.id),
+};
+
+const inboundEmailAttachmentRowColumns = {
+  id: inboundEmailAttachments.id,
+  object_key: inboundEmailAttachments.objectKey,
+  filename: inboundEmailAttachments.filename,
+  content_type: inboundEmailAttachments.contentType,
+  size: inboundEmailAttachments.size,
+};
+
 inbox.get("/", async (context) => {
   const folder = inboxFolder(context.req.query("folder"));
   if (!folder) return invalidFolder(context);
   const organizationId = context.get("organizationId");
   const deletionFilter = emailDeletionFilter(folder);
   const ordering =
-    folder === "trash" ? "email.deleted_at" : "email.received_at";
-  const result = await context.env.DB.prepare(
-    `SELECT email.id, email.envelope_from, email.envelope_to, email.subject,
-            email.raw_object_key, email.raw_size, email.received_at,
-            email.deleted_at, email.deleted_by_user_id,
-            deleted_by.name AS deleted_by_name,
-            deleted_by.email AS deleted_by_email,
-            COUNT(attachment.id) AS attachment_count
-     FROM inbound_emails AS email
-     LEFT JOIN inbound_email_attachments AS attachment
-       ON attachment.email_id = email.id
-     LEFT JOIN "user" AS deleted_by ON deleted_by.id = email.deleted_by_user_id
-     WHERE email.organization_id = ? AND ${deletionFilter}
-     GROUP BY email.id
-     ORDER BY ${ordering} DESC, email.id DESC
-     LIMIT 100`,
-  )
-    .bind(organizationId)
-    .all<InboundEmailRow>();
+    folder === "trash" ? inboundEmails.deletedAt : inboundEmails.receivedAt;
+  const emails = await getDb(context.env.DB)
+    .select(inboundEmailRowColumns)
+    .from(inboundEmails)
+    .leftJoin(
+      inboundEmailAttachments,
+      eq(inboundEmailAttachments.emailId, inboundEmails.id),
+    )
+    .leftJoin(user, eq(user.id, inboundEmails.deletedByUserId))
+    .where(
+      and(eq(inboundEmails.organizationId, organizationId), deletionFilter),
+    )
+    .groupBy(inboundEmails.id)
+    .orderBy(desc(ordering), desc(inboundEmails.id))
+    .limit(100);
 
   return context.json({
     address: organizationInboxAddress(
       organizationId,
       context.env.INBOUND_EMAIL_DOMAIN,
     ),
-    emails: result.results.map(toEmailSummary),
+    emails: emails.map(toEmailSummary),
   });
 });
 
@@ -123,20 +145,22 @@ inbox.delete("/:id/links/:linkId", deleteEmailLink);
 inbox.get("/:emailId/attachments/:attachmentId", async (context) => {
   const folder = inboxFolder(context.req.query("folder"));
   if (!folder) return invalidFolder(context);
-  const attachment = await context.env.DB.prepare(
-    `SELECT attachment.id, attachment.object_key, attachment.filename,
-            attachment.content_type, attachment.size
-     FROM inbound_email_attachments AS attachment
-     JOIN inbound_emails AS email ON email.id = attachment.email_id
-     WHERE attachment.id = ? AND attachment.email_id = ?
-       AND email.organization_id = ? AND ${emailDeletionFilter(folder)}`,
-  )
-    .bind(
-      context.req.param("attachmentId"),
-      context.req.param("emailId"),
-      context.get("organizationId"),
+  const attachment = await getDb(context.env.DB)
+    .select(inboundEmailAttachmentRowColumns)
+    .from(inboundEmailAttachments)
+    .innerJoin(
+      inboundEmails,
+      eq(inboundEmails.id, inboundEmailAttachments.emailId),
     )
-    .first<InboundEmailAttachmentRow>();
+    .where(
+      and(
+        eq(inboundEmailAttachments.id, context.req.param("attachmentId")),
+        eq(inboundEmailAttachments.emailId, context.req.param("emailId")),
+        eq(inboundEmails.organizationId, context.get("organizationId")),
+        emailDeletionFilter(folder),
+      ),
+    )
+    .get();
   if (!attachment) {
     return context.json({ error: "Attachment not found." }, 404);
   }
@@ -160,18 +184,16 @@ inbox.get("/:emailId/attachments/:attachmentId", async (context) => {
 inbox.delete("/:id", async (context) => {
   const deletedAt = new Date().toISOString();
   const deletedByUserId = context.get("authSession").user.id;
-  const result = await context.env.DB.prepare(
-    `UPDATE inbound_emails
-     SET deleted_at = ?, deleted_by_user_id = ?
-     WHERE id = ? AND organization_id = ? AND deleted_at IS NULL`,
-  )
-    .bind(
-      deletedAt,
-      deletedByUserId,
-      context.req.param("id"),
-      context.get("organizationId"),
-    )
-    .run();
+  const result = await getDb(context.env.DB)
+    .update(inboundEmails)
+    .set({ deletedAt, deletedByUserId })
+    .where(
+      and(
+        eq(inboundEmails.id, context.req.param("id")),
+        eq(inboundEmails.organizationId, context.get("organizationId")),
+        isNull(inboundEmails.deletedAt),
+      ),
+    );
   if (result.meta.changes !== 1) {
     return context.json({ error: "Email not found." }, 404);
   }
@@ -183,13 +205,16 @@ inbox.delete("/:id", async (context) => {
 });
 
 inbox.post("/:id/restore", async (context) => {
-  const result = await context.env.DB.prepare(
-    `UPDATE inbound_emails
-     SET deleted_at = NULL, deleted_by_user_id = NULL
-     WHERE id = ? AND organization_id = ? AND deleted_at IS NOT NULL`,
-  )
-    .bind(context.req.param("id"), context.get("organizationId"))
-    .run();
+  const result = await getDb(context.env.DB)
+    .update(inboundEmails)
+    .set({ deletedAt: null, deletedByUserId: null })
+    .where(
+      and(
+        eq(inboundEmails.id, context.req.param("id")),
+        eq(inboundEmails.organizationId, context.get("organizationId")),
+        isNotNull(inboundEmails.deletedAt),
+      ),
+    );
   if (result.meta.changes !== 1) {
     return context.json({ error: "Deleted email not found." }, 404);
   }
@@ -202,25 +227,23 @@ async function findEmail(
   id: string,
   folder: InboxFolder,
 ) {
-  return database
-    .prepare(
-      `SELECT email.id, email.envelope_from, email.envelope_to, email.subject,
-              email.raw_object_key, email.raw_size, email.received_at,
-              email.deleted_at, email.deleted_by_user_id,
-              deleted_by.name AS deleted_by_name,
-              deleted_by.email AS deleted_by_email,
-              COUNT(attachment.id) AS attachment_count
-       FROM inbound_emails AS email
-       LEFT JOIN inbound_email_attachments AS attachment
-         ON attachment.email_id = email.id
-       LEFT JOIN "user" AS deleted_by
-         ON deleted_by.id = email.deleted_by_user_id
-       WHERE email.id = ? AND email.organization_id = ?
-         AND ${emailDeletionFilter(folder)}
-       GROUP BY email.id`,
+  return getDb(database)
+    .select(inboundEmailRowColumns)
+    .from(inboundEmails)
+    .leftJoin(
+      inboundEmailAttachments,
+      eq(inboundEmailAttachments.emailId, inboundEmails.id),
     )
-    .bind(id, organizationId)
-    .first<InboundEmailRow>();
+    .leftJoin(user, eq(user.id, inboundEmails.deletedByUserId))
+    .where(
+      and(
+        eq(inboundEmails.id, id),
+        eq(inboundEmails.organizationId, organizationId),
+        emailDeletionFilter(folder),
+      ),
+    )
+    .groupBy(inboundEmails.id)
+    .get();
 }
 
 async function findAttachments(
@@ -228,18 +251,20 @@ async function findAttachments(
   organizationId: string,
   emailId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT attachment.id, attachment.object_key, attachment.filename,
-              attachment.content_type, attachment.size
-       FROM inbound_email_attachments AS attachment
-       JOIN inbound_emails AS email ON email.id = attachment.email_id
-       WHERE attachment.email_id = ? AND email.organization_id = ?
-       ORDER BY attachment.created_at ASC`,
+  return getDb(database)
+    .select(inboundEmailAttachmentRowColumns)
+    .from(inboundEmailAttachments)
+    .innerJoin(
+      inboundEmails,
+      eq(inboundEmails.id, inboundEmailAttachments.emailId),
     )
-    .bind(emailId, organizationId)
-    .all<InboundEmailAttachmentRow>();
-  return result.results;
+    .where(
+      and(
+        eq(inboundEmailAttachments.emailId, emailId),
+        eq(inboundEmails.organizationId, organizationId),
+      ),
+    )
+    .orderBy(asc(inboundEmailAttachments.createdAt));
 }
 
 function toEmailSummary(row: InboundEmailRow) {
@@ -265,8 +290,8 @@ function inboxFolder(value: string | undefined): InboxFolder | null {
 
 function emailDeletionFilter(folder: InboxFolder) {
   return folder === "trash"
-    ? "email.deleted_at IS NOT NULL"
-    : "email.deleted_at IS NULL";
+    ? isNotNull(inboundEmails.deletedAt)
+    : isNull(inboundEmails.deletedAt);
 }
 
 function invalidFolder(context: Context<InboxEnv>) {

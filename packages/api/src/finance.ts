@@ -1,4 +1,6 @@
+import { and, asc, count, desc, eq, inArray, ne } from "drizzle-orm";
 import { Hono } from "hono";
+import { excluded, getDb } from "./db";
 import {
   addDefaultCategories,
   assignTransactionCategory,
@@ -10,11 +12,17 @@ import {
 } from "./financeCategories";
 import type { FinanceContext, FinanceEnv } from "./financeContext";
 import { expenseReport } from "./financeReports";
-import { type PlaidItemRow, syncPlaidItem } from "./financeSync";
+import { syncPlaidItem } from "./financeSync";
 import { searchTransactions } from "./financeTransactionSearch";
 import { listLinkedEmails, toLinkedEmail } from "./inboundEmailLinks";
 import { PlaidApiError, type PlaidRequest, plaidRequest } from "./plaid";
 import { decryptToken, encryptToken } from "./plaidCrypto";
+import {
+  financeTransactionAnnotations,
+  plaidAccounts,
+  plaidItems,
+  plaidTransactions,
+} from "./schema";
 import type { Bindings } from "./types";
 
 interface ConnectionRow {
@@ -268,15 +276,23 @@ async function disconnectConnection(
     access_token: accessToken,
   });
   const now = new Date().toISOString();
-  await context.env.DB.prepare(
-    `UPDATE plaid_items
-       SET access_token_ciphertext = '', access_token_iv = '', cursor = NULL,
-           status = 'disconnected', error_code = NULL, disconnected_at = ?,
-           updated_at = ?
-       WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(now, now, item.id, organizationId)
-    .run();
+  await getDb(context.env.DB)
+    .update(plaidItems)
+    .set({
+      accessTokenCiphertext: "",
+      accessTokenIv: "",
+      cursor: null,
+      status: "disconnected",
+      errorCode: null,
+      disconnectedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(plaidItems.id, item.id),
+        eq(plaidItems.organizationId, organizationId),
+      ),
+    );
   return context.body(null, 204);
 }
 
@@ -286,11 +302,17 @@ async function deleteConnectionData(context: FinanceContext) {
     return context.json({ error: "Connection not found." }, 404);
   }
   const organizationId = context.get("organizationId");
-  const connection = await context.env.DB.prepare(
-    `SELECT status FROM plaid_items WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(connectionId, organizationId)
-    .first<{ status: string }>();
+  const db = getDb(context.env.DB);
+  const connection = await db
+    .select({ status: plaidItems.status })
+    .from(plaidItems)
+    .where(
+      and(
+        eq(plaidItems.id, connectionId),
+        eq(plaidItems.organizationId, organizationId),
+      ),
+    )
+    .get();
   if (!connection) {
     return context.json({ error: "Connection not found." }, 404);
   }
@@ -300,25 +322,48 @@ async function deleteConnectionData(context: FinanceContext) {
       409,
     );
   }
-  await context.env.DB.batch([
-    context.env.DB.prepare(
-      `DELETE FROM finance_transaction_annotations
-         WHERE organization_id = ? AND transaction_id IN (
-           SELECT id FROM plaid_transactions
-           WHERE plaid_item_record_id = ? AND organization_id = ?
-         )`,
-    ).bind(organizationId, connectionId, organizationId),
-    context.env.DB.prepare(
-      `DELETE FROM plaid_transactions
-         WHERE plaid_item_record_id = ? AND organization_id = ?`,
-    ).bind(connectionId, organizationId),
-    context.env.DB.prepare(
-      `DELETE FROM plaid_accounts
-         WHERE plaid_item_record_id = ? AND organization_id = ?`,
-    ).bind(connectionId, organizationId),
-    context.env.DB.prepare(
-      "DELETE FROM plaid_items WHERE id = ? AND organization_id = ?",
-    ).bind(connectionId, organizationId),
+  await db.batch([
+    db.delete(financeTransactionAnnotations).where(
+      and(
+        eq(financeTransactionAnnotations.organizationId, organizationId),
+        inArray(
+          financeTransactionAnnotations.transactionId,
+          db
+            .select({ id: plaidTransactions.id })
+            .from(plaidTransactions)
+            .where(
+              and(
+                eq(plaidTransactions.plaidItemRecordId, connectionId),
+                eq(plaidTransactions.organizationId, organizationId),
+              ),
+            ),
+        ),
+      ),
+    ),
+    db
+      .delete(plaidTransactions)
+      .where(
+        and(
+          eq(plaidTransactions.plaidItemRecordId, connectionId),
+          eq(plaidTransactions.organizationId, organizationId),
+        ),
+      ),
+    db
+      .delete(plaidAccounts)
+      .where(
+        and(
+          eq(plaidAccounts.plaidItemRecordId, connectionId),
+          eq(plaidAccounts.organizationId, organizationId),
+        ),
+      ),
+    db
+      .delete(plaidItems)
+      .where(
+        and(
+          eq(plaidItems.id, connectionId),
+          eq(plaidItems.organizationId, organizationId),
+        ),
+      ),
   ]);
   return context.body(null, 204);
 }
@@ -334,41 +379,45 @@ async function updateTransactionAnnotation(context: FinanceContext) {
     return context.json({ error: "A valid annotation is required." }, 400);
   }
   const organizationId = context.get("organizationId");
-  const transaction = await context.env.DB.prepare(
-    `SELECT id FROM plaid_transactions
-       WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(transactionId, organizationId)
-    .first<{ id: string }>();
+  const db = getDb(context.env.DB);
+  const transaction = await db
+    .select({ id: plaidTransactions.id })
+    .from(plaidTransactions)
+    .where(
+      and(
+        eq(plaidTransactions.id, transactionId),
+        eq(plaidTransactions.organizationId, organizationId),
+      ),
+    )
+    .get();
   if (!transaction) {
     return context.json({ error: "Transaction not found." }, 404);
   }
   const now = new Date().toISOString();
   const userId = context.get("authSession").user.id;
-  await context.env.DB.prepare(
-    `INSERT INTO finance_transaction_annotations
-       (transaction_id, organization_id, note, labels,
-        reviewed, created_by, updated_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(transaction_id) DO UPDATE SET
-         note = excluded.note,
-         labels = excluded.labels,
-         reviewed = excluded.reviewed,
-         updated_by = excluded.updated_by,
-         updated_at = excluded.updated_at`,
-  )
-    .bind(
+  await db
+    .insert(financeTransactionAnnotations)
+    .values({
       transactionId,
       organizationId,
-      annotation.note,
-      JSON.stringify(annotation.labels),
-      annotation.reviewed ? 1 : 0,
-      userId,
-      userId,
-      now,
-      now,
-    )
-    .run();
+      note: annotation.note,
+      labels: JSON.stringify(annotation.labels),
+      reviewed: annotation.reviewed ? 1 : 0,
+      createdBy: userId,
+      updatedBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: financeTransactionAnnotations.transactionId,
+      set: {
+        note: excluded(financeTransactionAnnotations.note),
+        labels: excluded(financeTransactionAnnotations.labels),
+        reviewed: excluded(financeTransactionAnnotations.reviewed),
+        updatedBy: excluded(financeTransactionAnnotations.updatedBy),
+        updatedAt: excluded(financeTransactionAnnotations.updatedAt),
+      },
+    });
   return context.json({ annotation });
 }
 
@@ -380,86 +429,104 @@ async function insertConnection(
   id: string,
 ) {
   const now = new Date().toISOString();
-  await context.env.DB.prepare(
-    `INSERT INTO plaid_items
-     (id, organization_id, plaid_item_id, access_token_ciphertext,
-      access_token_iv, institution_id, institution_name, status, created_by,
-      created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
-  )
-    .bind(
+  await getDb(context.env.DB)
+    .insert(plaidItems)
+    .values({
       id,
-      context.get("organizationId"),
-      exchange.item_id,
-      encrypted.ciphertext,
-      encrypted.iv,
-      optionalText(input.institutionId, 100),
-      optionalText(input.institutionName, 200),
-      context.get("authSession").user.id,
-      now,
-      now,
-    )
-    .run();
+      organizationId: context.get("organizationId"),
+      plaidItemId: exchange.item_id,
+      accessTokenCiphertext: encrypted.ciphertext,
+      accessTokenIv: encrypted.iv,
+      institutionId: optionalText(input.institutionId, 100),
+      institutionName: optionalText(input.institutionName, 200),
+      status: "active",
+      createdBy: context.get("authSession").user.id,
+      createdAt: now,
+      updatedAt: now,
+    });
 }
 
 async function listConnections(database: D1Database, organizationId: string) {
-  const result = await database
-    .prepare(
-      `SELECT item.id, item.institution_id, item.institution_name, item.status,
-              item.error_code, item.last_synced_at, item.created_at,
-              COUNT(account.id) AS account_count
-       FROM plaid_items AS item
-       LEFT JOIN plaid_accounts AS account
-         ON account.plaid_item_record_id = item.id
-       WHERE item.organization_id = ?
-       GROUP BY item.id ORDER BY item.created_at DESC`,
-    )
-    .bind(organizationId)
-    .all<ConnectionRow>();
-  return result.results;
+  return getDb(database)
+    .select({
+      id: plaidItems.id,
+      institution_id: plaidItems.institutionId,
+      institution_name: plaidItems.institutionName,
+      status: plaidItems.status,
+      error_code: plaidItems.errorCode,
+      last_synced_at: plaidItems.lastSyncedAt,
+      created_at: plaidItems.createdAt,
+      account_count: count(plaidAccounts.id),
+    })
+    .from(plaidItems)
+    .leftJoin(plaidAccounts, eq(plaidAccounts.plaidItemRecordId, plaidItems.id))
+    .where(eq(plaidItems.organizationId, organizationId))
+    .groupBy(plaidItems.id)
+    .orderBy(desc(plaidItems.createdAt));
 }
 
 async function listAccounts(database: D1Database, organizationId: string) {
-  const result = await database
-    .prepare(
-      `SELECT account.id, account.name, account.official_name, account.mask,
-              account.type, account.subtype, account.current_balance,
-              account.available_balance, account.currency_code,
-              item.institution_name
-       FROM plaid_accounts AS account
-       JOIN plaid_items AS item ON item.id = account.plaid_item_record_id
-       WHERE account.organization_id = ? ORDER BY account.name ASC`,
-    )
-    .bind(organizationId)
-    .all<AccountRow>();
-  return result.results;
+  return getDb(database)
+    .select({
+      id: plaidAccounts.id,
+      name: plaidAccounts.name,
+      official_name: plaidAccounts.officialName,
+      mask: plaidAccounts.mask,
+      type: plaidAccounts.type,
+      subtype: plaidAccounts.subtype,
+      current_balance: plaidAccounts.currentBalance,
+      available_balance: plaidAccounts.availableBalance,
+      currency_code: plaidAccounts.currencyCode,
+      institution_name: plaidItems.institutionName,
+    })
+    .from(plaidAccounts)
+    .innerJoin(plaidItems, eq(plaidItems.id, plaidAccounts.plaidItemRecordId))
+    .where(eq(plaidAccounts.organizationId, organizationId))
+    .orderBy(asc(plaidAccounts.name));
 }
 
 async function listTransactions(database: D1Database, organizationId: string) {
-  const result = await database
-    .prepare(
-      `SELECT txn.id, txn.name, txn.merchant_name,
-              txn.amount, txn.currency_code,
-              txn.transaction_date, txn.authorized_date,
-              txn.category_primary, txn.category_detailed,
-              txn.payment_channel, txn.pending,
-              account.id AS account_id, account.name AS account_name,
-              annotation.note AS annotation_note,
-              annotation.expense_category_id AS annotation_expense_category_id,
-              annotation.labels AS annotation_labels,
-              annotation.reviewed AS annotation_reviewed
-       FROM plaid_transactions AS txn
-       JOIN plaid_accounts AS account
-         ON account.id = txn.account_record_id
-       LEFT JOIN finance_transaction_annotations AS annotation
-         ON annotation.transaction_id = txn.id
-       WHERE txn.organization_id = ? AND txn.source_status = 'active'
-       ORDER BY txn.transaction_date DESC, txn.id DESC
-       LIMIT 250`,
+  return getDb(database)
+    .select({
+      id: plaidTransactions.id,
+      name: plaidTransactions.name,
+      merchant_name: plaidTransactions.merchantName,
+      amount: plaidTransactions.amount,
+      currency_code: plaidTransactions.currencyCode,
+      transaction_date: plaidTransactions.transactionDate,
+      authorized_date: plaidTransactions.authorizedDate,
+      category_primary: plaidTransactions.categoryPrimary,
+      category_detailed: plaidTransactions.categoryDetailed,
+      payment_channel: plaidTransactions.paymentChannel,
+      pending: plaidTransactions.pending,
+      account_id: plaidAccounts.id,
+      account_name: plaidAccounts.name,
+      annotation_note: financeTransactionAnnotations.note,
+      annotation_expense_category_id:
+        financeTransactionAnnotations.expenseCategoryId,
+      annotation_labels: financeTransactionAnnotations.labels,
+      annotation_reviewed: financeTransactionAnnotations.reviewed,
+    })
+    .from(plaidTransactions)
+    .innerJoin(
+      plaidAccounts,
+      eq(plaidAccounts.id, plaidTransactions.accountRecordId),
     )
-    .bind(organizationId)
-    .all<TransactionRow>();
-  return result.results;
+    .leftJoin(
+      financeTransactionAnnotations,
+      eq(financeTransactionAnnotations.transactionId, plaidTransactions.id),
+    )
+    .where(
+      and(
+        eq(plaidTransactions.organizationId, organizationId),
+        eq(plaidTransactions.sourceStatus, "active"),
+      ),
+    )
+    .orderBy(
+      desc(plaidTransactions.transactionDate),
+      desc(plaidTransactions.id),
+    )
+    .limit(250);
 }
 
 async function findItem(
@@ -467,24 +534,30 @@ async function findItem(
   organizationId: string,
   id: string,
 ) {
-  return database
-    .prepare(
-      `SELECT id, access_token_ciphertext, access_token_iv, cursor
-       FROM plaid_items
-       WHERE id = ? AND organization_id = ? AND status <> 'disconnected'`,
+  return getDb(database)
+    .select({
+      id: plaidItems.id,
+      access_token_ciphertext: plaidItems.accessTokenCiphertext,
+      access_token_iv: plaidItems.accessTokenIv,
+      cursor: plaidItems.cursor,
+    })
+    .from(plaidItems)
+    .where(
+      and(
+        eq(plaidItems.id, id),
+        eq(plaidItems.organizationId, organizationId),
+        ne(plaidItems.status, "disconnected"),
+      ),
     )
-    .bind(id, organizationId)
-    .first<PlaidItemRow>();
+    .get();
 }
 
 async function findItemByPlaidId(database: D1Database, plaidItemId: string) {
-  return database
-    .prepare(
-      `SELECT id, organization_id AS organizationId
-       FROM plaid_items WHERE plaid_item_id = ?`,
-    )
-    .bind(plaidItemId)
-    .first<{ id: string; organizationId: string }>();
+  return getDb(database)
+    .select({ id: plaidItems.id, organizationId: plaidItems.organizationId })
+    .from(plaidItems)
+    .where(eq(plaidItems.plaidItemId, plaidItemId))
+    .get();
 }
 
 function toConnection(row: ConnectionRow) {
@@ -621,5 +694,7 @@ function optionalText(value: unknown, maxLength: number) {
     ? value.trim() || null
     : null;
 }
+
+/** The value an upsert tried to insert into `column`. */
 
 export const finance = createFinanceRouter();

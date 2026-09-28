@@ -1,13 +1,17 @@
+import { count, desc, eq } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import {
   cancelOrganizationSubscription,
   recoverCheckoutAfterFailedDeletion,
 } from "./billing";
+import { getDb } from "./db";
 import {
   markOrganizationForDeletion,
   restoreOrganization,
 } from "./organizationDeletion";
+import { member, organization, user } from "./schema";
 import type { Bindings } from "./types";
 
 const adminOrganizations = new Hono<{
@@ -15,56 +19,32 @@ const adminOrganizations = new Hono<{
   Variables: AuthVariables;
 }>();
 
-interface OrganizationRow {
-  created_at: number | string;
-  deleted_by_email: string | null;
-  deleted_by_name: string | null;
-  deleted_by_user_id: string | null;
-  deleted_at: number | string | null;
-  id: string;
-  member_count: number;
-  name: string;
-  owner_email: string | null;
-  owner_name: string | null;
-  slug: string;
-}
-
 adminOrganizations.get("/", async (context) => {
-  const result = await context.env.DB.prepare(
-    `SELECT organization.id, organization.name, organization.slug,
-            organization.createdAt AS created_at,
-            organization.deletedAt AS deleted_at,
-            organization.deletedByUserId AS deleted_by_user_id,
-            deleted_by.name AS deleted_by_name,
-            deleted_by.email AS deleted_by_email,
-            owner.name AS owner_name, owner.email AS owner_email,
-            COUNT(member.id) AS member_count
-     FROM organization
-     LEFT JOIN user AS owner
-       ON owner.defaultOrganizationId = organization.id
-     LEFT JOIN user AS deleted_by
-       ON deleted_by.id = organization.deletedByUserId
-     LEFT JOIN member ON member.organizationId = organization.id
-     GROUP BY organization.id
-     ORDER BY organization.createdAt DESC
-     LIMIT 100`,
-  ).all<OrganizationRow>();
-
-  return context.json({
-    organizations: result.results.map((organization) => ({
-      createdAt: organization.created_at,
-      deletedByEmail: organization.deleted_by_email,
-      deletedByName: organization.deleted_by_name,
-      deletedByUserId: organization.deleted_by_user_id,
-      deletedAt: organization.deleted_at,
+  const owner = alias(user, "owner");
+  const deletedBy = alias(user, "deleted_by");
+  const organizations = await getDb(context.env.DB)
+    .select({
+      createdAt: organization.createdAt,
+      deletedByEmail: deletedBy.email,
+      deletedByName: deletedBy.name,
+      deletedByUserId: organization.deletedByUserId,
+      deletedAt: organization.deletedAt,
       id: organization.id,
-      memberCount: organization.member_count,
+      memberCount: count(member.id),
       name: organization.name,
-      ownerEmail: organization.owner_email,
-      ownerName: organization.owner_name,
+      ownerEmail: owner.email,
+      ownerName: owner.name,
       slug: organization.slug,
-    })),
-  });
+    })
+    .from(organization)
+    .leftJoin(owner, eq(owner.defaultOrganizationId, organization.id))
+    .leftJoin(deletedBy, eq(deletedBy.id, organization.deletedByUserId))
+    .leftJoin(member, eq(member.organizationId, organization.id))
+    .groupBy(organization.id)
+    .orderBy(desc(organization.createdAt))
+    .limit(100);
+
+  return context.json({ organizations });
 });
 
 adminOrganizations.delete("/:organizationId", async (context) => {
@@ -115,12 +95,12 @@ adminOrganizations.delete("/:organizationId", async (context) => {
       organizationId,
       checkoutGuard,
     );
-    const organization = await context.env.DB.prepare(
-      "SELECT deletedAt FROM organization WHERE id = ?",
-    )
-      .bind(organizationId)
-      .first<{ deletedAt: string | null }>();
-    if (!organization) {
+    const existing = await getDb(context.env.DB)
+      .select({ deletedAt: organization.deletedAt })
+      .from(organization)
+      .where(eq(organization.id, organizationId))
+      .get();
+    if (!existing) {
       return context.json({ error: "Organization not found." }, 404);
     }
     return context.json(
@@ -141,12 +121,12 @@ adminOrganizations.post("/:organizationId/restore", async (context) => {
   const organizationId = context.req.param("organizationId");
   const restoration = await restoreOrganization(context.env.DB, organizationId);
   if (!restoration) {
-    const organization = await context.env.DB.prepare(
-      "SELECT deletedAt FROM organization WHERE id = ?",
-    )
-      .bind(organizationId)
-      .first<{ deletedAt: string | null }>();
-    if (!organization) {
+    const existing = await getDb(context.env.DB)
+      .select({ deletedAt: organization.deletedAt })
+      .from(organization)
+      .where(eq(organization.id, organizationId))
+      .get();
+    if (!existing) {
       return context.json({ error: "Organization not found." }, 404);
     }
     return context.json(

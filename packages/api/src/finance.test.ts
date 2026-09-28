@@ -1,4 +1,4 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
@@ -9,6 +9,7 @@ import type {
   PlaidRequestBody,
   TransactionsSyncResponse,
 } from "./plaid";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const encryptionKey = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)));
@@ -1038,7 +1039,7 @@ function bindingsFor(database: Database): Bindings {
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: toD1(database),
+    DB: createTestD1(database),
     EMAIL: {} as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.de",
@@ -1049,37 +1050,6 @@ function bindingsFor(database: Database): Bindings {
     PLAID_TOKEN_ENCRYPTION_KEY: encryptionKey,
     STORAGE: {} as R2Bucket,
   };
-}
-
-interface TestStatement {
-  execute: () => unknown;
-}
-
-function toD1(database: Database) {
-  return {
-    batch: async (statements: TestStatement[]) =>
-      statements.map((statement) => statement.execute()),
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({
-          results: database.query(query).all(...values),
-          success: true,
-        }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        execute: () => database.query(query).run(...values),
-        first: async () => database.query(query).get(...values),
-        run: async () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes }, success: true };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }
 
 async function applyMigration(database: Database, filename: string) {

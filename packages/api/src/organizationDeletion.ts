@@ -1,3 +1,27 @@
+import {
+  and,
+  asc,
+  eq,
+  exists,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
+import { type Db, getDb } from "./db";
+import {
+  invitation,
+  member,
+  organization,
+  organizationBilling,
+  session,
+  team,
+  user,
+} from "./schema";
+
 interface OrganizationDeletion {
   deletedAt: string;
   organizationId: string;
@@ -13,118 +37,148 @@ export async function markOrganizationForDeletion(
   deletedByUserId: string,
   checkoutGuard: string | null,
 ): Promise<OrganizationDeletion | undefined> {
+  const db = getDb(database);
   const deletedAt = new Date().toISOString();
-  const results = await database.batch([
-    database
-      .prepare(
-        `UPDATE organization
-         SET deletedAt = ?, deletedByUserId = ?
-         WHERE id = ? AND deletedAt IS NULL
-           AND EXISTS (
-             SELECT 1 FROM organization_billing
-             WHERE organization_id = organization.id
-               AND checkout_disabled_at IS ?
-               AND COALESCE(checkout_disabled_expires_at, 0) > unixepoch()
-           )`,
-      )
-      .bind(deletedAt, deletedByUserId, organizationId, checkoutGuard),
-    database
-      .prepare(
-        `UPDATE invitation
-         SET status = 'canceled'
-         WHERE organizationId = ? AND status = 'pending'
-           AND EXISTS (
-             SELECT 1 FROM organization
-             WHERE id = ? AND deletedAt = ? AND deletedByUserId = ?
-           )`,
-      )
-      .bind(organizationId, organizationId, deletedAt, deletedByUserId),
-    database
-      .prepare(
-        `UPDATE user
-         SET defaultOrganizationId = (
-           SELECT member.organizationId
-           FROM member
-           JOIN organization
-             ON organization.id = member.organizationId
-           WHERE member.userId = user.id
-             AND member.organizationId != ?
-             AND organization.deletedAt IS NULL
-           ORDER BY member.createdAt ASC, member.id ASC
-           LIMIT 1
-         )
-         WHERE defaultOrganizationId = ?
-           AND EXISTS (
-             SELECT 1 FROM organization
-             WHERE id = ? AND deletedAt = ? AND deletedByUserId = ?
-           )`,
-      )
-      .bind(
-        organizationId,
-        organizationId,
-        organizationId,
-        deletedAt,
-        deletedByUserId,
+  const markedDeleted = exists(
+    db
+      .select({ one: sql`1` })
+      .from(organization)
+      .where(
+        and(
+          eq(organization.id, organizationId),
+          eq(organization.deletedAt, deletedAt),
+          eq(organization.deletedByUserId, deletedByUserId),
+        ),
       ),
-    database
-      .prepare(
-        `UPDATE session
-         SET activeOrganizationId = CASE
-               WHEN activeOrganizationId = ? THEN (
-                 SELECT defaultOrganizationId
-                 FROM user
-                 WHERE user.id = session.userId
-               )
-               ELSE activeOrganizationId
-             END,
-             activeTeamId = NULL
-         WHERE (
-           activeOrganizationId = ?
-           OR activeTeamId IN (
-              SELECT id FROM team WHERE organizationId = ?
-            )
-         )
-           AND EXISTS (
-             SELECT 1 FROM organization
-             WHERE id = ? AND deletedAt = ? AND deletedByUserId = ?
-           )`,
-      )
-      .bind(
-        organizationId,
-        organizationId,
-        organizationId,
-        organizationId,
-        deletedAt,
-        deletedByUserId,
+  );
+  const results = await db.batch([
+    db
+      .update(organization)
+      .set({ deletedAt, deletedByUserId })
+      .where(
+        and(
+          eq(organization.id, organizationId),
+          isNull(organization.deletedAt),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(organizationBilling)
+              .where(
+                and(
+                  eq(organizationBilling.organizationId, organization.id),
+                  sql`${organizationBilling.checkoutDisabledAt} IS ${checkoutGuard}`,
+                  sql`COALESCE(${organizationBilling.checkoutDisabledExpiresAt}, 0) > unixepoch()`,
+                ),
+              ),
+          ),
+        ),
       ),
+    db
+      .update(invitation)
+      .set({ status: "canceled" })
+      .where(
+        and(
+          eq(invitation.organizationId, organizationId),
+          eq(invitation.status, "pending"),
+          markedDeleted,
+        ),
+      ),
+    reassignDefaultOrganizations(db, organizationId, markedDeleted),
+    clearActiveSessions(db, organizationId, markedDeleted),
   ]);
 
   if (results[0]?.meta.changes !== 1) return undefined;
   return { deletedAt, organizationId };
 }
 
+/** Moves users whose default was the deleted organization to their next one. */
+function reassignDefaultOrganizations(
+  db: Db,
+  organizationId: string,
+  markedDeleted: SQL,
+) {
+  return db
+    .update(user)
+    .set({
+      defaultOrganizationId: sql`${db
+        .select({ organizationId: member.organizationId })
+        .from(member)
+        .innerJoin(organization, eq(organization.id, member.organizationId))
+        .where(
+          and(
+            eq(member.userId, user.id),
+            ne(member.organizationId, organizationId),
+            isNull(organization.deletedAt),
+          ),
+        )
+        .orderBy(asc(member.createdAt), asc(member.id))
+        .limit(1)}`,
+    })
+    .where(and(eq(user.defaultOrganizationId, organizationId), markedDeleted));
+}
+
+/** Points sessions away from the deleted organization and its teams. */
+function clearActiveSessions(
+  db: Db,
+  organizationId: string,
+  markedDeleted: SQL,
+) {
+  return db
+    .update(session)
+    .set({
+      activeOrganizationId: sql`CASE
+        WHEN ${session.activeOrganizationId} = ${organizationId} THEN ${db
+          .select({ defaultOrganizationId: user.defaultOrganizationId })
+          .from(user)
+          .where(eq(user.id, session.userId))}
+        ELSE ${session.activeOrganizationId}
+      END`,
+      activeTeamId: null,
+    })
+    .where(
+      and(
+        or(
+          eq(session.activeOrganizationId, organizationId),
+          inArray(
+            session.activeTeamId,
+            db
+              .select({ id: team.id })
+              .from(team)
+              .where(eq(team.organizationId, organizationId)),
+          ),
+        ),
+        markedDeleted,
+      ),
+    );
+}
+
 export async function restoreOrganization(
   database: D1Database,
   organizationId: string,
 ): Promise<OrganizationRestoration | undefined> {
-  const billing = await database
-    .prepare(
-      `SELECT checkout_disabled_at FROM organization_billing
-       WHERE organization_id = ?`,
+  const db = getDb(database);
+  const billing = await db
+    .select({ checkoutDisabledAt: organizationBilling.checkoutDisabledAt })
+    .from(organizationBilling)
+    .where(eq(organizationBilling.organizationId, organizationId))
+    .get();
+  const result = await db
+    .update(organization)
+    .set({ deletedAt: null, deletedByUserId: null })
+    .where(
+      and(
+        eq(organization.id, organizationId),
+        isNotNull(organization.deletedAt),
+        sql`${db
+          .select({
+            checkoutDisabledAt: organizationBilling.checkoutDisabledAt,
+          })
+          .from(organizationBilling)
+          .where(eq(organizationBilling.organizationId, organization.id))} IS ${
+          billing?.checkoutDisabledAt ?? null
+        }`,
+      ),
     )
-    .bind(organizationId)
-    .first<{ checkout_disabled_at: string | null }>();
-  const result = await database
-    .prepare(
-      `UPDATE organization
-       SET deletedAt = NULL, deletedByUserId = NULL
-       WHERE id = ? AND deletedAt IS NOT NULL
-         AND (
-           SELECT checkout_disabled_at FROM organization_billing
-           WHERE organization_id = organization.id
-         ) IS ?`,
-    )
-    .bind(organizationId, billing?.checkout_disabled_at ?? null)
     .run();
   if (result.meta.changes < 1) return undefined;
   return { organizationId };

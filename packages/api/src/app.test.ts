@@ -1,7 +1,8 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { app } from "./app";
 import { createAuth } from "./auth";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 describe("api", () => {
@@ -237,7 +238,7 @@ function authBindings(
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: useD1 ? toD1(database) : (database as unknown as D1Database),
+    DB: useD1 ? createTestD1(database) : (database as unknown as D1Database),
     EMAIL: {
       send: async () => ({ messageId: "test-message" }),
     } as unknown as SendEmail,
@@ -245,50 +246,6 @@ function authBindings(
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.de",
     STORAGE: {} as R2Bucket,
   };
-}
-
-interface TestStatement {
-  execute: () => unknown;
-}
-
-function toD1(database: Database) {
-  return {
-    batch: async (statements: TestStatement[]) =>
-      statements.map((statement) => statement.execute()),
-    exec: async (query: string) => database.exec(query),
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => {
-          const results = database.query(query).all(...values);
-          const meta = database
-            .query(
-              `SELECT changes() AS changes,
-                      last_insert_rowid() AS last_row_id`,
-            )
-            .get() as { changes: number; last_row_id: number };
-          return { meta, results, success: true };
-        },
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        execute: () => run(),
-        first: async () => database.query(query).get(...values),
-        raw: async () => database.query(query).values(...values),
-        run: async () => run(),
-      };
-      const run = () => {
-        const result = database.query(query).run(...values);
-        return {
-          meta: { changes: result.changes },
-          results: [],
-          success: true,
-        };
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }
 
 async function protectedOrganizationFixture() {

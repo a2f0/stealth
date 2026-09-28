@@ -1,6 +1,30 @@
+import {
+  and,
+  asc,
+  count,
+  eq,
+  exists,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { excluded, getDb } from "./db";
 import { canManageOrganization } from "./organizationMembers";
+import {
+  auditTemplateFamilies,
+  member,
+  organization,
+  organizationBilling,
+  stripeSubscriptionSyncLocks,
+  stripeWebhookEvents,
+} from "./schema";
 import {
   StripeApiError,
   StripeConfigurationError,
@@ -309,19 +333,22 @@ export async function handleStripeWebhook(context: Context<BillingEnv>) {
       503,
     );
   }
+  const db = getDb(context.env.DB);
   try {
     await processStripeEvent(context.env, event);
-    await context.env.DB.prepare(
-      `UPDATE stripe_webhook_events SET processed_at = ? WHERE id = ?`,
-    )
-      .bind(new Date().toISOString(), event.id)
-      .run();
+    await db
+      .update(stripeWebhookEvents)
+      .set({ processedAt: new Date().toISOString() })
+      .where(eq(stripeWebhookEvents.id, event.id));
   } catch (cause) {
-    await context.env.DB.prepare(
-      `DELETE FROM stripe_webhook_events WHERE id = ? AND processed_at IS NULL`,
-    )
-      .bind(event.id)
-      .run();
+    await db
+      .delete(stripeWebhookEvents)
+      .where(
+        and(
+          eq(stripeWebhookEvents.id, event.id),
+          isNull(stripeWebhookEvents.processedAt),
+        ),
+      );
     throw cause;
   }
   return context.json({ received: true });
@@ -413,23 +440,21 @@ export async function organizationUserHasSeat(
     await organizationHasPro(database, organizationId, priceId, legacyPriceIds)
   )
     return true;
-  const row = await database
-    .prepare(
-      `SELECT userId
-       FROM member
-       WHERE organizationId = ?
-       ORDER BY
-         CASE
-           WHEN (',' || replace(role, ' ', '') || ',') LIKE '%,owner,%'
-             THEN 0
-           ELSE 1
-         END,
-         createdAt ASC,
-         id ASC
-       LIMIT 1`,
+  const row = await getDb(database)
+    .select({ userId: member.userId })
+    .from(member)
+    .where(eq(member.organizationId, organizationId))
+    .orderBy(
+      sql`case
+        when (',' || replace(${member.role}, ' ', '') || ',') like '%,owner,%'
+          then 0
+        else 1
+      end`,
+      asc(member.createdAt),
+      asc(member.id),
     )
-    .bind(organizationId)
-    .first<{ userId: string }>();
+    .limit(1)
+    .get();
   return row?.userId === userId;
 }
 
@@ -567,32 +592,38 @@ export async function reconcileSubscriptionSeats(
     "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
   >,
 ) {
-  const rows = await environment.DB.prepare(
-    `SELECT organization_id
-     FROM organization_billing
-     WHERE stripe_subscription_item_id IS NOT NULL
-       AND stripe_status IN ('active', 'past_due', 'trialing')
-     ORDER BY last_reconciled_at IS NOT NULL ASC,
-              last_reconciled_at ASC,
-              organization_id ASC
-     LIMIT ?`,
-  )
-    .bind(subscriptionSeatReconciliationLimit)
-    .all<{ organization_id: string }>();
+  const db = getDb(environment.DB);
+  const rows = await db
+    .select({ organizationId: organizationBilling.organizationId })
+    .from(organizationBilling)
+    .where(
+      and(
+        isNotNull(organizationBilling.stripeSubscriptionItemId),
+        inArray(organizationBilling.stripeStatus, [
+          "active",
+          "past_due",
+          "trialing",
+        ]),
+      ),
+    )
+    .orderBy(
+      asc(sql`${organizationBilling.lastReconciledAt} is not null`),
+      asc(organizationBilling.lastReconciledAt),
+      asc(organizationBilling.organizationId),
+    )
+    .limit(subscriptionSeatReconciliationLimit);
   let firstFailure: unknown;
-  for (const row of rows.results) {
+  for (const row of rows) {
     try {
-      await syncOrganizationSeats(environment, row.organization_id, true);
+      await syncOrganizationSeats(environment, row.organizationId, true);
     } catch (cause) {
       firstFailure ??= cause;
     } finally {
       try {
-        await environment.DB.prepare(
-          `UPDATE organization_billing SET last_reconciled_at = ?
-           WHERE organization_id = ?`,
-        )
-          .bind(new Date().toISOString(), row.organization_id)
-          .run();
+        await db
+          .update(organizationBilling)
+          .set({ lastReconciledAt: new Date().toISOString() })
+          .where(eq(organizationBilling.organizationId, row.organizationId));
       } catch (cause) {
         firstFailure ??= cause;
       }
@@ -608,47 +639,56 @@ export async function reconcilePendingCheckoutEntitlements(
   >,
   nowSeconds = Math.floor(Date.now() / 1_000),
 ) {
-  const pending = await environment.DB.prepare(
-    `SELECT organization_id, pending_checkout_session_id
-     FROM organization_billing
-     WHERE pending_checkout_session_id IS NOT NULL
-       AND COALESCE(pending_checkout_expires_at, 0) <= ?
-       AND COALESCE(pending_checkout_retry_at, 0) <= ?
-     ORDER BY pending_checkout_retry_at IS NOT NULL ASC,
-              pending_checkout_retry_at ASC,
-              pending_checkout_expires_at ASC,
-              organization_id ASC
-     LIMIT ?`,
-  )
-    .bind(nowSeconds, nowSeconds, pendingCheckoutReconciliationLimit)
-    .all<{
-      organization_id: string;
-      pending_checkout_session_id: string;
-    }>();
-  for (const row of pending.results) {
+  const pending = await getDb(environment.DB)
+    .select({
+      organizationId: organizationBilling.organizationId,
+      pendingCheckoutSessionId: sql<string>`${organizationBilling.pendingCheckoutSessionId}`,
+    })
+    .from(organizationBilling)
+    .where(
+      and(
+        isNotNull(organizationBilling.pendingCheckoutSessionId),
+        lte(
+          sql`coalesce(${organizationBilling.pendingCheckoutExpiresAt}, 0)`,
+          nowSeconds,
+        ),
+        lte(
+          sql`coalesce(${organizationBilling.pendingCheckoutRetryAt}, 0)`,
+          nowSeconds,
+        ),
+      ),
+    )
+    .orderBy(
+      asc(sql`${organizationBilling.pendingCheckoutRetryAt} is not null`),
+      asc(organizationBilling.pendingCheckoutRetryAt),
+      asc(organizationBilling.pendingCheckoutExpiresAt),
+      asc(organizationBilling.organizationId),
+    )
+    .limit(pendingCheckoutReconciliationLimit);
+  for (const row of pending) {
     try {
       await reconcilePendingCheckoutEntitlement(
         environment,
-        row.organization_id,
-        row.pending_checkout_session_id,
+        row.organizationId,
+        row.pendingCheckoutSessionId,
         nowSeconds,
       );
     } catch (cause) {
       await deferPendingCheckoutReconciliation(
         environment.DB,
-        row.organization_id,
-        row.pending_checkout_session_id,
+        row.organizationId,
+        row.pendingCheckoutSessionId,
         nowSeconds,
       ).catch((retryCause: unknown) => {
         console.error(
           "Pending Checkout retry could not be scheduled",
-          row.organization_id,
+          row.organizationId,
           retryCause,
         );
       });
       console.error(
         "Pending Checkout reconciliation failed",
-        row.organization_id,
+        row.organizationId,
         cause,
       );
     }
@@ -661,19 +701,18 @@ async function deferPendingCheckoutReconciliation(
   sessionId: string,
   nowSeconds: number,
 ) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET pending_checkout_retry_at = ?, updated_at = ?
-       WHERE organization_id = ? AND pending_checkout_session_id = ?`,
-    )
-    .bind(
-      nowSeconds + pendingCheckoutRetrySeconds,
-      new Date(nowSeconds * 1_000).toISOString(),
-      organizationId,
-      sessionId,
-    )
-    .run();
+  await getDb(database)
+    .update(organizationBilling)
+    .set({
+      pendingCheckoutRetryAt: nowSeconds + pendingCheckoutRetrySeconds,
+      updatedAt: new Date(nowSeconds * 1_000).toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        eq(organizationBilling.pendingCheckoutSessionId, sessionId),
+      ),
+    );
 }
 
 export async function purgeStripeWebhookReceipts(
@@ -682,19 +721,23 @@ export async function purgeStripeWebhookReceipts(
     Date.now() - stripeWebhookReceiptRetentionDays * 24 * 60 * 60 * 1_000,
   ).toISOString(),
 ) {
-  const deleted = await environment.DB.prepare(
-    `DELETE FROM stripe_webhook_events
-     WHERE id IN (
-       SELECT id FROM stripe_webhook_events
-       WHERE datetime(COALESCE(processed_at, received_at)) < datetime(?)
-       ORDER BY datetime(COALESCE(processed_at, received_at)) ASC, id ASC
-       LIMIT ?
-     )
-     RETURNING id`,
-  )
-    .bind(retainedAfter, stripeWebhookReceiptCleanupLimit)
-    .all<{ id: string }>();
-  return deleted.results.length;
+  const db = getDb(environment.DB);
+  const receivedAt = sql`datetime(coalesce(${stripeWebhookEvents.processedAt}, ${stripeWebhookEvents.receivedAt}))`;
+  const deleted = await db
+    .delete(stripeWebhookEvents)
+    .where(
+      inArray(
+        stripeWebhookEvents.id,
+        db
+          .select({ id: stripeWebhookEvents.id })
+          .from(stripeWebhookEvents)
+          .where(lt(receivedAt, sql`datetime(${retainedAfter})`))
+          .orderBy(asc(receivedAt), asc(stripeWebhookEvents.id))
+          .limit(stripeWebhookReceiptCleanupLimit),
+      ),
+    )
+    .returning({ id: stripeWebhookEvents.id });
+  return deleted.length;
 }
 
 async function reconcilePendingCheckoutEntitlement(
@@ -759,19 +802,19 @@ async function reconcilePendingCheckoutEntitlement(
     session.expires_at &&
     session.expires_at > nowSeconds
   ) {
-    await environment.DB.prepare(
-      `UPDATE organization_billing
-       SET pending_checkout_expires_at = ?, pending_checkout_retry_at = NULL,
-           updated_at = ?
-       WHERE organization_id = ? AND pending_checkout_session_id = ?`,
-    )
-      .bind(
-        session.expires_at,
-        new Date().toISOString(),
-        organizationId,
-        sessionId,
-      )
-      .run();
+    await getDb(environment.DB)
+      .update(organizationBilling)
+      .set({
+        pendingCheckoutExpiresAt: session.expires_at,
+        pendingCheckoutRetryAt: null,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(organizationBilling.organizationId, organizationId),
+          eq(organizationBilling.pendingCheckoutSessionId, sessionId),
+        ),
+      );
     return;
   }
   throw new StripeApiError(
@@ -844,25 +887,31 @@ export async function recoverCheckoutAfterFailedDeletion(
   checkoutGuard: string | null,
 ) {
   if (!checkoutGuard) return false;
-  const recovered = await database
-    .prepare(
-      `UPDATE organization_billing
-       SET checkout_disabled_at = NULL,
-           checkout_disabled_expires_at = NULL,
-           updated_at = ?
-       WHERE organization_id = ? AND checkout_disabled_at = ?
-         AND EXISTS (
-           SELECT 1 FROM organization
-           WHERE id = ? AND deletedAt IS NULL
-         )`,
-    )
-    .bind(
-      new Date().toISOString(),
-      organizationId,
-      checkoutGuard,
-      organizationId,
-    )
-    .run();
+  const db = getDb(database);
+  const recovered = await db
+    .update(organizationBilling)
+    .set({
+      checkoutDisabledAt: null,
+      checkoutDisabledExpiresAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        eq(organizationBilling.checkoutDisabledAt, checkoutGuard),
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(organization)
+            .where(
+              and(
+                eq(organization.id, organizationId),
+                isNull(organization.deletedAt),
+              ),
+            ),
+        ),
+      ),
+    );
   return Number(recovered.meta.changes) === 1;
 }
 
@@ -1262,20 +1311,27 @@ async function attachCheckoutSessionToClaim(
   claimId: string,
   sessionId: string,
 ) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET pending_checkout_session_id = ?, pending_checkout_url = NULL,
-           pending_checkout_expires_at = checkout_claim_expires_at,
-           pending_checkout_retry_at = NULL,
-           checkout_claim_id = NULL, checkout_claim_customer_id = NULL,
-           checkout_claim_price_id = NULL, checkout_claim_quantity = NULL,
-           checkout_claim_expires_at = NULL, updated_at = ?
-       WHERE organization_id = ? AND checkout_claim_id = ?
-         AND checkout_disabled_at IS NULL`,
-    )
-    .bind(sessionId, new Date().toISOString(), organizationId, claimId)
-    .run();
+  await getDb(database)
+    .update(organizationBilling)
+    .set({
+      pendingCheckoutSessionId: sessionId,
+      pendingCheckoutUrl: null,
+      pendingCheckoutExpiresAt: organizationBilling.checkoutClaimExpiresAt,
+      pendingCheckoutRetryAt: null,
+      checkoutClaimId: null,
+      checkoutClaimCustomerId: null,
+      checkoutClaimPriceId: null,
+      checkoutClaimQuantity: null,
+      checkoutClaimExpiresAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        eq(organizationBilling.checkoutClaimId, claimId),
+        isNull(organizationBilling.checkoutDisabledAt),
+      ),
+    );
 }
 
 async function resolveRejectedCheckoutPersistence(
@@ -1354,158 +1410,191 @@ async function persistSubscription(
   const cancelAtPeriodEnd =
     subscription.cancel_at_period_end === true ||
     subscription.cancel_at != null;
-  if (checkoutSessionId) {
-    const persisted = await environment.DB.prepare(
-      `UPDATE organization_billing
-       SET stripe_customer_id = ?, stripe_subscription_id = ?,
-           stripe_subscription_item_id = ?, stripe_price_id = ?,
-           stripe_status = ?, seat_quantity = ?, cancel_at_period_end = ?,
-           current_period_end = ?,
-           stripe_event_created = MAX(stripe_event_created, ?),
-           checkout_claim_id = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE checkout_claim_id
-           END,
-           checkout_claim_customer_id = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE checkout_claim_customer_id
-           END,
-           checkout_claim_price_id = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE checkout_claim_price_id
-           END,
-           checkout_claim_quantity = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE checkout_claim_quantity
-           END,
-           checkout_claim_expires_at = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE checkout_claim_expires_at
-           END,
-           pending_checkout_session_id = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE pending_checkout_session_id
-           END,
-           pending_checkout_url = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE pending_checkout_url
-           END,
-           pending_checkout_expires_at = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE pending_checkout_expires_at
-           END,
-           pending_checkout_retry_at = CASE
-             WHEN pending_checkout_session_id = ? THEN NULL
-             ELSE pending_checkout_retry_at
-           END,
-           updated_at = ?
-       WHERE organization_id = ? AND checkout_disabled_at IS NULL
-         AND (pending_checkout_session_id = ?
-              OR (stripe_subscription_id = ?
-                  AND pending_checkout_session_id IS NULL))`,
-    )
-      .bind(
-        customerId,
-        subscription.id,
-        item?.id ?? null,
-        item?.price.id ?? null,
-        subscription.status,
-        Math.max(1, item?.quantity ?? 1),
-        cancelAtPeriodEnd ? 1 : 0,
-        periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
-        eventCreated,
-        checkoutSessionId,
-        checkoutSessionId,
-        checkoutSessionId,
-        checkoutSessionId,
-        checkoutSessionId,
-        checkoutSessionId,
-        checkoutSessionId,
-        checkoutSessionId,
-        checkoutSessionId,
-        new Date().toISOString(),
+  const fields = {
+    stripeCustomerId: customerId,
+    stripeSubscriptionId: subscription.id,
+    stripeSubscriptionItemId: item?.id ?? null,
+    stripePriceId: item?.price.id ?? null,
+    stripeStatus: subscription.status,
+    seatQuantity: Math.max(1, item?.quantity ?? 1),
+    cancelAtPeriodEnd: cancelAtPeriodEnd ? 1 : 0,
+    currentPeriodEnd: periodEnd
+      ? new Date(periodEnd * 1_000).toISOString()
+      : null,
+  };
+  const persisted = checkoutSessionId
+    ? await persistCheckoutSubscription(
+        environment.DB,
         organizationId,
         checkoutSessionId,
-        subscription.id,
+        fields,
+        eventCreated,
       )
-      .run();
-    return Number(persisted.meta.changes) === 1;
-  }
-  const persisted = await environment.DB.prepare(
-    `INSERT INTO organization_billing
-     (organization_id, stripe_customer_id, stripe_subscription_id,
-      stripe_subscription_item_id, stripe_price_id, stripe_status,
-      seat_quantity, cancel_at_period_end, current_period_end,
-      stripe_event_created, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (organization_id) DO UPDATE SET
-       stripe_customer_id = excluded.stripe_customer_id,
-       stripe_subscription_id = excluded.stripe_subscription_id,
-       stripe_subscription_item_id = excluded.stripe_subscription_item_id,
-       stripe_price_id = excluded.stripe_price_id,
-       stripe_status = excluded.stripe_status,
-       seat_quantity = excluded.seat_quantity,
-       cancel_at_period_end = excluded.cancel_at_period_end,
-       current_period_end = excluded.current_period_end,
-       stripe_event_created = MAX(
-         organization_billing.stripe_event_created,
-         excluded.stripe_event_created
-       ),
-       updated_at = excluded.updated_at
-     WHERE organization_billing.stripe_subscription_id IS NULL
-        OR organization_billing.stripe_subscription_id =
-           excluded.stripe_subscription_id`,
-  )
-    .bind(
-      organizationId,
-      customerId,
-      subscription.id,
-      item?.id ?? null,
-      item?.price.id ?? null,
-      subscription.status,
-      Math.max(1, item?.quantity ?? 1),
-      cancelAtPeriodEnd ? 1 : 0,
-      periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
-      eventCreated,
-      new Date().toISOString(),
-    )
-    .run();
+    : await upsertSubscription(
+        environment.DB,
+        organizationId,
+        fields,
+        eventCreated,
+      );
   return Number(persisted.meta.changes) === 1;
 }
 
+interface SubscriptionFields {
+  cancelAtPeriodEnd: number;
+  currentPeriodEnd: string | null;
+  seatQuantity: number;
+  stripeCustomerId: string;
+  stripePriceId: string | null;
+  stripeStatus: string;
+  stripeSubscriptionId: string;
+  stripeSubscriptionItemId: string | null;
+}
+
+function persistCheckoutSubscription(
+  database: D1Database,
+  organizationId: string,
+  checkoutSessionId: string,
+  fields: SubscriptionFields,
+  eventCreated: number,
+) {
+  const clearedByCheckout = (column: AnySQLiteColumn) =>
+    sql`case
+      when ${organizationBilling.pendingCheckoutSessionId} = ${checkoutSessionId}
+        then null
+      else ${column}
+    end`;
+  return getDb(database)
+    .update(organizationBilling)
+    .set({
+      ...fields,
+      stripeEventCreated: sql`max(${organizationBilling.stripeEventCreated}, ${eventCreated})`,
+      checkoutClaimId: clearedByCheckout(organizationBilling.checkoutClaimId),
+      checkoutClaimCustomerId: clearedByCheckout(
+        organizationBilling.checkoutClaimCustomerId,
+      ),
+      checkoutClaimPriceId: clearedByCheckout(
+        organizationBilling.checkoutClaimPriceId,
+      ),
+      checkoutClaimQuantity: clearedByCheckout(
+        organizationBilling.checkoutClaimQuantity,
+      ),
+      checkoutClaimExpiresAt: clearedByCheckout(
+        organizationBilling.checkoutClaimExpiresAt,
+      ),
+      pendingCheckoutSessionId: clearedByCheckout(
+        organizationBilling.pendingCheckoutSessionId,
+      ),
+      pendingCheckoutUrl: clearedByCheckout(
+        organizationBilling.pendingCheckoutUrl,
+      ),
+      pendingCheckoutExpiresAt: clearedByCheckout(
+        organizationBilling.pendingCheckoutExpiresAt,
+      ),
+      pendingCheckoutRetryAt: clearedByCheckout(
+        organizationBilling.pendingCheckoutRetryAt,
+      ),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        isNull(organizationBilling.checkoutDisabledAt),
+        or(
+          eq(organizationBilling.pendingCheckoutSessionId, checkoutSessionId),
+          and(
+            eq(
+              organizationBilling.stripeSubscriptionId,
+              fields.stripeSubscriptionId,
+            ),
+            isNull(organizationBilling.pendingCheckoutSessionId),
+          ),
+        ),
+      ),
+    );
+}
+
+function upsertSubscription(
+  database: D1Database,
+  organizationId: string,
+  fields: SubscriptionFields,
+  eventCreated: number,
+) {
+  return getDb(database)
+    .insert(organizationBilling)
+    .values({
+      organizationId,
+      ...fields,
+      stripeEventCreated: eventCreated,
+      updatedAt: new Date().toISOString(),
+    })
+    .onConflictDoUpdate({
+      target: organizationBilling.organizationId,
+      set: {
+        stripeCustomerId: excluded(organizationBilling.stripeCustomerId),
+        stripeSubscriptionId: excluded(
+          organizationBilling.stripeSubscriptionId,
+        ),
+        stripeSubscriptionItemId: excluded(
+          organizationBilling.stripeSubscriptionItemId,
+        ),
+        stripePriceId: excluded(organizationBilling.stripePriceId),
+        stripeStatus: excluded(organizationBilling.stripeStatus),
+        seatQuantity: excluded(organizationBilling.seatQuantity),
+        cancelAtPeriodEnd: excluded(organizationBilling.cancelAtPeriodEnd),
+        currentPeriodEnd: excluded(organizationBilling.currentPeriodEnd),
+        stripeEventCreated: sql`max(
+          ${organizationBilling.stripeEventCreated},
+          ${excluded(organizationBilling.stripeEventCreated)}
+        )`,
+        updatedAt: excluded(organizationBilling.updatedAt),
+      },
+      setWhere: sql`${organizationBilling.stripeSubscriptionId} is null
+        or ${organizationBilling.stripeSubscriptionId} =
+          ${excluded(organizationBilling.stripeSubscriptionId)}`,
+    });
+}
+
 async function claimWebhookEvent(database: D1Database, event: StripeEvent) {
+  const db = getDb(database);
   const now = new Date().toISOString();
-  const inserted = await database
-    .prepare(
-      `INSERT OR IGNORE INTO stripe_webhook_events
-       (id, event_type, stripe_created, received_at, processed_at)
-       VALUES (?, ?, ?, ?, NULL)`,
-    )
-    .bind(event.id, event.type, event.created, now)
-    .run();
+  const inserted = await db
+    .insert(stripeWebhookEvents)
+    .values({
+      id: event.id,
+      eventType: event.type,
+      stripeCreated: event.created,
+      receivedAt: now,
+      processedAt: null,
+    })
+    .onConflictDoNothing();
   if (Number(inserted.meta.changes) === 1) return "claimed" as const;
-  const existing = await database
-    .prepare(`SELECT processed_at FROM stripe_webhook_events WHERE id = ?`)
-    .bind(event.id)
-    .first<{ processed_at: string | null }>();
-  if (existing?.processed_at) return "processed" as const;
+  const processedAt = () =>
+    db
+      .select({ processedAt: stripeWebhookEvents.processedAt })
+      .from(stripeWebhookEvents)
+      .where(eq(stripeWebhookEvents.id, event.id))
+      .get();
+  const existing = await processedAt();
+  if (existing?.processedAt) return "processed" as const;
   const staleBefore = new Date(
     Date.now() - webhookClaimTimeoutMilliseconds,
   ).toISOString();
-  const reclaimed = await database
-    .prepare(
-      `UPDATE stripe_webhook_events SET received_at = ?
-       WHERE id = ? AND processed_at IS NULL
-         AND datetime(received_at) <= datetime(?)`,
-    )
-    .bind(now, event.id, staleBefore)
-    .run();
+  const reclaimed = await db
+    .update(stripeWebhookEvents)
+    .set({ receivedAt: now })
+    .where(
+      and(
+        eq(stripeWebhookEvents.id, event.id),
+        isNull(stripeWebhookEvents.processedAt),
+        lte(
+          sql`datetime(${stripeWebhookEvents.receivedAt})`,
+          sql`datetime(${staleBefore})`,
+        ),
+      ),
+    );
   if (Number(reclaimed.meta.changes) === 1) return "claimed" as const;
-  const completed = await database
-    .prepare(`SELECT processed_at FROM stripe_webhook_events WHERE id = ?`)
-    .bind(event.id)
-    .first<{ processed_at: string | null }>();
-  return completed?.processed_at
+  const completed = await processedAt();
+  return completed?.processedAt
     ? ("processed" as const)
     : ("processing" as const);
 }
@@ -1578,29 +1667,41 @@ function findProSubscriptionItem(
   );
 }
 
-async function findBilling(database: D1Database, organizationId: string) {
-  const statement = database.prepare(
-    `SELECT stripe_customer_id, stripe_subscription_id,
-            stripe_subscription_item_id, stripe_price_id, stripe_status,
-            seat_quantity, cancel_at_period_end, current_period_end,
-            stripe_event_created, checkout_claim_id,
-            checkout_claim_customer_id, checkout_claim_price_id,
-            checkout_claim_quantity,
-            checkout_claim_expires_at,
-            checkout_disabled_at, checkout_disabled_expires_at,
-            pending_checkout_session_id, pending_checkout_url,
-            pending_checkout_expires_at, pending_checkout_retry_at,
-            last_reconciled_at, updated_at
-     FROM organization_billing WHERE organization_id = ?`,
-  );
-  if (typeof statement.bind === "function") {
-    return statement.bind(organizationId).first<BillingRow>();
-  }
-  return (
-    statement as unknown as {
-      get: (value: string) => BillingRow | null;
-    }
-  ).get(organizationId);
+const billingColumns = {
+  stripe_customer_id: organizationBilling.stripeCustomerId,
+  stripe_subscription_id: organizationBilling.stripeSubscriptionId,
+  stripe_subscription_item_id: organizationBilling.stripeSubscriptionItemId,
+  stripe_price_id: organizationBilling.stripePriceId,
+  stripe_status: organizationBilling.stripeStatus,
+  seat_quantity: organizationBilling.seatQuantity,
+  cancel_at_period_end: organizationBilling.cancelAtPeriodEnd,
+  current_period_end: organizationBilling.currentPeriodEnd,
+  stripe_event_created: organizationBilling.stripeEventCreated,
+  checkout_claim_id: organizationBilling.checkoutClaimId,
+  checkout_claim_customer_id: organizationBilling.checkoutClaimCustomerId,
+  checkout_claim_price_id: organizationBilling.checkoutClaimPriceId,
+  checkout_claim_quantity: organizationBilling.checkoutClaimQuantity,
+  checkout_claim_expires_at: organizationBilling.checkoutClaimExpiresAt,
+  checkout_disabled_at: organizationBilling.checkoutDisabledAt,
+  checkout_disabled_expires_at: organizationBilling.checkoutDisabledExpiresAt,
+  pending_checkout_session_id: organizationBilling.pendingCheckoutSessionId,
+  pending_checkout_url: organizationBilling.pendingCheckoutUrl,
+  pending_checkout_expires_at: organizationBilling.pendingCheckoutExpiresAt,
+  pending_checkout_retry_at: organizationBilling.pendingCheckoutRetryAt,
+  last_reconciled_at: organizationBilling.lastReconciledAt,
+  updated_at: organizationBilling.updatedAt,
+};
+
+async function findBilling(
+  database: D1Database,
+  organizationId: string,
+): Promise<BillingRow | null> {
+  const record = await getDb(database)
+    .select(billingColumns)
+    .from(organizationBilling)
+    .where(eq(organizationBilling.organizationId, organizationId))
+    .get();
+  return record ?? null;
 }
 
 async function disableCheckoutForDeletion(
@@ -1611,42 +1712,63 @@ async function disableCheckoutForDeletion(
   const now = new Date(nowSeconds * 1_000).toISOString();
   const expiresAt = nowSeconds + checkoutDeletionLeaseSeconds;
   const checkoutGuard = crypto.randomUUID();
-  const record = await database
-    .prepare(
-      `INSERT INTO organization_billing
-       (organization_id, checkout_disabled_at,
-        checkout_disabled_expires_at, updated_at)
-       SELECT id, ?, ?, ? FROM organization WHERE id = ?
-       ON CONFLICT (organization_id) DO UPDATE SET
-         checkout_disabled_at = excluded.checkout_disabled_at,
-         checkout_disabled_expires_at =
-           excluded.checkout_disabled_expires_at,
-         checkout_claim_id = NULL,
-         checkout_claim_customer_id = NULL,
-         checkout_claim_price_id = NULL,
-         checkout_claim_quantity = NULL,
-         checkout_claim_expires_at = NULL,
-         updated_at = excluded.updated_at
-       WHERE organization_billing.checkout_disabled_at IS NULL
-          OR COALESCE(
-               organization_billing.checkout_disabled_expires_at,
-               0
-             ) <= ?
-       RETURNING stripe_customer_id, stripe_subscription_id,
-                 stripe_subscription_item_id, stripe_price_id, stripe_status,
-                 seat_quantity, cancel_at_period_end, current_period_end,
-                 stripe_event_created, checkout_claim_id,
-                 checkout_claim_customer_id, checkout_claim_price_id,
-                 checkout_claim_quantity,
-                 checkout_claim_expires_at,
-                 checkout_disabled_at, checkout_disabled_expires_at,
-                 pending_checkout_session_id,
-                 pending_checkout_url, pending_checkout_expires_at,
-                 pending_checkout_retry_at,
-                 last_reconciled_at, updated_at`,
+  const db = getDb(database);
+  // Drizzle inserts every column from a SELECT, so the columns this statement
+  // does not set carry their migration defaults.
+  const record = await db
+    .insert(organizationBilling)
+    .select(
+      db
+        .select({
+          organizationId: organization.id,
+          stripeCustomerId: sql`null`.as("stripe_customer_id"),
+          stripeSubscriptionId: sql`null`.as("stripe_subscription_id"),
+          stripeSubscriptionItemId: sql`null`.as("stripe_subscription_item_id"),
+          stripePriceId: sql`null`.as("stripe_price_id"),
+          stripeStatus: sql`null`.as("stripe_status"),
+          seatQuantity: sql`1`.as("seat_quantity"),
+          cancelAtPeriodEnd: sql`0`.as("cancel_at_period_end"),
+          currentPeriodEnd: sql`null`.as("current_period_end"),
+          stripeEventCreated: sql`0`.as("stripe_event_created"),
+          checkoutClaimId: sql`null`.as("checkout_claim_id"),
+          checkoutClaimCustomerId: sql`null`.as("checkout_claim_customer_id"),
+          checkoutClaimPriceId: sql`null`.as("checkout_claim_price_id"),
+          checkoutClaimQuantity: sql`null`.as("checkout_claim_quantity"),
+          checkoutClaimExpiresAt: sql`null`.as("checkout_claim_expires_at"),
+          checkoutDisabledAt: sql`${checkoutGuard}`.as("checkout_disabled_at"),
+          checkoutDisabledExpiresAt: sql`${expiresAt}`.as(
+            "checkout_disabled_expires_at",
+          ),
+          pendingCheckoutSessionId: sql`null`.as("pending_checkout_session_id"),
+          pendingCheckoutUrl: sql`null`.as("pending_checkout_url"),
+          pendingCheckoutExpiresAt: sql`null`.as("pending_checkout_expires_at"),
+          pendingCheckoutRetryAt: sql`null`.as("pending_checkout_retry_at"),
+          lastReconciledAt: sql`null`.as("last_reconciled_at"),
+          updatedAt: sql`${now}`.as("updated_at"),
+        })
+        .from(organization)
+        .where(eq(organization.id, organizationId)),
     )
-    .bind(checkoutGuard, expiresAt, now, organizationId, nowSeconds)
-    .first<BillingRow>();
+    .onConflictDoUpdate({
+      target: organizationBilling.organizationId,
+      set: {
+        checkoutDisabledAt: excluded(organizationBilling.checkoutDisabledAt),
+        checkoutDisabledExpiresAt: excluded(
+          organizationBilling.checkoutDisabledExpiresAt,
+        ),
+        checkoutClaimId: null,
+        checkoutClaimCustomerId: null,
+        checkoutClaimPriceId: null,
+        checkoutClaimQuantity: null,
+        checkoutClaimExpiresAt: null,
+        updatedAt: excluded(organizationBilling.updatedAt),
+      },
+      setWhere: sql`${organizationBilling.checkoutDisabledAt} is null
+        or coalesce(${organizationBilling.checkoutDisabledExpiresAt}, 0)
+          <= ${nowSeconds}`,
+    })
+    .returning(billingColumns)
+    .get();
   return record?.checkout_disabled_at === checkoutGuard
     ? { checkoutGuard, record }
     : null;
@@ -1657,34 +1779,35 @@ async function enableCheckoutAfterFailedDeletion(
   organizationId: string,
   checkoutGuard: string | null,
 ) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET checkout_disabled_at = NULL,
-           checkout_disabled_expires_at = NULL,
-           updated_at = ?
-       WHERE organization_id = ? AND checkout_disabled_at IS ?`,
-    )
-    .bind(new Date().toISOString(), organizationId, checkoutGuard)
-    .run();
+  await getDb(database)
+    .update(organizationBilling)
+    .set({
+      checkoutDisabledAt: null,
+      checkoutDisabledExpiresAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        sql`${organizationBilling.checkoutDisabledAt} is ${checkoutGuard}`,
+      ),
+    );
 }
 
 async function clearPendingCheckout(
   database: D1Database,
   organizationId: string,
 ) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET pending_checkout_session_id = NULL,
-           pending_checkout_url = NULL,
-           pending_checkout_expires_at = NULL,
-           pending_checkout_retry_at = NULL,
-           updated_at = ?
-       WHERE organization_id = ?`,
-    )
-    .bind(new Date().toISOString(), organizationId)
-    .run();
+  await getDb(database)
+    .update(organizationBilling)
+    .set({
+      pendingCheckoutSessionId: null,
+      pendingCheckoutUrl: null,
+      pendingCheckoutExpiresAt: null,
+      pendingCheckoutRetryAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(organizationBilling.organizationId, organizationId));
 }
 
 async function clearPendingCheckoutIfCurrent(
@@ -1692,18 +1815,21 @@ async function clearPendingCheckoutIfCurrent(
   organizationId: string,
   sessionId: string,
 ) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET pending_checkout_session_id = NULL,
-           pending_checkout_url = NULL,
-           pending_checkout_expires_at = NULL,
-           pending_checkout_retry_at = NULL,
-           updated_at = ?
-       WHERE organization_id = ? AND pending_checkout_session_id = ?`,
-    )
-    .bind(new Date().toISOString(), organizationId, sessionId)
-    .run();
+  await getDb(database)
+    .update(organizationBilling)
+    .set({
+      pendingCheckoutSessionId: null,
+      pendingCheckoutUrl: null,
+      pendingCheckoutExpiresAt: null,
+      pendingCheckoutRetryAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        eq(organizationBilling.pendingCheckoutSessionId, sessionId),
+      ),
+    );
 }
 
 async function claimCheckout(
@@ -1715,51 +1841,50 @@ async function claimCheckout(
 ) {
   const claimId = crypto.randomUUID();
   const expiresAt = nowSeconds + checkoutDurationSeconds;
-  const claimed = await database
-    .prepare(
-      `INSERT INTO organization_billing
-       (organization_id, checkout_claim_id, checkout_claim_customer_id,
-        checkout_claim_price_id, checkout_claim_quantity,
-        checkout_claim_expires_at, updated_at)
-       VALUES (?, ?, NULL, ?, ?, ?, ?)
-       ON CONFLICT (organization_id) DO UPDATE SET
-         checkout_claim_id = excluded.checkout_claim_id,
-         checkout_claim_customer_id =
-           organization_billing.stripe_customer_id,
-         checkout_claim_price_id = excluded.checkout_claim_price_id,
-         checkout_claim_quantity = excluded.checkout_claim_quantity,
-         checkout_claim_expires_at = excluded.checkout_claim_expires_at,
-         checkout_disabled_at = NULL,
-         checkout_disabled_expires_at = NULL,
-         updated_at = excluded.updated_at
-       WHERE NOT (
-           COALESCE(organization_billing.stripe_price_id, '') = ?
-           AND COALESCE(organization_billing.stripe_status, '') IN
-             ('active', 'past_due', 'trialing')
-         )
-         AND COALESCE(organization_billing.pending_checkout_expires_at, 0) <= ?
-         AND COALESCE(organization_billing.checkout_claim_expires_at, 0) <= ?
-         AND (
-           organization_billing.checkout_disabled_at IS NULL
-           OR COALESCE(
-                organization_billing.checkout_disabled_expires_at,
-                0
-              ) <= ?
-         )`,
-    )
-    .bind(
+  const claimed = await getDb(database)
+    .insert(organizationBilling)
+    .values({
       organizationId,
-      claimId,
-      priceId,
-      quantity,
-      expiresAt,
-      new Date().toISOString(),
-      priceId,
-      nowSeconds,
-      nowSeconds,
-      nowSeconds,
-    )
-    .run();
+      checkoutClaimId: claimId,
+      checkoutClaimCustomerId: null,
+      checkoutClaimPriceId: priceId,
+      checkoutClaimQuantity: quantity,
+      checkoutClaimExpiresAt: expiresAt,
+      updatedAt: new Date().toISOString(),
+    })
+    .onConflictDoUpdate({
+      target: organizationBilling.organizationId,
+      set: {
+        checkoutClaimId: excluded(organizationBilling.checkoutClaimId),
+        checkoutClaimCustomerId: organizationBilling.stripeCustomerId,
+        checkoutClaimPriceId: excluded(
+          organizationBilling.checkoutClaimPriceId,
+        ),
+        checkoutClaimQuantity: excluded(
+          organizationBilling.checkoutClaimQuantity,
+        ),
+        checkoutClaimExpiresAt: excluded(
+          organizationBilling.checkoutClaimExpiresAt,
+        ),
+        checkoutDisabledAt: null,
+        checkoutDisabledExpiresAt: null,
+        updatedAt: excluded(organizationBilling.updatedAt),
+      },
+      setWhere: sql`not (
+          coalesce(${organizationBilling.stripePriceId}, '') = ${priceId}
+          and coalesce(${organizationBilling.stripeStatus}, '') in
+            ('active', 'past_due', 'trialing')
+        )
+        and coalesce(${organizationBilling.pendingCheckoutExpiresAt}, 0)
+          <= ${nowSeconds}
+        and coalesce(${organizationBilling.checkoutClaimExpiresAt}, 0)
+          <= ${nowSeconds}
+        and (
+          ${organizationBilling.checkoutDisabledAt} is null
+          or coalesce(${organizationBilling.checkoutDisabledExpiresAt}, 0)
+            <= ${nowSeconds}
+        )`,
+    });
   const record = await findBilling(database, organizationId);
   return {
     id: claimId,
@@ -1844,22 +1969,23 @@ async function clearExpiredCheckoutDeletionLease(
   organizationId: string,
   nowSeconds: number,
 ) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET checkout_disabled_at = NULL,
-           checkout_disabled_expires_at = NULL,
-           updated_at = ?
-       WHERE organization_id = ?
-         AND checkout_disabled_at IS NOT NULL
-         AND COALESCE(checkout_disabled_expires_at, 0) <= ?`,
-    )
-    .bind(
-      new Date(nowSeconds * 1_000).toISOString(),
-      organizationId,
-      nowSeconds,
-    )
-    .run();
+  await getDb(database)
+    .update(organizationBilling)
+    .set({
+      checkoutDisabledAt: null,
+      checkoutDisabledExpiresAt: null,
+      updatedAt: new Date(nowSeconds * 1_000).toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        isNotNull(organizationBilling.checkoutDisabledAt),
+        lte(
+          sql`coalesce(${organizationBilling.checkoutDisabledExpiresAt}, 0)`,
+          nowSeconds,
+        ),
+      ),
+    );
 }
 
 function checkoutDeletionInProgress(
@@ -1878,19 +2004,22 @@ async function releaseCheckoutClaim(
   organizationId: string,
   claimId: string,
 ) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET checkout_claim_id = NULL,
-           checkout_claim_customer_id = NULL,
-           checkout_claim_price_id = NULL,
-           checkout_claim_quantity = NULL,
-           checkout_claim_expires_at = NULL,
-           updated_at = ?
-       WHERE organization_id = ? AND checkout_claim_id = ?`,
-    )
-    .bind(new Date().toISOString(), organizationId, claimId)
-    .run();
+  await getDb(database)
+    .update(organizationBilling)
+    .set({
+      checkoutClaimId: null,
+      checkoutClaimCustomerId: null,
+      checkoutClaimPriceId: null,
+      checkoutClaimQuantity: null,
+      checkoutClaimExpiresAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        eq(organizationBilling.checkoutClaimId, claimId),
+      ),
+    );
 }
 
 function activePendingCheckout(record: BillingRow | null, nowSeconds: number) {
@@ -1955,29 +2084,29 @@ async function storePendingCheckout(
   claimId: string,
   checkout: StripeCheckoutSession,
 ) {
-  const stored = await database
-    .prepare(
-      `UPDATE organization_billing
-       SET pending_checkout_session_id = ?, pending_checkout_url = ?,
-           pending_checkout_expires_at = ?, pending_checkout_retry_at = NULL,
-           checkout_claim_id = NULL,
-           checkout_claim_customer_id = NULL,
-           checkout_claim_price_id = NULL, checkout_claim_quantity = NULL,
-           checkout_claim_expires_at = NULL,
-           updated_at = ?
-       WHERE organization_id = ?
-         AND (checkout_claim_id = ? OR pending_checkout_session_id = ?)`,
-    )
-    .bind(
-      checkout.id,
-      checkout.url,
-      checkout.expires_at,
-      new Date().toISOString(),
-      organizationId,
-      claimId,
-      checkout.id,
-    )
-    .run();
+  const stored = await getDb(database)
+    .update(organizationBilling)
+    .set({
+      pendingCheckoutSessionId: checkout.id,
+      pendingCheckoutUrl: checkout.url,
+      pendingCheckoutExpiresAt: checkout.expires_at,
+      pendingCheckoutRetryAt: null,
+      checkoutClaimId: null,
+      checkoutClaimCustomerId: null,
+      checkoutClaimPriceId: null,
+      checkoutClaimQuantity: null,
+      checkoutClaimExpiresAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        or(
+          eq(organizationBilling.checkoutClaimId, claimId),
+          eq(organizationBilling.pendingCheckoutSessionId, checkout.id),
+        ),
+      ),
+    );
   return Number(stored.meta.changes) === 1;
 }
 
@@ -1995,10 +2124,11 @@ async function expireCheckoutSession(
 }
 
 async function countMembers(database: D1Database, organizationId: string) {
-  const row = await database
-    .prepare(`SELECT COUNT(*) AS count FROM member WHERE organizationId = ?`)
-    .bind(organizationId)
-    .first<{ count: number }>();
+  const row = await getDb(database)
+    .select({ count: count() })
+    .from(member)
+    .where(eq(member.organizationId, organizationId))
+    .get();
   return row?.count ?? 0;
 }
 
@@ -2006,13 +2136,16 @@ async function countOrganizationTemplates(
   database: D1Database,
   organizationId: string,
 ) {
-  const row = await database
-    .prepare(
-      `SELECT COUNT(*) AS count FROM audit_template_families
-       WHERE scope = 'organization' AND organization_id = ?`,
+  const row = await getDb(database)
+    .select({ count: count() })
+    .from(auditTemplateFamilies)
+    .where(
+      and(
+        eq(auditTemplateFamilies.scope, "organization"),
+        eq(auditTemplateFamilies.organizationId, organizationId),
+      ),
     )
-    .bind(organizationId)
-    .first<{ count: number }>();
+    .get();
   return row?.count ?? 0;
 }
 
@@ -2021,15 +2154,18 @@ async function organizationForStripeRecord(
   subscriptionId: string,
   customerId: string,
 ) {
-  const row = await database
-    .prepare(
-      `SELECT organization_id FROM organization_billing
-       WHERE stripe_subscription_id = ? OR stripe_customer_id = ?
-       LIMIT 1`,
+  const row = await getDb(database)
+    .select({ organizationId: organizationBilling.organizationId })
+    .from(organizationBilling)
+    .where(
+      or(
+        eq(organizationBilling.stripeSubscriptionId, subscriptionId),
+        eq(organizationBilling.stripeCustomerId, customerId),
+      ),
     )
-    .bind(subscriptionId, customerId)
-    .first<{ organization_id: string }>();
-  return row?.organization_id;
+    .limit(1)
+    .get();
+  return row?.organizationId;
 }
 
 async function organizationExists(
@@ -2037,10 +2173,16 @@ async function organizationExists(
   organizationId: string,
 ) {
   return Boolean(
-    await database
-      .prepare(`SELECT id FROM organization WHERE id = ? AND deletedAt IS NULL`)
-      .bind(organizationId)
-      .first(),
+    await getDb(database)
+      .select({ id: organization.id })
+      .from(organization)
+      .where(
+        and(
+          eq(organization.id, organizationId),
+          isNull(organization.deletedAt),
+        ),
+      )
+      .get(),
   );
 }
 
@@ -2050,19 +2192,15 @@ async function updateStoredSeatQuantity(
   subscriptionItemId: string,
   quantity: number,
 ) {
-  await database
-    .prepare(
-      `UPDATE organization_billing
-       SET seat_quantity = ?, updated_at = ?
-       WHERE organization_id = ? AND stripe_subscription_item_id = ?`,
-    )
-    .bind(
-      quantity,
-      new Date().toISOString(),
-      organizationId,
-      subscriptionItemId,
-    )
-    .run();
+  await getDb(database)
+    .update(organizationBilling)
+    .set({ seatQuantity: quantity, updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(organizationBilling.organizationId, organizationId),
+        eq(organizationBilling.stripeSubscriptionItemId, subscriptionItemId),
+      ),
+    );
 }
 
 async function withSubscriptionSyncLock<T>(
@@ -2081,13 +2219,14 @@ async function withSubscriptionSyncLock<T>(
   try {
     return await action();
   } finally {
-    await database
-      .prepare(
-        `DELETE FROM stripe_subscription_sync_locks
-         WHERE subscription_id = ? AND claim_id = ?`,
-      )
-      .bind(subscriptionId, claimId)
-      .run();
+    await getDb(database)
+      .delete(stripeSubscriptionSyncLocks)
+      .where(
+        and(
+          eq(stripeSubscriptionSyncLocks.subscriptionId, subscriptionId),
+          eq(stripeSubscriptionSyncLocks.claimId, claimId),
+        ),
+      );
   }
 }
 
@@ -2097,26 +2236,25 @@ async function claimSubscriptionSyncLock(
   claimId: string,
   waitForLock: boolean,
 ) {
+  const db = getDb(database);
   const waitDeadline = Date.now() + 10_000;
   while (true) {
     const nowSeconds = Math.floor(Date.now() / 1_000);
-    const claimed = await database
-      .prepare(
-        `INSERT INTO stripe_subscription_sync_locks
-         (subscription_id, claim_id, claim_expires_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT (subscription_id) DO UPDATE SET
-           claim_id = excluded.claim_id,
-           claim_expires_at = excluded.claim_expires_at
-         WHERE stripe_subscription_sync_locks.claim_expires_at <= ?`,
-      )
-      .bind(
+    const claimed = await db
+      .insert(stripeSubscriptionSyncLocks)
+      .values({
         subscriptionId,
         claimId,
-        nowSeconds + subscriptionSyncClaimSeconds,
-        nowSeconds,
-      )
-      .run();
+        claimExpiresAt: nowSeconds + subscriptionSyncClaimSeconds,
+      })
+      .onConflictDoUpdate({
+        target: stripeSubscriptionSyncLocks.subscriptionId,
+        set: {
+          claimId: excluded(stripeSubscriptionSyncLocks.claimId),
+          claimExpiresAt: excluded(stripeSubscriptionSyncLocks.claimExpiresAt),
+        },
+        setWhere: lte(stripeSubscriptionSyncLocks.claimExpiresAt, nowSeconds),
+      });
     if (Number(claimed.meta.changes) === 1) return;
     if (!waitForLock || Date.now() >= waitDeadline) {
       throw new Error(
