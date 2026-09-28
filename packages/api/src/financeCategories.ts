@@ -288,8 +288,6 @@ function toCategory(row: CategoryRow) {
   };
 }
 
-/** The value an upsert tried to insert into `column`. */
-
 function invalidName(context: FinanceContext) {
   return context.json(
     {

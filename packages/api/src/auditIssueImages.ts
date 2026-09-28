@@ -1043,8 +1043,6 @@ function claimablePendingObject(
   );
 }
 
-/** The proposed row's value in an upsert's DO UPDATE clause. */
-
 export function toAuditIssueImage(row: AuditIssueImageRow) {
   return {
     contentType: row.content_type,

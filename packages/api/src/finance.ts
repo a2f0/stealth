@@ -695,6 +695,4 @@ function optionalText(value: unknown, maxLength: number) {
     : null;
 }
 
-/** The value an upsert tried to insert into `column`. */
-
 export const finance = createFinanceRouter();

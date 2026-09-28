@@ -440,8 +440,6 @@ function currency(account: PlaidAccount) {
   );
 }
 
-/** The value an upsert tried to insert into `column`. */
-
 /** Compares two nullable text values, treating NULL as an empty string. */
 function sameText(
   column: AnySQLiteColumn,

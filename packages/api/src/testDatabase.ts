@@ -52,6 +52,10 @@ export async function migratedDatabase() {
   return database;
 }
 
+// D1 rejects statements with more bound parameters than this, although
+// SQLite itself allows far more.
+const maxBoundParameters = 100;
+
 const writePattern = /^\s*(?:insert|update|delete|replace)\b/i;
 
 /**
@@ -102,6 +106,9 @@ export function createTestD1(
           if (value === undefined) {
             throw new Error("D1_TYPE_ERROR: Type 'undefined' not supported");
           }
+        }
+        if (nextValues.length > maxBoundParameters) {
+          throw new Error("D1_ERROR: too many SQL variables: SQLITE_ERROR");
         }
         return statementFor(query, nextValues as SQLQueryBindings[]);
       },
