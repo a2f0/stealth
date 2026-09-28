@@ -95,7 +95,8 @@ Apply migration `0048_create_user_deletion_requests.sql` before deploying this
 feature. The `purgeRequestedUsers` job processes up to 25 requests per run after
 30 days, both hourly and on demand. Accounts remain active during the waiting
 period. Admin and system accounts, members of active organizations, and users
-referenced by retained audit or financial records are skipped. Blocked requests
+referenced by retained audit, financial, or contract records are skipped. Contract
+creators, senders, and event actors remain linked to their history. Blocked requests
 rotate through the batch so they do not starve later requests. Organizations and
 their retained records must be managed separately; this does not erase all data
 an organization holds about a person. Users can cancel until their account is

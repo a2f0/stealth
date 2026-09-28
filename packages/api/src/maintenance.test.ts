@@ -179,6 +179,43 @@ it("preserves retained references and rotates blocked users so later requests ca
   ).not.toBeNull();
 });
 
+it("preserves former members referenced by retained contracts and their audit events", async () => {
+  const f = await fixture();
+  for (const id of ["creator", "sender", "event-actor", "unreferenced"])
+    f.insertUser(id, "2026-08-01");
+  f.database.exec(`
+    INSERT INTO organization (id, name, slug, createdAt)
+    VALUES ('contracts-org', 'Contracts', 'contracts', '2026-01-01');
+    INSERT INTO contracts
+      (id, organization_id, title, status, document_object_key,
+       document_filename, document_size, document_sha256, document_page_count,
+       created_by, sent_by, created_at, updated_at)
+    VALUES ('retained-contract', 'contracts-org', 'Retained', 'completed',
+      'contract.pdf', 'contract.pdf', 1, 'document-hash', 1,
+      'creator', 'sender', '2026-01-01', '2026-01-01');
+    INSERT INTO contract_events
+      (id, contract_id, actor_user_id, type, created_at)
+    VALUES ('retained-event', 'retained-contract', 'event-actor', 'voided', '2026-01-01');
+  `);
+  expect(await purgeRequestedUsers(f.bindings, now)).toEqual({
+    purged: 1,
+    blocked: 3,
+  });
+  expect(
+    f.database.query("SELECT created_by, sent_by FROM contracts").get(),
+  ).toEqual({ created_by: "creator", sent_by: "sender" });
+  expect(
+    f.database.query("SELECT actor_user_id FROM contract_events").get(),
+  ).toEqual({ actor_user_id: "event-actor" });
+  for (const id of ["creator", "sender", "event-actor"])
+    expect(
+      f.database.query("SELECT id FROM user WHERE id = ?").get(id),
+    ).not.toBeNull();
+  expect(
+    f.database.query("SELECT id FROM user WHERE id = 'unreferenced'").get(),
+  ).toBeNull();
+});
+
 it.each([
   {
     name: "cancels deletion",

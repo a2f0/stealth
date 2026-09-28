@@ -14,7 +14,7 @@ export const maintenanceJobs = [
     id: "purgeRequestedUsers",
     name: "Purge requested user accounts",
     description:
-      "Permanently deletes accounts requested for deletion at least 30 days ago. Skips admins, active organization members, and accounts required by retained records.",
+      "Permanently deletes accounts requested for deletion at least 30 days ago. Skips admins, active organization members, and accounts required by retained audit, financial, or contract records.",
   },
   {
     id: "purgeExpiredFreeAuditRuns",

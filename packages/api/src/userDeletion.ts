@@ -85,7 +85,8 @@ export async function purgeRequestedUsers(
       .run();
     try {
       // Recheck the request atomically: cancellation must win if committed first.
-      // Foreign keys intentionally block deletion of retained financial/audit history.
+      // Preserve contract attribution whose foreign keys otherwise become null.
+      // Restrictive foreign keys protect the remaining financial/audit history.
       const result = await environment.DB.prepare(
         `DELETE FROM user WHERE id = ? AND id NOT LIKE 'system:%'
          AND instr(',' || replace(COALESCE(role, ''), ' ', '') || ',', ',admin,') = 0
@@ -93,6 +94,9 @@ export async function purgeRequestedUsers(
                      WHERE user_id = user.id AND julianday(requested_at) <= julianday(?))
          AND NOT EXISTS (SELECT 1 FROM member JOIN organization ON organization.id = member.organizationId
                          WHERE member.userId = user.id AND organization.deletedAt IS NULL)
+         AND NOT EXISTS (SELECT 1 FROM contracts
+                         WHERE created_by = user.id OR sent_by = user.id)
+         AND NOT EXISTS (SELECT 1 FROM contract_events WHERE actor_user_id = user.id)
          RETURNING id`,
       )
         .bind(userId, cutoff)
