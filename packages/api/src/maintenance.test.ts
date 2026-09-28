@@ -18,6 +18,7 @@ const origin = "https://app.example.com";
 
 async function fixture(role = "admin", impersonatedBy?: string) {
   const database = new Database(":memory:");
+  let beforeUserDelete: (() => void) | undefined;
   databases.push(database);
   database.exec("PRAGMA foreign_keys = ON");
   const directory = new URL("../migrations/", import.meta.url);
@@ -40,6 +41,11 @@ async function fixture(role = "admin", impersonatedBy?: string) {
             return { results: database.query(sql).all(...values) };
           },
           async first() {
+            if (sql.startsWith("DELETE FROM user WHERE")) {
+              const interleave = beforeUserDelete;
+              beforeUserDelete = undefined;
+              interleave?.();
+            }
             return database.query(sql).get(...values);
           },
           async run() {
@@ -84,6 +90,9 @@ async function fixture(role = "admin", impersonatedBy?: string) {
     database,
     bindings,
     insertUser,
+    beforeUserDelete(callback: () => void) {
+      beforeUserDelete = callback;
+    },
     request: (path: string, init?: RequestInit) =>
       app.request(path, init, bindings, {
         waitUntil() {},
@@ -169,6 +178,56 @@ it("preserves retained references and rotates blocked users so later requests ca
     f.database.query("SELECT id FROM user WHERE id = 'blocked-0'").get(),
   ).not.toBeNull();
 });
+
+it.each([
+  {
+    name: "cancels deletion",
+    sql: "DELETE FROM user_deletion_requests WHERE user_id = 'eligible'",
+  },
+  {
+    name: "cancels and requests deletion again",
+    sql: `DELETE FROM user_deletion_requests WHERE user_id = 'eligible';
+      INSERT INTO user_deletion_requests (user_id, requested_at)
+      VALUES ('eligible', '${now.toISOString()}')`,
+  },
+  {
+    name: "gains admin access",
+    sql: "UPDATE user SET role = 'user, admin' WHERE id = 'eligible'",
+  },
+  {
+    name: "joins an active organization",
+    sql: `INSERT INTO organization (id, name, slug, createdAt)
+      VALUES ('active', 'Active', 'active', '2026-01-01');
+      INSERT INTO member (id, organizationId, userId, role, createdAt)
+      VALUES ('membership', 'active', 'eligible', 'member', '2026-01-01')`,
+  },
+])(
+  "preserves a selected account that $name before deletion",
+  async ({ sql }) => {
+    const f = await fixture();
+    f.insertUser("eligible", "2026-08-01");
+    let interleaved = false;
+    f.beforeUserDelete(() => {
+      expect(
+        f.database
+          .query(
+            "SELECT last_attempted_at FROM user_deletion_requests WHERE user_id = 'eligible'",
+          )
+          .get(),
+      ).toEqual({ last_attempted_at: now.toISOString() });
+      f.database.exec(sql);
+      interleaved = true;
+    });
+    expect(await purgeRequestedUsers(f.bindings, now)).toEqual({
+      purged: 0,
+      blocked: 1,
+    });
+    expect(interleaved).toBe(true);
+    expect(
+      f.database.query("SELECT id FROM user WHERE id = 'eligible'").get(),
+    ).not.toBeNull();
+  },
+);
 
 it("records a user's own request once and permits cancellation", async () => {
   const f = await fixture("user");
