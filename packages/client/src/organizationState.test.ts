@@ -68,11 +68,13 @@ describe("organization state", () => {
       "/account/security",
       "/root/users",
       "/root/organizations",
+      "/root/jobs",
       "/invite",
     ]) {
       expect(organizationPathRequiresAccess(path)).toBeFalse();
     }
     expect(organizationPathRequiresAccess("/admin")).toBeTrue();
+    expect(isRootAdminPath("/root/jobs")).toBeTrue();
     expect(isRootAdminPath("/root/users")).toBeTrue();
     expect(isRootAdminPath("/root/organizations")).toBeTrue();
     expect(isRootAdminPath("/admin")).toBeFalse();

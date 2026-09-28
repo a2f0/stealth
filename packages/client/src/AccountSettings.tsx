@@ -8,6 +8,7 @@ import {
   PageHeader,
 } from "@tearleads/ui/react";
 import { type FormEvent, type MouseEvent, useEffect, useState } from "react";
+import { AccountDeletion } from "./AccountDeletion";
 import { AccountSecurity } from "./AccountSecurity";
 import { saveDefaultOrganizationPreference } from "./accountSettingsApi";
 import type { WorkspaceOrganization } from "./organizationState";
@@ -190,6 +191,7 @@ function AccountGeneral({
       </Card>
       {error && <Banner tone="danger">{error}</Banner>}
       {notice && <Banner tone="success">{notice}</Banner>}
+      <AccountDeletion />
     </>
   );
 }

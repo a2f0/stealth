@@ -32,6 +32,7 @@ type WorkspacePage =
   | "inbox"
   | "library"
   | "organization"
+  | "rootJobs"
   | "rootOrganizations"
   | "rootUsers";
 
@@ -292,6 +293,12 @@ function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
           icon: "organization",
           label: "Organizations",
           page: "rootOrganizations",
+        },
+        {
+          href: "/root/jobs",
+          icon: "refresh",
+          label: "Jobs",
+          page: "rootJobs",
         },
       ],
       label: "Root Admin",

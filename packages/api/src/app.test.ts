@@ -5,6 +5,19 @@ import { createAuth } from "./auth";
 import type { Bindings } from "./types";
 
 describe("api", () => {
+  it("requires authentication for maintenance and account deletion routes", async () => {
+    for (const [path, method] of [
+      ["/api/admin/jobs", "GET"],
+      ["/api/admin/jobs/purgeRequestedUsers/run", "POST"],
+      ["/api/account-settings/deletion", "GET"],
+      ["/api/account-settings/deletion", "POST"],
+      ["/api/account-settings/deletion", "DELETE"],
+    ] as const) {
+      const response = await app.request(path, { method }, authBindings());
+      expect(response.status).toBe(401);
+    }
+  });
+
   it("reports its health", async () => {
     const response = await app.request("/health", undefined, {} as Bindings);
 

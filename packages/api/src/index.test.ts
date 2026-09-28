@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { runScheduledMaintenance } from "./index";
+import { runScheduledMaintenance } from "./maintenance";
 
 it("tombstones expired audit images before scheduled cleanup", async () => {
   const events: string[] = [];
@@ -8,6 +8,7 @@ it("tombstones expired audit images before scheduled cleanup", async () => {
     releaseRetention = resolve;
   });
   const maintenance = runScheduledMaintenance({
+    purgeRequestedUsers: async () => events.push("users"),
     purgeDeletedObjects: async () => events.push("deleted objects"),
     purgeExpiredFreeAuditRuns: async () => {
       events.push("retention started");
@@ -27,6 +28,7 @@ it("tombstones expired audit images before scheduled cleanup", async () => {
   expect(events).toEqual([
     "retention started",
     "retention finished",
+    "users",
     "deleted objects",
     "issue images",
     "webhook receipts",
@@ -39,6 +41,7 @@ it("runs independent maintenance after retention fails", async () => {
   const events: string[] = [];
   const retentionFailure = new Error("retention failed");
   const maintenance = runScheduledMaintenance({
+    purgeRequestedUsers: async () => events.push("users"),
     purgeDeletedObjects: async () => events.push("deleted objects"),
     purgeExpiredFreeAuditRuns: async () => {
       events.push("retention");
@@ -53,6 +56,7 @@ it("runs independent maintenance after retention fails", async () => {
   await expect(maintenance).rejects.toThrow("Scheduled maintenance failed.");
   expect(events).toEqual([
     "retention",
+    "users",
     "deleted objects",
     "issue images",
     "webhook receipts",

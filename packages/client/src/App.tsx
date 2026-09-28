@@ -9,6 +9,7 @@ import {
 } from "@tearleads/ui/react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AccountSettings } from "./AccountSettings";
+import { AdminJobs } from "./AdminJobs";
 import { AdminOrganizations } from "./AdminOrganizations";
 import { AdminUsers } from "./AdminUsers";
 import { Audits } from "./Audits";
@@ -544,6 +545,7 @@ function contentForPath(
       <Inbox canAccessFinance={access.can("finance")} onNavigate={navigate} />
     );
   }
+  if (pathname === "/root/jobs") return <AdminJobs />;
   if (pathname === "/root/users") return <AdminUsers />;
   if (pathname === "/root/organizations") return <AdminOrganizations />;
   if (pathname === "/account" || pathname === "/account/security") {
@@ -599,6 +601,7 @@ function activePageFor(pathname: string) {
   if (isContractsPath(pathname)) return "contracts" as const;
   if (isEquipmentPath(pathname)) return "equipment" as const;
   if (pathname === "/inbox") return "inbox" as const;
+  if (pathname === "/root/jobs") return "rootJobs" as const;
   if (pathname === "/root/users") return "rootUsers" as const;
   if (pathname === "/root/organizations") return "rootOrganizations" as const;
   if (pathname === "/account" || pathname === "/account/security") {
