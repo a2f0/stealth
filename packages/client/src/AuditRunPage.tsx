@@ -86,6 +86,16 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
 
   useEffect(() => void load(), [load]);
 
+  // Issue changes refresh the list without discarding unsaved answers, so a
+  // Fail that has not been saved yet survives raising its issue.
+  const refreshIssues = useCallback(async () => {
+    try {
+      setDetail(await getAuditRun(id));
+    } catch (cause) {
+      setError(messageFrom(cause));
+    }
+  }, [id]);
+
   async function save(status: "completed" | "in_progress") {
     setBusy(true);
     setError(undefined);
@@ -132,6 +142,12 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
         />
         <AuditQuestions
           definition={detail.audit.definition}
+          issueContext={{
+            auditId: id,
+            issues: detail.issues,
+            members: detail.members,
+            onCreated: refreshIssues,
+          }}
           onChange={(itemId, response) =>
             setResponses((current) => ({ ...current, [itemId]: response }))
           }
@@ -142,7 +158,7 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
           definition={detail.audit.definition}
           issues={detail.issues}
           members={detail.members}
-          onChange={load}
+          onChange={refreshIssues}
           responses={responses}
         />
       </PageBody>
@@ -302,12 +318,22 @@ function ProgressNote({
   );
 }
 
+/** What a question needs to raise an issue inline when it is marked Fail. */
+interface IssueContext {
+  auditId: string;
+  issues: AuditIssue[];
+  members: OrganizationMember[];
+  onCreated: () => Promise<void>;
+}
+
 function AuditQuestions({
   definition,
+  issueContext,
   onChange,
   responses,
 }: {
   definition: AuditDefinition;
+  issueContext: IssueContext;
   onChange: (itemId: string, response: string) => void;
   responses: Record<string, string>;
 }) {
@@ -323,6 +349,7 @@ function AuditQuestions({
         {definition.sections.map((section, sectionIndex) => (
           <AuditSection
             index={sectionIndex}
+            issueContext={issueContext}
             key={section.id}
             onChange={onChange}
             responses={responses}
@@ -336,11 +363,13 @@ function AuditQuestions({
 
 function AuditSection({
   index,
+  issueContext,
   onChange,
   responses,
   section,
 }: {
   index: number;
+  issueContext: IssueContext;
   onChange: (itemId: string, response: string) => void;
   responses: Record<string, string>;
   section: AuditTemplateSection;
@@ -381,6 +410,7 @@ function AuditSection({
           {section.items.map((item, itemIndex) => (
             <AuditQuestion
               index={itemIndex}
+              issueContext={issueContext}
               item={item}
               key={item.id}
               onChange={(response) => onChange(item.id, response)}
@@ -395,16 +425,21 @@ function AuditSection({
 
 function AuditQuestion({
   index,
+  issueContext,
   item,
   onChange,
   response,
 }: {
   index: number;
+  issueContext: IssueContext;
   item: AuditTemplateItem;
   onChange: (response: string) => void;
   response: string;
 }) {
   const promptId = `audit-item-${item.id}`;
+  // Only a fresh Fail click offers the inline issue; failures reloaded from a
+  // saved draft keep the checklist compact.
+  const [offerIssue, setOfferIssue] = useState(false);
   return (
     <li
       className={cx(
@@ -425,7 +460,10 @@ function AuditQuestion({
       {item.responseType === "check" ? (
         <ResponseChoices
           labelledBy={promptId}
-          onChange={onChange}
+          onChange={(next) => {
+            if (next !== response) setOfferIssue(next === "fail");
+            onChange(next);
+          }}
           response={response}
         />
       ) : (
@@ -439,7 +477,96 @@ function AuditQuestion({
           value={response}
         />
       )}
+      {offerIssue && response === "fail" && (
+        <FailedItemIssue
+          auditId={issueContext.auditId}
+          item={item}
+          members={issueContext.members}
+          onCreated={issueContext.onCreated}
+          openIssueCount={
+            issueContext.issues.filter(
+              (issue) => issue.itemId === item.id && issue.status === "open",
+            ).length
+          }
+        />
+      )}
     </li>
+  );
+}
+
+/**
+ * The issue offered beneath a freshly failed item. The checkbox records a
+ * deliberate failure with no follow-up and tucks the form away.
+ */
+export function FailedItemIssue({
+  auditId,
+  item,
+  members,
+  onCreated,
+  openIssueCount,
+}: {
+  auditId: string;
+  item: AuditTemplateItem;
+  members: OrganizationMember[];
+  onCreated: () => Promise<void>;
+  openIssueCount: number;
+}) {
+  const draft = useIssueDraft(auditId, item);
+  const [skipIssue, setSkipIssue] = useState(false);
+  const [created, setCreated] = useState<{ warning: string | undefined }>();
+
+  if (created) {
+    return (
+      <p className="runFailIssueCreated" role="status">
+        <Icon name="success" size={16} />
+        <span>
+          Issue created.
+          {created.warning ? ` ${created.warning}` : ""}
+        </span>
+      </p>
+    );
+  }
+
+  return (
+    <section aria-label="Issue for this failure" className="runFailIssue">
+      <label className="check">
+        <input
+          checked={skipIssue}
+          disabled={draft.busy}
+          onChange={(event) => setSkipIssue(event.target.checked)}
+          type="checkbox"
+        />
+        Fail without creating issue
+      </label>
+      {!skipIssue && (
+        <>
+          {openIssueCount > 0 && (
+            <p className="fieldHint">
+              This item already has {countLabel(openIssueCount, "open issue")}.
+            </p>
+          )}
+          {draft.error && <Banner tone="danger">{draft.error}</Banner>}
+          <IssueDraftFields draft={draft} members={members} />
+          <div className="formActions">
+            <Button
+              busy={draft.busy}
+              className="runIssueSubmit"
+              disabled={!draft.title.trim()}
+              icon="add"
+              onClick={() =>
+                void draft.submit(async (warning) => {
+                  setCreated({ warning });
+                  await onCreated();
+                })
+              }
+              variant="primary"
+            >
+              {draft.busy ? "Creating…" : "Create issue"}
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -546,8 +673,57 @@ function IssueForm({
 }) {
   const suggested =
     items.find((item) => responses[item.id] === "fail") ?? items[0];
-  const [itemId, setItemId] = useState(suggested?.id ?? "");
-  const [title, setTitle] = useState(suggested?.prompt ?? "");
+  const draft = useIssueDraft(auditId, suggested);
+
+  return (
+    <Card
+      description="Link the issue to a checklist item and assign follow-up."
+      footer={
+        <Button
+          busy={draft.busy}
+          className="runIssueSubmit"
+          disabled={!draft.itemId || !draft.title.trim()}
+          icon="add"
+          onClick={() => void draft.submit(onCreated)}
+          variant="primary"
+        >
+          {draft.busy ? "Creating…" : "Create issue"}
+        </Button>
+      }
+      title="New issue"
+    >
+      {draft.error && <Banner tone="danger">{draft.error}</Banner>}
+      <Field label="Checklist item">
+        <select
+          className="select"
+          onChange={(event) => {
+            const nextId = event.target.value;
+            draft.setItemId(nextId);
+            draft.setTitle(
+              items.find((item) => item.id === nextId)?.prompt ?? "",
+            );
+          }}
+          value={draft.itemId}
+        >
+          {items.map((item) => (
+            <option key={item.id} value={item.id}>
+              {responses[item.id] === "fail" ? "Failed · " : ""}
+              {item.prompt}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <IssueDraftFields draft={draft} members={members} />
+    </Card>
+  );
+}
+
+type IssueDraft = ReturnType<typeof useIssueDraft>;
+
+/** A new issue's fields and its create-then-attach-images submission. */
+function useIssueDraft(auditId: string, item: AuditTemplateItem | undefined) {
+  const [itemId, setItemId] = useState(item?.id ?? "");
+  const [title, setTitle] = useState(item?.prompt ?? "");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
   const [assignedTo, setAssignedTo] = useState("");
@@ -555,7 +731,7 @@ function IssueForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
-  async function submit() {
+  async function submit(onCreated: (warning?: string) => Promise<void>) {
     setBusy(true);
     setError(undefined);
     try {
@@ -580,106 +756,65 @@ function IssueForm({
     }
   }
 
-  return (
-    <Card
-      description="Link the issue to a checklist item and assign follow-up."
-      footer={
-        <Button
-          busy={busy}
-          className="runIssueSubmit"
-          disabled={!itemId || !title.trim()}
-          icon="add"
-          onClick={() => void submit()}
-          variant="primary"
-        >
-          {busy ? "Creating…" : "Create issue"}
-        </Button>
-      }
-      title="New issue"
-    >
-      {error && <Banner tone="danger">{error}</Banner>}
-      <IssueTextFields
-        description={description}
-        itemId={itemId}
-        items={items}
-        onDescriptionChange={setDescription}
-        onItemChange={(nextId) => {
-          setItemId(nextId);
-          setTitle(items.find((item) => item.id === nextId)?.prompt ?? "");
-        }}
-        onTitleChange={setTitle}
-        responses={responses}
-        title={title}
-      />
-      <IssueAssignmentFields
-        assignedTo={assignedTo}
-        members={members}
-        onAssignedToChange={setAssignedTo}
-        onPriorityChange={setPriority}
-        priority={priority}
-      />
-      <IssueImagePicker
-        files={images}
-        onChange={setImages}
-        onError={setError}
-      />
-    </Card>
-  );
+  return {
+    assignedTo,
+    busy,
+    description,
+    error,
+    images,
+    itemId,
+    priority,
+    setAssignedTo,
+    setDescription,
+    setError,
+    setImages,
+    setItemId,
+    setPriority,
+    setTitle,
+    submit,
+    title,
+  };
 }
 
-function IssueTextFields({
-  description,
-  itemId,
-  items,
-  onDescriptionChange,
-  onItemChange,
-  onTitleChange,
-  responses,
-  title,
+function IssueDraftFields({
+  draft,
+  members,
 }: {
-  description: string;
-  itemId: string;
-  items: AuditTemplateItem[];
-  onDescriptionChange: (description: string) => void;
-  onItemChange: (itemId: string) => void;
-  onTitleChange: (title: string) => void;
-  responses: Record<string, string>;
-  title: string;
+  draft: IssueDraft;
+  members: OrganizationMember[];
 }) {
   return (
     <>
-      <Field label="Checklist item">
-        <select
-          className="select"
-          onChange={(event) => onItemChange(event.target.value)}
-          value={itemId}
-        >
-          {items.map((item) => (
-            <option key={item.id} value={item.id}>
-              {responses[item.id] === "fail" ? "Failed · " : ""}
-              {item.prompt}
-            </option>
-          ))}
-        </select>
-      </Field>
       <Field label="Title">
         <input
           className="input"
           maxLength={300}
-          onChange={(event) => onTitleChange(event.target.value)}
-          value={title}
+          onChange={(event) => draft.setTitle(event.target.value)}
+          value={draft.title}
         />
       </Field>
       <Field label="Description" optional>
         <textarea
           className="textarea"
           maxLength={2000}
-          onChange={(event) => onDescriptionChange(event.target.value)}
+          onChange={(event) => draft.setDescription(event.target.value)}
           placeholder="Describe the problem, evidence, and expected follow-up."
           rows={3}
-          value={description}
+          value={draft.description}
         />
       </Field>
+      <IssueAssignmentFields
+        assignedTo={draft.assignedTo}
+        members={members}
+        onAssignedToChange={draft.setAssignedTo}
+        onPriorityChange={draft.setPriority}
+        priority={draft.priority}
+      />
+      <IssueImagePicker
+        files={draft.images}
+        onChange={draft.setImages}
+        onError={draft.setError}
+      />
     </>
   );
 }
