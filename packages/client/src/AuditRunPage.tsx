@@ -15,7 +15,7 @@ import {
   PageHeader,
   PageSection,
 } from "@tearleads/ui/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import {
   AuditApiError,
   type AuditDefinition,
@@ -67,34 +67,63 @@ interface AuditRunPageProps {
   onNavigate: (pathname: string) => void;
 }
 
+interface RunState {
+  detail: AuditDetail | undefined;
+  responses: Record<string, string>;
+}
+
+type RunAction =
+  | { detail: AuditDetail; type: "loaded" }
+  | { detail: AuditDetail; type: "issuesRefreshed" }
+  | { itemId: string; response: string; type: "answered" };
+
+/**
+ * The run page's audit and answers. Issue changes refresh the audit without
+ * discarding unsaved answers, so a Fail survives raising its issue.
+ */
+export function runStateReducer(state: RunState, action: RunAction): RunState {
+  switch (action.type) {
+    case "loaded":
+      return {
+        detail: action.detail,
+        responses: action.detail.audit.responses,
+      };
+    case "issuesRefreshed":
+      return { ...state, detail: action.detail };
+    case "answered":
+      return {
+        ...state,
+        responses: { ...state.responses, [action.itemId]: action.response },
+      };
+  }
+}
+
 export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
-  const [detail, setDetail] = useState<AuditDetail>();
-  const [responses, setResponses] = useState<Record<string, string>>({});
+  const [{ detail, responses }, dispatch] = useReducer(runStateReducer, {
+    detail: undefined,
+    responses: {},
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
 
-  const load = useCallback(async () => {
-    try {
-      const nextDetail = await getAuditRun(id);
-      setDetail(nextDetail);
-      setResponses(nextDetail.audit.responses);
-    } catch (cause) {
-      setError(messageFrom(cause));
-    }
-  }, [id]);
+  const fetchRun = useCallback(
+    async (type: "issuesRefreshed" | "loaded") => {
+      try {
+        dispatch({ detail: await getAuditRun(id), type });
+      } catch (cause) {
+        setError(messageFrom(cause));
+      }
+    },
+    [id],
+  );
+  const load = useCallback(() => fetchRun("loaded"), [fetchRun]);
+  const refreshIssues = useCallback(
+    () => fetchRun("issuesRefreshed"),
+    [fetchRun],
+  );
 
   useEffect(() => void load(), [load]);
-
-  // Issue changes refresh the list without discarding unsaved answers, so a
-  // Fail that has not been saved yet survives raising its issue.
-  const refreshIssues = useCallback(async () => {
-    try {
-      setDetail(await getAuditRun(id));
-    } catch (cause) {
-      setError(messageFrom(cause));
-    }
-  }, [id]);
 
   async function save(status: "completed" | "in_progress") {
     setBusy(true);
@@ -149,7 +178,7 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
             onCreated: refreshIssues,
           }}
           onChange={(itemId, response) =>
-            setResponses((current) => ({ ...current, [itemId]: response }))
+            dispatch({ itemId, response, type: "answered" })
           }
           responses={responses}
         />
@@ -437,9 +466,9 @@ function AuditQuestion({
   response: string;
 }) {
   const promptId = `audit-item-${item.id}`;
-  // Only a fresh Fail click offers the inline issue; failures reloaded from a
-  // saved draft keep the checklist compact.
-  const [offerIssue, setOfferIssue] = useState(false);
+  const [issueState, dispatchIssue] = useReducer(failIssueReducer, {
+    step: "closed",
+  });
   return (
     <li
       className={cx(
@@ -461,7 +490,7 @@ function AuditQuestion({
         <ResponseChoices
           labelledBy={promptId}
           onChange={(next) => {
-            if (next !== response) setOfferIssue(next === "fail");
+            dispatchIssue({ next, previous: response, type: "answered" });
             onChange(next);
           }}
           response={response}
@@ -477,21 +506,58 @@ function AuditQuestion({
           value={response}
         />
       )}
-      {offerIssue && response === "fail" && (
+      {issueState.step !== "closed" && response === "fail" && (
         <FailedItemIssue
           auditId={issueContext.auditId}
           item={item}
           members={issueContext.members}
-          onCreated={issueContext.onCreated}
+          onCreated={async (warning) => {
+            dispatchIssue({ type: "created", warning });
+            await issueContext.onCreated();
+          }}
+          onSkipChange={(skip) => dispatchIssue({ skip, type: "skipToggled" })}
           openIssueCount={
             issueContext.issues.filter(
               (issue) => issue.itemId === item.id && issue.status === "open",
             ).length
           }
+          state={issueState}
         />
       )}
     </li>
   );
+}
+
+/** The inline issue beneath a checklist item. */
+export type FailIssueState =
+  | { step: "closed" }
+  | { step: "offered" }
+  | { step: "skipped" }
+  | { step: "created"; warning: string | undefined };
+
+type FailIssueEvent =
+  | { next: string; previous: string; type: "answered" }
+  | { skip: boolean; type: "skipToggled" }
+  | { type: "created"; warning: string | undefined };
+
+/**
+ * Only a fresh Fail click offers the issue, so failures reloaded from a saved
+ * draft keep the checklist compact. Any other answer closes it.
+ */
+export function failIssueReducer(
+  state: FailIssueState,
+  event: FailIssueEvent,
+): FailIssueState {
+  switch (event.type) {
+    case "answered":
+      if (event.next === event.previous) return state;
+      return { step: event.next === "fail" ? "offered" : "closed" };
+    case "skipToggled":
+      if (state.step !== "offered" && state.step !== "skipped") return state;
+      return { step: event.skip ? "skipped" : "offered" };
+    case "created":
+      return { step: "created", warning: event.warning };
+  }
 }
 
 /**
@@ -503,25 +569,27 @@ export function FailedItemIssue({
   item,
   members,
   onCreated,
+  onSkipChange,
   openIssueCount,
+  state,
 }: {
   auditId: string;
   item: AuditTemplateItem;
   members: OrganizationMember[];
-  onCreated: () => Promise<void>;
+  onCreated: (warning?: string) => Promise<void>;
+  onSkipChange: (skip: boolean) => void;
   openIssueCount: number;
+  state: Exclude<FailIssueState, { step: "closed" }>;
 }) {
   const draft = useIssueDraft(auditId, item);
-  const [skipIssue, setSkipIssue] = useState(false);
-  const [created, setCreated] = useState<{ warning: string | undefined }>();
 
-  if (created) {
+  if (state.step === "created") {
     return (
       <p className="runFailIssueCreated" role="status">
         <Icon name="success" size={16} />
         <span>
           Issue created.
-          {created.warning ? ` ${created.warning}` : ""}
+          {state.warning ? ` ${state.warning}` : ""}
         </span>
       </p>
     );
@@ -531,14 +599,14 @@ export function FailedItemIssue({
     <section aria-label="Issue for this failure" className="runFailIssue">
       <label className="check">
         <input
-          checked={skipIssue}
+          checked={state.step === "skipped"}
           disabled={draft.busy}
-          onChange={(event) => setSkipIssue(event.target.checked)}
+          onChange={(event) => onSkipChange(event.target.checked)}
           type="checkbox"
         />
         Fail without creating issue
       </label>
-      {!skipIssue && (
+      {state.step === "offered" && (
         <>
           {openIssueCount > 0 && (
             <p className="fieldHint">
@@ -553,12 +621,7 @@ export function FailedItemIssue({
               className="runIssueSubmit"
               disabled={!draft.title.trim()}
               icon="add"
-              onClick={() =>
-                void draft.submit(async (warning) => {
-                  setCreated({ warning });
-                  await onCreated();
-                })
-              }
+              onClick={() => void draft.submit(onCreated)}
               variant="primary"
             >
               {draft.busy ? "Creating…" : "Create issue"}
@@ -735,21 +798,18 @@ function useIssueDraft(auditId: string, item: AuditTemplateItem | undefined) {
     setBusy(true);
     setError(undefined);
     try {
-      const { issueId } = await createAuditIssue(auditId, {
-        assignedTo: assignedTo || null,
-        description,
-        itemId,
-        priority,
-        title,
-      });
-      const failedUploads = (
-        await uploadIssueImagesSequentially(issueId, images)
-      ).length;
-      await onCreated(
-        failedUploads > 0
-          ? `${failedUploads} image${failedUploads === 1 ? "" : "s"} could not be attached. The issue was created.`
-          : undefined,
+      const warning = await createIssueWithImages(
+        auditId,
+        {
+          assignedTo: assignedTo || null,
+          description,
+          itemId,
+          priority,
+          title,
+        },
+        images,
       );
+      await onCreated(warning);
     } catch (cause) {
       setError(messageFrom(cause));
       setBusy(false);
@@ -1118,6 +1178,26 @@ function useIssueCardActions({
 }
 
 type IssueImageUploader = (issueId: string, file: File) => Promise<unknown>;
+
+/**
+ * Creates the issue, then attaches its images. Returns a warning when some
+ * images could not be attached; the issue exists either way.
+ */
+export async function createIssueWithImages(
+  auditId: string,
+  issue: Parameters<typeof createAuditIssue>[1],
+  images: File[],
+  create: typeof createAuditIssue = createAuditIssue,
+  upload: IssueImageUploader = uploadAuditIssueImage,
+) {
+  const { issueId } = await create(auditId, issue);
+  const failedUploads = (
+    await uploadIssueImagesSequentially(issueId, images, upload)
+  ).length;
+  return failedUploads > 0
+    ? `${failedUploads} image${failedUploads === 1 ? "" : "s"} could not be attached. The issue was created.`
+    : undefined;
+}
 
 type WaitForRetry = (milliseconds: number) => Promise<void>;
 
