@@ -15,7 +15,7 @@ import {
   PageHeader,
   PageSection,
 } from "@tearleads/ui/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import {
   AuditApiError,
   type AuditDefinition,
@@ -67,22 +67,61 @@ interface AuditRunPageProps {
   onNavigate: (pathname: string) => void;
 }
 
+interface RunState {
+  detail: AuditDetail | undefined;
+  responses: Record<string, string>;
+}
+
+type RunAction =
+  | { detail: AuditDetail; type: "loaded" }
+  | { detail: AuditDetail; type: "issuesRefreshed" }
+  | { itemId: string; response: string; type: "answered" };
+
+/**
+ * The run page's audit and answers. Issue changes refresh the audit without
+ * discarding unsaved answers, so a Fail survives raising its issue.
+ */
+export function runStateReducer(state: RunState, action: RunAction): RunState {
+  switch (action.type) {
+    case "loaded":
+      return {
+        detail: action.detail,
+        responses: action.detail.audit.responses,
+      };
+    case "issuesRefreshed":
+      return { ...state, detail: action.detail };
+    case "answered":
+      return {
+        ...state,
+        responses: { ...state.responses, [action.itemId]: action.response },
+      };
+  }
+}
+
 export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
-  const [detail, setDetail] = useState<AuditDetail>();
-  const [responses, setResponses] = useState<Record<string, string>>({});
+  const [{ detail, responses }, dispatch] = useReducer(runStateReducer, {
+    detail: undefined,
+    responses: {},
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
 
-  const load = useCallback(async () => {
-    try {
-      const nextDetail = await getAuditRun(id);
-      setDetail(nextDetail);
-      setResponses(nextDetail.audit.responses);
-    } catch (cause) {
-      setError(messageFrom(cause));
-    }
-  }, [id]);
+  const fetchRun = useCallback(
+    async (type: "issuesRefreshed" | "loaded") => {
+      try {
+        dispatch({ detail: await getAuditRun(id), type });
+      } catch (cause) {
+        setError(messageFrom(cause));
+      }
+    },
+    [id],
+  );
+  const load = useCallback(() => fetchRun("loaded"), [fetchRun]);
+  const refreshIssues = useCallback(
+    () => fetchRun("issuesRefreshed"),
+    [fetchRun],
+  );
 
   useEffect(() => void load(), [load]);
 
@@ -132,8 +171,14 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
         />
         <AuditQuestions
           definition={detail.audit.definition}
+          issueContext={{
+            auditId: id,
+            issues: detail.issues,
+            members: detail.members,
+            onCreated: refreshIssues,
+          }}
           onChange={(itemId, response) =>
-            setResponses((current) => ({ ...current, [itemId]: response }))
+            dispatch({ itemId, response, type: "answered" })
           }
           responses={responses}
         />
@@ -142,7 +187,7 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
           definition={detail.audit.definition}
           issues={detail.issues}
           members={detail.members}
-          onChange={load}
+          onChange={refreshIssues}
           responses={responses}
         />
       </PageBody>
@@ -302,12 +347,22 @@ function ProgressNote({
   );
 }
 
+/** What a question needs to raise an issue inline when it is marked Fail. */
+interface IssueContext {
+  auditId: string;
+  issues: AuditIssue[];
+  members: OrganizationMember[];
+  onCreated: () => Promise<void>;
+}
+
 function AuditQuestions({
   definition,
+  issueContext,
   onChange,
   responses,
 }: {
   definition: AuditDefinition;
+  issueContext: IssueContext;
   onChange: (itemId: string, response: string) => void;
   responses: Record<string, string>;
 }) {
@@ -323,6 +378,7 @@ function AuditQuestions({
         {definition.sections.map((section, sectionIndex) => (
           <AuditSection
             index={sectionIndex}
+            issueContext={issueContext}
             key={section.id}
             onChange={onChange}
             responses={responses}
@@ -336,11 +392,13 @@ function AuditQuestions({
 
 function AuditSection({
   index,
+  issueContext,
   onChange,
   responses,
   section,
 }: {
   index: number;
+  issueContext: IssueContext;
   onChange: (itemId: string, response: string) => void;
   responses: Record<string, string>;
   section: AuditTemplateSection;
@@ -381,6 +439,7 @@ function AuditSection({
           {section.items.map((item, itemIndex) => (
             <AuditQuestion
               index={itemIndex}
+              issueContext={issueContext}
               item={item}
               key={item.id}
               onChange={(response) => onChange(item.id, response)}
@@ -395,16 +454,22 @@ function AuditSection({
 
 function AuditQuestion({
   index,
+  issueContext,
   item,
   onChange,
   response,
 }: {
   index: number;
+  issueContext: IssueContext;
   item: AuditTemplateItem;
   onChange: (response: string) => void;
   response: string;
 }) {
   const promptId = `audit-item-${item.id}`;
+  const [issueState, dispatchIssue] = useReducer(failIssueReducer, {
+    offer: 0,
+    step: "closed",
+  });
   return (
     <li
       className={cx(
@@ -425,7 +490,10 @@ function AuditQuestion({
       {item.responseType === "check" ? (
         <ResponseChoices
           labelledBy={promptId}
-          onChange={onChange}
+          onChange={(next) => {
+            dispatchIssue({ next, previous: response, type: "answered" });
+            onChange(next);
+          }}
           response={response}
         />
       ) : (
@@ -439,7 +507,140 @@ function AuditQuestion({
           value={response}
         />
       )}
+      {issueState.step !== "closed" && response === "fail" && (
+        <FailedItemIssue
+          auditId={issueContext.auditId}
+          item={item}
+          key={issueState.offer}
+          members={issueContext.members}
+          onCreated={async (offer, warning) => {
+            dispatchIssue({ offer, type: "created", warning });
+            await issueContext.onCreated();
+          }}
+          onSkipChange={(skip) => dispatchIssue({ skip, type: "skipToggled" })}
+          openIssueCount={
+            issueContext.issues.filter(
+              (issue) => issue.itemId === item.id && issue.status === "open",
+            ).length
+          }
+          state={issueState}
+        />
+      )}
     </li>
+  );
+}
+
+/**
+ * The inline issue beneath a checklist item. `offer` counts fresh Fail clicks
+ * so a submission can be matched to the form it came from.
+ */
+export type FailIssueState =
+  | { offer: number; step: "closed" }
+  | { offer: number; step: "offered" }
+  | { offer: number; step: "skipped" }
+  | { offer: number; step: "created"; warning: string | undefined };
+
+type FailIssueEvent =
+  | { next: string; previous: string; type: "answered" }
+  | { skip: boolean; type: "skipToggled" }
+  | { offer: number; type: "created"; warning: string | undefined };
+
+/**
+ * Only a fresh Fail click offers the issue, so failures reloaded from a saved
+ * draft keep the checklist compact. Any other answer closes it.
+ */
+export function failIssueReducer(
+  state: FailIssueState,
+  event: FailIssueEvent,
+): FailIssueState {
+  switch (event.type) {
+    case "answered":
+      if (event.next === event.previous) return state;
+      return event.next === "fail"
+        ? { offer: state.offer + 1, step: "offered" }
+        : { offer: state.offer, step: "closed" };
+    case "skipToggled":
+      if (state.step !== "offered" && state.step !== "skipped") return state;
+      return { offer: state.offer, step: event.skip ? "skipped" : "offered" };
+    case "created":
+      // A submission that outlived its offer must not replace a newer form.
+      if (event.offer !== state.offer || state.step === "closed") return state;
+      return { offer: state.offer, step: "created", warning: event.warning };
+  }
+}
+
+/**
+ * The issue offered beneath a freshly failed item. The checkbox records a
+ * deliberate failure with no follow-up and tucks the form away.
+ */
+export function FailedItemIssue({
+  auditId,
+  item,
+  members,
+  onCreated,
+  onSkipChange,
+  openIssueCount,
+  state,
+}: {
+  auditId: string;
+  item: AuditTemplateItem;
+  members: OrganizationMember[];
+  onCreated: (offer: number, warning?: string) => Promise<void>;
+  onSkipChange: (skip: boolean) => void;
+  openIssueCount: number;
+  state: Exclude<FailIssueState, { step: "closed" }>;
+}) {
+  const draft = useIssueDraft(auditId, item);
+
+  if (state.step === "created") {
+    return (
+      <p className="runFailIssueCreated" role="status">
+        <Icon name="success" size={16} />
+        <span>
+          Issue created.
+          {state.warning ? ` ${state.warning}` : ""}
+        </span>
+      </p>
+    );
+  }
+
+  return (
+    <section aria-label="Issue for this failure" className="runFailIssue">
+      <label className="check">
+        <input
+          checked={state.step === "skipped"}
+          disabled={draft.busy}
+          onChange={(event) => onSkipChange(event.target.checked)}
+          type="checkbox"
+        />
+        Fail without creating issue
+      </label>
+      {state.step === "offered" && (
+        <>
+          {openIssueCount > 0 && (
+            <p className="fieldHint">
+              This item already has {countLabel(openIssueCount, "open issue")}.
+            </p>
+          )}
+          {draft.error && <Banner tone="danger">{draft.error}</Banner>}
+          <IssueDraftFields draft={draft} members={members} />
+          <div className="formActions">
+            <Button
+              busy={draft.busy}
+              className="runIssueSubmit"
+              disabled={!draft.title.trim()}
+              icon="add"
+              onClick={() =>
+                void draft.submit((warning) => onCreated(state.offer, warning))
+              }
+              variant="primary"
+            >
+              {draft.busy ? "Creating…" : "Create issue"}
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -546,113 +747,37 @@ function IssueForm({
 }) {
   const suggested =
     items.find((item) => responses[item.id] === "fail") ?? items[0];
-  const [itemId, setItemId] = useState(suggested?.id ?? "");
-  const [title, setTitle] = useState(suggested?.prompt ?? "");
-  const [description, setDescription] = useState("");
-  const [priority, setPriority] = useState("medium");
-  const [assignedTo, setAssignedTo] = useState("");
-  const [images, setImages] = useState<File[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-
-  async function submit() {
-    setBusy(true);
-    setError(undefined);
-    try {
-      const { issueId } = await createAuditIssue(auditId, {
-        assignedTo: assignedTo || null,
-        description,
-        itemId,
-        priority,
-        title,
-      });
-      const failedUploads = (
-        await uploadIssueImagesSequentially(issueId, images)
-      ).length;
-      await onCreated(
-        failedUploads > 0
-          ? `${failedUploads} image${failedUploads === 1 ? "" : "s"} could not be attached. The issue was created.`
-          : undefined,
-      );
-    } catch (cause) {
-      setError(messageFrom(cause));
-      setBusy(false);
-    }
-  }
+  const draft = useIssueDraft(auditId, suggested);
 
   return (
     <Card
       description="Link the issue to a checklist item and assign follow-up."
       footer={
         <Button
-          busy={busy}
+          busy={draft.busy}
           className="runIssueSubmit"
-          disabled={!itemId || !title.trim()}
+          disabled={!draft.itemId || !draft.title.trim()}
           icon="add"
-          onClick={() => void submit()}
+          onClick={() => void draft.submit(onCreated)}
           variant="primary"
         >
-          {busy ? "Creating…" : "Create issue"}
+          {draft.busy ? "Creating…" : "Create issue"}
         </Button>
       }
       title="New issue"
     >
-      {error && <Banner tone="danger">{error}</Banner>}
-      <IssueTextFields
-        description={description}
-        itemId={itemId}
-        items={items}
-        onDescriptionChange={setDescription}
-        onItemChange={(nextId) => {
-          setItemId(nextId);
-          setTitle(items.find((item) => item.id === nextId)?.prompt ?? "");
-        }}
-        onTitleChange={setTitle}
-        responses={responses}
-        title={title}
-      />
-      <IssueAssignmentFields
-        assignedTo={assignedTo}
-        members={members}
-        onAssignedToChange={setAssignedTo}
-        onPriorityChange={setPriority}
-        priority={priority}
-      />
-      <IssueImagePicker
-        files={images}
-        onChange={setImages}
-        onError={setError}
-      />
-    </Card>
-  );
-}
-
-function IssueTextFields({
-  description,
-  itemId,
-  items,
-  onDescriptionChange,
-  onItemChange,
-  onTitleChange,
-  responses,
-  title,
-}: {
-  description: string;
-  itemId: string;
-  items: AuditTemplateItem[];
-  onDescriptionChange: (description: string) => void;
-  onItemChange: (itemId: string) => void;
-  onTitleChange: (title: string) => void;
-  responses: Record<string, string>;
-  title: string;
-}) {
-  return (
-    <>
+      {draft.error && <Banner tone="danger">{draft.error}</Banner>}
       <Field label="Checklist item">
         <select
           className="select"
-          onChange={(event) => onItemChange(event.target.value)}
-          value={itemId}
+          onChange={(event) => {
+            const nextId = event.target.value;
+            draft.setItemId(nextId);
+            draft.setTitle(
+              items.find((item) => item.id === nextId)?.prompt ?? "",
+            );
+          }}
+          value={draft.itemId}
         >
           {items.map((item) => (
             <option key={item.id} value={item.id}>
@@ -662,24 +787,105 @@ function IssueTextFields({
           ))}
         </select>
       </Field>
+      <IssueDraftFields draft={draft} members={members} />
+    </Card>
+  );
+}
+
+type IssueDraft = ReturnType<typeof useIssueDraft>;
+
+/** A new issue's fields and its create-then-attach-images submission. */
+function useIssueDraft(auditId: string, item: AuditTemplateItem | undefined) {
+  const [itemId, setItemId] = useState(item?.id ?? "");
+  const [title, setTitle] = useState(item?.prompt ?? "");
+  const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState("medium");
+  const [assignedTo, setAssignedTo] = useState("");
+  const [images, setImages] = useState<File[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  async function submit(onCreated: (warning?: string) => Promise<void>) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const warning = await createIssueWithImages(
+        auditId,
+        {
+          assignedTo: assignedTo || null,
+          description,
+          itemId,
+          priority,
+          title,
+        },
+        images,
+      );
+      await onCreated(warning);
+    } catch (cause) {
+      setError(messageFrom(cause));
+      setBusy(false);
+    }
+  }
+
+  return {
+    assignedTo,
+    busy,
+    description,
+    error,
+    images,
+    itemId,
+    priority,
+    setAssignedTo,
+    setDescription,
+    setError,
+    setImages,
+    setItemId,
+    setPriority,
+    setTitle,
+    submit,
+    title,
+  };
+}
+
+function IssueDraftFields({
+  draft,
+  members,
+}: {
+  draft: IssueDraft;
+  members: OrganizationMember[];
+}) {
+  return (
+    <>
       <Field label="Title">
         <input
           className="input"
           maxLength={300}
-          onChange={(event) => onTitleChange(event.target.value)}
-          value={title}
+          onChange={(event) => draft.setTitle(event.target.value)}
+          value={draft.title}
         />
       </Field>
       <Field label="Description" optional>
         <textarea
           className="textarea"
           maxLength={2000}
-          onChange={(event) => onDescriptionChange(event.target.value)}
+          onChange={(event) => draft.setDescription(event.target.value)}
           placeholder="Describe the problem, evidence, and expected follow-up."
           rows={3}
-          value={description}
+          value={draft.description}
         />
       </Field>
+      <IssueAssignmentFields
+        assignedTo={draft.assignedTo}
+        members={members}
+        onAssignedToChange={draft.setAssignedTo}
+        onPriorityChange={draft.setPriority}
+        priority={draft.priority}
+      />
+      <IssueImagePicker
+        files={draft.images}
+        onChange={draft.setImages}
+        onError={draft.setError}
+      />
     </>
   );
 }
@@ -983,6 +1189,26 @@ function useIssueCardActions({
 }
 
 type IssueImageUploader = (issueId: string, file: File) => Promise<unknown>;
+
+/**
+ * Creates the issue, then attaches its images. Returns a warning when some
+ * images could not be attached; the issue exists either way.
+ */
+export async function createIssueWithImages(
+  auditId: string,
+  issue: Parameters<typeof createAuditIssue>[1],
+  images: File[],
+  create: typeof createAuditIssue = createAuditIssue,
+  upload: IssueImageUploader = uploadAuditIssueImage,
+) {
+  const { issueId } = await create(auditId, issue);
+  const failedUploads = (
+    await uploadIssueImagesSequentially(issueId, images, upload)
+  ).length;
+  return failedUploads > 0
+    ? `${failedUploads} image${failedUploads === 1 ? "" : "s"} could not be attached. The issue was created.`
+    : undefined;
+}
 
 type WaitForRetry = (milliseconds: number) => Promise<void>;
 
