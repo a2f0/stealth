@@ -467,6 +467,7 @@ function AuditQuestion({
 }) {
   const promptId = `audit-item-${item.id}`;
   const [issueState, dispatchIssue] = useReducer(failIssueReducer, {
+    offer: 0,
     step: "closed",
   });
   return (
@@ -510,9 +511,10 @@ function AuditQuestion({
         <FailedItemIssue
           auditId={issueContext.auditId}
           item={item}
+          key={issueState.offer}
           members={issueContext.members}
-          onCreated={async (warning) => {
-            dispatchIssue({ type: "created", warning });
+          onCreated={async (offer, warning) => {
+            dispatchIssue({ offer, type: "created", warning });
             await issueContext.onCreated();
           }}
           onSkipChange={(skip) => dispatchIssue({ skip, type: "skipToggled" })}
@@ -528,17 +530,20 @@ function AuditQuestion({
   );
 }
 
-/** The inline issue beneath a checklist item. */
+/**
+ * The inline issue beneath a checklist item. `offer` counts fresh Fail clicks
+ * so a submission can be matched to the form it came from.
+ */
 export type FailIssueState =
-  | { step: "closed" }
-  | { step: "offered" }
-  | { step: "skipped" }
-  | { step: "created"; warning: string | undefined };
+  | { offer: number; step: "closed" }
+  | { offer: number; step: "offered" }
+  | { offer: number; step: "skipped" }
+  | { offer: number; step: "created"; warning: string | undefined };
 
 type FailIssueEvent =
   | { next: string; previous: string; type: "answered" }
   | { skip: boolean; type: "skipToggled" }
-  | { type: "created"; warning: string | undefined };
+  | { offer: number; type: "created"; warning: string | undefined };
 
 /**
  * Only a fresh Fail click offers the issue, so failures reloaded from a saved
@@ -551,12 +556,16 @@ export function failIssueReducer(
   switch (event.type) {
     case "answered":
       if (event.next === event.previous) return state;
-      return { step: event.next === "fail" ? "offered" : "closed" };
+      return event.next === "fail"
+        ? { offer: state.offer + 1, step: "offered" }
+        : { offer: state.offer, step: "closed" };
     case "skipToggled":
       if (state.step !== "offered" && state.step !== "skipped") return state;
-      return { step: event.skip ? "skipped" : "offered" };
+      return { offer: state.offer, step: event.skip ? "skipped" : "offered" };
     case "created":
-      return { step: "created", warning: event.warning };
+      // A submission that outlived its offer must not replace a newer form.
+      if (event.offer !== state.offer || state.step === "closed") return state;
+      return { offer: state.offer, step: "created", warning: event.warning };
   }
 }
 
@@ -576,7 +585,7 @@ export function FailedItemIssue({
   auditId: string;
   item: AuditTemplateItem;
   members: OrganizationMember[];
-  onCreated: (warning?: string) => Promise<void>;
+  onCreated: (offer: number, warning?: string) => Promise<void>;
   onSkipChange: (skip: boolean) => void;
   openIssueCount: number;
   state: Exclude<FailIssueState, { step: "closed" }>;
@@ -621,7 +630,9 @@ export function FailedItemIssue({
               className="runIssueSubmit"
               disabled={!draft.title.trim()}
               icon="add"
-              onClick={() => void draft.submit(onCreated)}
+              onClick={() =>
+                void draft.submit((warning) => onCreated(state.offer, warning))
+              }
               variant="primary"
             >
               {draft.busy ? "Creating…" : "Create issue"}
