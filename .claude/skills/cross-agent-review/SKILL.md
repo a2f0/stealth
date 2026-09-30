@@ -230,8 +230,7 @@ Require a clean worktree before fetching or snapshotting anything:
 
    # Never execute the feature branch's launcher: it runs before the reviewer
    # sandbox and inherits credentials. Materialize the tool from the fetched,
-   # trusted base. The explicit external path exists only to bootstrap the first
-   # PR that introduces the package; it must resolve outside this checkout.
+   # trusted base — the only source; a base without it stops here.
    if [ -n "$TRUSTED_AGENT_TOOL_TMP" ]; then
      rm -rf "$TRUSTED_AGENT_TOOL_TMP"
      TRUSTED_AGENT_TOOL_TMP=""
@@ -337,8 +336,8 @@ Require a clean worktree before fetching or snapshotting anything:
    predates them — the PR that introduced them, or an older base branch —
    leaves `VERSION_TOOL` empty, and the sync then proceeds only when
    `packages/api` and `packages/client` are exactly as the base has them, so
-   no bump is needed;
-   any other branch stops until the version actions land on its base.
+   no bump is needed; any other branch stops until the version actions land
+   on its base.
 
    **Merge, not rebase, and never force.** Every branch mutation in these skills
    pushes without force, and a rebase would need a force push; the squash-merge
