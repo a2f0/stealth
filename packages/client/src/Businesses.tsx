@@ -17,13 +17,13 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useReducer,
   useRef,
   useState,
 } from "react";
 import {
   type Business,
   type BusinessInput,
-  type BusinessListing,
   createBusiness,
   deleteBusiness,
   getBusiness,
@@ -31,9 +31,12 @@ import {
   updateBusiness,
 } from "./businessesApi";
 import {
+  type BusinessListState,
+  businessListReducer,
   formatBusinessAddress,
   formatBusinessDate,
   formatEin,
+  initialBusinessListState,
 } from "./businessState";
 import { countLabel } from "./labels";
 import {
@@ -76,82 +79,36 @@ function BusinessListPage({
 }: {
   onNavigate: (pathname: string) => void;
 }) {
-  const [data, setData] = useState<BusinessListing>();
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
+  const [state, dispatch] = useReducer(
+    businessListReducer,
+    initialBusinessListState,
+  );
   const load = useCallback(async () => {
-    setLoading(true);
-    setError(undefined);
+    dispatch({ type: "loadStarted" });
     try {
-      setData(await getBusinesses());
+      dispatch({ type: "loaded", data: await getBusinesses() });
     } catch (cause) {
-      setError(messageFrom(cause));
-    } finally {
-      setLoading(false);
+      dispatch({ type: "loadFailed", message: messageFrom(cause) });
     }
   }, []);
   useEffect(() => void load(), [load]);
 
-  const changeBusinesses = (
-    change: (businesses: Business[]) => Business[],
-    message: string,
-  ) => {
-    setData((current) =>
-      current
-        ? { ...current, businesses: change(current.businesses) }
-        : current,
-    );
-    setError(undefined);
-    setNotice(message);
-  };
-
   return (
     <BusinessListView
-      adding={adding}
-      data={data}
-      error={error}
-      loading={loading}
-      notice={notice}
-      onAddingChange={setAdding}
-      onCreated={(business) => {
-        changeBusinesses(
-          (businesses) => [business, ...businesses],
-          "Business added.",
-        );
-        setAdding(false);
-      }}
-      onDeleted={(id) =>
-        changeBusinesses(
-          (businesses) => businesses.filter((business) => business.id !== id),
-          "Business deleted.",
-        )
+      {...state}
+      onAddingChange={(adding) =>
+        dispatch({ type: adding ? "addOpened" : "addCancelled" })
       }
-      onError={(message) => {
-        setNotice(undefined);
-        setError(message);
-      }}
+      onCreated={(business) => dispatch({ type: "created", business })}
+      onDeleted={(id) => dispatch({ type: "deleted", id })}
+      onError={(message) => dispatch({ type: "failed", message })}
       onNavigate={onNavigate}
-      onUpdated={(updated) =>
-        changeBusinesses(
-          (businesses) =>
-            businesses.map((business) =>
-              business.id === updated.id ? updated : business,
-            ),
-          "Business updated.",
-        )
-      }
+      onUpdated={(business) => dispatch({ type: "updated", business })}
     />
   );
 }
 
-interface BusinessListViewProps {
-  adding: boolean;
-  data: BusinessListing | undefined;
-  error: string | undefined;
-  loading: boolean;
-  notice: string | undefined;
+interface BusinessListViewProps extends BusinessListState {
   onAddingChange: (adding: boolean) => void;
   onCreated: (business: Business) => void;
   onDeleted: (id: string) => void;
@@ -164,21 +121,12 @@ interface BusinessListViewProps {
  * The first business is added from an open form. Once one exists, the form
  * folds behind an "Add business" header action so the list leads the page.
  */
-export function BusinessListView({
-  adding,
-  data,
-  error,
-  loading,
-  notice,
-  onAddingChange,
-  onCreated,
-  onDeleted,
-  onError,
-  onNavigate,
-  onUpdated,
-}: BusinessListViewProps) {
+export function BusinessListView(props: BusinessListViewProps) {
+  const { adding, data, onAddingChange } = props;
   const canManage = data?.canManage ?? false;
   const hasBusinesses = (data?.businesses.length ?? 0) > 0;
+  const formOpen = canManage && (adding || !hasBusinesses);
+  const addButton = useFocusWhenFolded(formOpen);
   return (
     <Page>
       <PageHeader
@@ -189,6 +137,7 @@ export function BusinessListView({
             <Button
               icon="add"
               onClick={() => onAddingChange(true)}
+              ref={addButton}
               variant="primary"
             >
               Add business
@@ -200,36 +149,69 @@ export function BusinessListView({
         title="Businesses"
       />
       <PageBody>
-        {error && <Banner tone="danger">{error}</Banner>}
-        {notice && <Banner tone="success">{notice}</Banner>}
-        {loading && !data ? (
-          <LoadingState label="Loading businesses…" />
-        ) : data ? (
-          <>
-            {!canManage && <ReadOnlyNotice />}
-            {canManage && (adding || !hasBusinesses) && (
-              <BusinessCreateForm
-                onCancel={
-                  hasBusinesses ? () => onAddingChange(false) : undefined
-                }
-                onCreated={onCreated}
-                onError={onError}
-              />
-            )}
-            <BusinessList
-              businesses={data.businesses}
-              canManage={canManage}
-              onDeleted={onDeleted}
-              onError={onError}
-              onNavigate={onNavigate}
-              onUpdated={onUpdated}
-            />
-          </>
-        ) : (
-          <BusinessEmptyState title="Businesses could not be loaded." />
-        )}
+        <BusinessListBody {...props} formOpen={formOpen} />
       </PageBody>
     </Page>
+  );
+}
+
+/**
+ * Folding the form away (cancelled, or a business was added) removes the
+ * focused field; hand focus to the button that reopens it.
+ */
+function useFocusWhenFolded(formOpen: boolean) {
+  const button = useRef<HTMLButtonElement>(null);
+  const wasFormOpen = useRef(formOpen);
+  useEffect(() => {
+    if (wasFormOpen.current && !formOpen) button.current?.focus();
+    wasFormOpen.current = formOpen;
+  }, [formOpen]);
+  return button;
+}
+
+function BusinessListBody({
+  data,
+  error,
+  formOpen,
+  loading,
+  notice,
+  onAddingChange,
+  onCreated,
+  onDeleted,
+  onError,
+  onNavigate,
+  onUpdated,
+}: BusinessListViewProps & { formOpen: boolean }) {
+  const hasBusinesses = (data?.businesses.length ?? 0) > 0;
+  return (
+    <>
+      {error && <Banner tone="danger">{error}</Banner>}
+      {notice && <Banner tone="success">{notice}</Banner>}
+      {loading && !data ? (
+        <LoadingState label="Loading businesses…" />
+      ) : data ? (
+        <>
+          {!data.canManage && <ReadOnlyNotice />}
+          {formOpen && (
+            <BusinessCreateForm
+              onCancel={hasBusinesses ? () => onAddingChange(false) : undefined}
+              onCreated={onCreated}
+              onError={onError}
+            />
+          )}
+          <BusinessList
+            businesses={data.businesses}
+            canManage={data.canManage}
+            onDeleted={onDeleted}
+            onError={onError}
+            onNavigate={onNavigate}
+            onUpdated={onUpdated}
+          />
+        </>
+      ) : (
+        <BusinessEmptyState title="Businesses could not be loaded." />
+      )}
+    </>
   );
 }
 

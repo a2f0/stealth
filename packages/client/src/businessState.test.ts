@@ -1,9 +1,38 @@
 import { describe, expect, it } from "bun:test";
+import type { Business } from "./businessesApi";
 import {
+  type BusinessListEvent,
+  type BusinessListState,
+  businessListReducer,
   formatBusinessAddress,
   formatBusinessDate,
   formatEin,
+  initialBusinessListState,
 } from "./businessState";
+
+function business(id: string, name: string): Business {
+  return {
+    city: null,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    ein: null,
+    id,
+    incorporationDate: null,
+    name,
+    state: null,
+    streetAddress: null,
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    zip: null,
+  };
+}
+
+function run(events: BusinessListEvent[], state = initialBusinessListState) {
+  return events.reduce<BusinessListState>(businessListReducer, state);
+}
+
+const acme = business("business-1", "Acme, Inc.");
+const loaded = run([
+  { type: "loaded", data: { businesses: [acme], canManage: true } },
+]);
 
 describe("formatEin", () => {
   it("formats a normalized EIN for display", () => {
@@ -53,5 +82,66 @@ describe("formatBusinessAddress", () => {
     ).toBe("Austin, TX");
     expect(formatBusinessAddress({ ...empty, zip: "10001" })).toBe("10001");
     expect(formatBusinessAddress(empty)).toBe("");
+  });
+});
+
+describe("businessListReducer", () => {
+  it("loads, and reports a failed load", () => {
+    expect(loaded).toMatchObject({ loading: false, error: undefined });
+    expect(run([{ type: "loadFailed", message: "Offline." }])).toMatchObject({
+      error: "Offline.",
+      loading: false,
+    });
+    expect(
+      run([{ type: "loadStarted" }], { ...loaded, error: "Offline." }),
+    ).toMatchObject({ error: undefined, loading: true });
+  });
+
+  it("opens and cancels the on-demand add form", () => {
+    const opened = run([{ type: "addOpened" }], loaded);
+    expect(opened.adding).toBe(true);
+    expect(run([{ type: "addCancelled" }], opened).adding).toBe(false);
+  });
+
+  it("folds the form away after a successful add", () => {
+    const beta = business("business-2", "Beta LLC");
+    const state = run(
+      [
+        { type: "addOpened" },
+        { type: "failed", message: "Try again." },
+        { type: "created", business: beta },
+      ],
+      loaded,
+    );
+    expect(state).toMatchObject({
+      adding: false,
+      error: undefined,
+      notice: "Business added.",
+    });
+    expect(state.data?.businesses).toEqual([beta, acme]);
+  });
+
+  it("keeps the form open when an add fails", () => {
+    const state = run(
+      [{ type: "addOpened" }, { type: "failed", message: "Name taken." }],
+      { ...loaded, notice: "Business updated." },
+    );
+    expect(state).toMatchObject({
+      adding: true,
+      error: "Name taken.",
+      notice: undefined,
+    });
+    expect(state.data?.businesses).toEqual([acme]);
+  });
+
+  it("updates and deletes businesses in place", () => {
+    const renamed = { ...acme, name: "Acme Holdings" };
+    const updated = run([{ type: "updated", business: renamed }], loaded);
+    expect(updated.data?.businesses).toEqual([renamed]);
+    expect(updated.notice).toBe("Business updated.");
+
+    const deleted = run([{ type: "deleted", id: acme.id }], updated);
+    expect(deleted.data?.businesses).toEqual([]);
+    expect(deleted.notice).toBe("Business deleted.");
   });
 });

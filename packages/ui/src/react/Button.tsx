@@ -2,6 +2,7 @@ import type {
   AnchorHTMLAttributes,
   ButtonHTMLAttributes,
   ReactNode,
+  Ref,
 } from "react";
 import type { IconName } from "../icons";
 import { cx } from "./cx";
@@ -65,7 +66,10 @@ interface ButtonContentProps {
 
 type ButtonProps = ButtonContentProps &
   ButtonStyle &
-  Omit<ButtonHTMLAttributes<HTMLButtonElement>, "className">;
+  Omit<ButtonHTMLAttributes<HTMLButtonElement>, "className"> & {
+    /** Forwarded to the underlying `<button>` (a plain prop in React 19). */
+    ref?: Ref<HTMLButtonElement> | undefined;
+  };
 
 export function Button({
   block,
