@@ -77,6 +77,51 @@
   gap: var(--space-2);
 }
 
+.auditTemplateToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+.auditTemplateRow {
+  display: grid;
+  grid-template-areas: "main stats actions";
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--space-3) var(--space-6);
+}
+
+.auditTemplateRow > .rowMain {
+  grid-area: main;
+}
+
+/* Long descriptions stay a two-line preview so rows keep an even rhythm. */
+.auditTemplateRow .rowMeta {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.auditTemplateRowStats {
+  display: grid;
+  grid-area: stats;
+  grid-template-columns: 6.5rem 5.5rem 6.5rem 2.5rem;
+  align-items: center;
+  justify-items: start;
+  gap: var(--space-4);
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.auditTemplateRowActions {
+  flex-wrap: nowrap;
+  grid-area: actions;
+  justify-content: flex-end;
+}
+
 .auditRunRow {
   display: grid;
   grid-template-areas: "main stats arrow";
@@ -126,7 +171,8 @@
 
 /* Stats move under the title by the list's own width, which the resizable
  * sidebar decides, not the viewport's. */
-.auditRunCard .cardFlush {
+.auditRunCard .cardFlush,
+.auditTemplateList .cardFlush {
   container-type: inline-size;
 }
 
@@ -143,6 +189,42 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2) var(--space-4);
+  }
+}
+
+/* Template rows drop their stats under the name, then stack their actions. */
+@container (max-width: 60rem) {
+  .auditTemplateRow {
+    grid-template-areas:
+      "main actions"
+      "stats stats";
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .auditTemplateRowStats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+}
+
+@container (max-width: 36rem) {
+  .auditTemplateRow {
+    grid-template-areas:
+      "main"
+      "stats"
+      "actions";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .auditTemplateRowActions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .auditTemplateRowActions > .button {
+    flex: 1 1 auto;
   }
 }
 
