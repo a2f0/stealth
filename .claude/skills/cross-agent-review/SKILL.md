@@ -65,9 +65,9 @@ commits to review and have no round limit.
   git can verify the result (SSH signing also needs
   `gpg.ssh.allowedSignersFile`); repair and base-merge commits are signed, and
   pushes refuse unsigned commits.
-- The `@tearleads/agent-tool` package in the fetched base commit. During the
-  package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
-  independently trusted installation outside the repository checkout.
+- The `@tearleads/agent-tool` package in the fetched base commit. Every tool
+  these skills run comes from that base — never from an installation outside
+  this repository.
 - For Codex reviews: `codex` CLI configured (`OPENAI_API_KEY`).
 - For Claude Code reviews: `claude` CLI with `ANTHROPIC_API_KEY` available;
   bare mode intentionally does not read OAuth/keychain credentials.
@@ -134,7 +134,6 @@ done
 GPG_BIN=$(resolve_bootstrap_tool gpg 2>/dev/null || true)
 PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}${GPG_BIN:+:${GPG_BIN%/*}}${REVIEWER_PATH:+:$REVIEWER_PATH}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
-ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -156,8 +155,7 @@ TRUSTED_AGENT_TOOL_TMP=""
 # `--no-verify` pushes skip the feature checkout's pre-push hook, so every push
 # first runs the hook's commit-trust check itself, taken from the trusted base:
 # each commit being pushed must be signed and free of Co-authored-by trailers.
-# During the bootstrap PR that introduces the check, the base has no copy; set
-# TEARLEADS_COMMIT_TRUST_SCRIPT to an independently trusted copy instead.
+# The check comes only from that base; a base without it cannot push.
 verify_commit_trust() {
   # Only a real commit may name the trusted base: an empty one would read the
   # feature branch's own copy from the index and check an empty range.
@@ -165,23 +163,13 @@ verify_commit_trust() {
     echo "Error: verify_commit_trust needs the trusted base commit" >&2
     return 1
   }
-  trust_dir=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-commit-trust.XXXXXX") || return 1
-  if git cat-file -e "${trust_base}:scripts/checks/checkCommitTrust.sh" 2>/dev/null; then
-    git show "${trust_base}:scripts/checks/checkCommitTrust.sh" >"$trust_dir/checkCommitTrust.sh" || { rm -rf "$trust_dir"; return 1; }
-    trust_script="$trust_dir/checkCommitTrust.sh"
-  elif [ -n "${TEARLEADS_COMMIT_TRUST_SCRIPT:-}" ]; then
-    trust_script=$("$REALPATH_BIN" "$TEARLEADS_COMMIT_TRUST_SCRIPT") || { rm -rf "$trust_dir"; return 1; }
-    # Outside every worktree of this repository, not just the current one.
-    if git worktree list --porcelain | awk -v script="$trust_script" 'sub(/^worktree /, "") && (script == $(0) || index(script, $(0) "/") == 1) { found = 1 } END { exit !found }'; then
-      echo "Error: trusted commit-trust check must be outside every checkout of this repository" >&2
-      rm -rf "$trust_dir"
-      return 1
-    fi
-  else
-    echo "Error: base has no commit-trust check; set TEARLEADS_COMMIT_TRUST_SCRIPT to a trusted copy outside the checkout" >&2
-    rm -rf "$trust_dir"
+  git cat-file -e "${trust_base}:scripts/checks/checkCommitTrust.sh" 2>/dev/null || {
+    echo "Error: base has no commit-trust check" >&2
     return 1
-  fi
+  }
+  trust_dir=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-commit-trust.XXXXXX") || return 1
+  trust_script="$trust_dir/checkCommitTrust.sh"
+  git show "${trust_base}:scripts/checks/checkCommitTrust.sh" >"$trust_script" || { rm -rf "$trust_dir"; return 1; }
   trust_status=0
   sh "$trust_script" --range "$trust_base..HEAD" || trust_status=$?
   rm -rf "$trust_dir"
@@ -242,32 +230,22 @@ Require a clean worktree before fetching or snapshotting anything:
 
    # Never execute the feature branch's launcher: it runs before the reviewer
    # sandbox and inherits credentials. Materialize the tool from the fetched,
-   # trusted base. The explicit external path exists only to bootstrap the first
-   # PR that introduces the package; it must resolve outside this checkout.
+   # trusted base — the only source; a base without it stops here.
    if [ -n "$TRUSTED_AGENT_TOOL_TMP" ]; then
      rm -rf "$TRUSTED_AGENT_TOOL_TMP"
      TRUSTED_AGENT_TOOL_TMP=""
    fi
-   if git cat-file -e "${FETCHED_BASE}:packages/agent-tool/src/index.ts" 2>/dev/null; then
-     TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
-     trap 'if [ -n "$TRUSTED_AGENT_TOOL_TMP" ]; then rm -rf "$TRUSTED_AGENT_TOOL_TMP"; fi' EXIT
-     git archive "$FETCHED_BASE" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
-     AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
-   else
-     [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || { echo "Error: base has no agent-tool; set TEARLEADS_AGENT_TOOL_DIR to a trusted external installation" >&2; exit 1; }
-     AGENT_TOOL=$(realpath "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || { echo "Error: trusted agent-tool path is invalid" >&2; exit 1; }
-     case "$AGENT_TOOL" in
-       "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted agent-tool must be outside the feature checkout" >&2; exit 1 ;;
-     esac
-   fi
+   git cat-file -e "${FETCHED_BASE}:packages/agent-tool/src/index.ts" 2>/dev/null || { echo "Error: base has no agent-tool; every trusted tool comes from this repository's base" >&2; exit 1; }
+   TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
+   trap 'if [ -n "$TRUSTED_AGENT_TOOL_TMP" ]; then rm -rf "$TRUSTED_AGENT_TOOL_TMP"; fi' EXIT
+   git archive "$FETCHED_BASE" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
+   AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
    [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
-   # The version actions postdate the agent-tool itself. Take them only from
-   # the tool materialized from this exact base — never an external
-   # installation. A base without them leaves VERSION_TOOL empty, and then only
-   # a branch that changes no versioned package can ship.
+   # The version actions postdate the agent-tool itself. A base without them
+   # leaves VERSION_TOOL empty, and then only a branch that changes no versioned
+   # package can ship.
    VERSION_TOOL=""
-   if [ -n "$TRUSTED_AGENT_TOOL_TMP" ] &&
-     git cat-file -e "${FETCHED_BASE}:packages/agent-tool/src/version/bumpVersions.ts" 2>/dev/null; then
+   if git cat-file -e "${FETCHED_BASE}:packages/agent-tool/src/version/bumpVersions.ts" 2>/dev/null; then
      VERSION_TOOL="$AGENT_TOOL"
    fi
    if [ "$REPORT_ONLY" = true ]; then
@@ -354,12 +332,12 @@ Require a clean worktree before fetching or snapshotting anything:
    would otherwise run `post-index-change` in this credential-bearing shell.
 
    The version actions come only from the tool materialized from the fetched
-   base, never from anywhere outside the repository —
-   `TEARLEADS_AGENT_TOOL_DIR` included. A base whose tool predates them — the PR
-   that introduced them, or an older base branch — leaves `VERSION_TOOL`
-   empty, and the sync then proceeds only when `packages/api` and
-   `packages/client` are exactly as the base has them, so no bump is needed;
-   any other branch stops until the version actions land on its base.
+   base, never from anywhere outside the repository. A base whose tool
+   predates them — the PR that introduced them, or an older base branch —
+   leaves `VERSION_TOOL` empty, and the sync then proceeds only when
+   `packages/api` and `packages/client` are exactly as the base has them, so
+   no bump is needed; any other branch stops until the version actions land
+   on its base.
 
    **Merge, not rebase, and never force.** Every branch mutation in these skills
    pushes without force, and a rebase would need a force push; the squash-merge
