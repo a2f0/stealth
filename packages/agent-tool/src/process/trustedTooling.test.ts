@@ -185,14 +185,29 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
     const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "skill-guard-"));
     try {
       const callsFile = path.join(temporaryDirectory, "calls");
-      // The trusted launcher stub prints one rewritten manifest for a bump.
-      const bunStub = path.join(temporaryDirectory, "bun");
-      writeFileSync(
-        bunStub,
-        `#!/bin/sh\nprintf 'bun %s\\n' "$*" >> "$CALLS"\ncase "$*" in *" bumpVersions "*) printf 'packages/client/package.json\\n' ;; *" resolveVersionConflicts") exit "$RESOLVE_STATUS" ;; esac\n`,
-        { mode: 0o755 },
-      );
-      const shell = `set -euo pipefail\ngit() { printf '%s\\n' "$*" >> "$CALLS"; if [ "$1" = rev-parse ]; then printf 'head\\n'; fi; if [ "\${3:-}" = merge ] && [ "\${4:-}" = -S ]; then return "$MERGE_STATUS"; fi; if [ "$1" = diff ]; then return "$DIFF_STATUS"; fi; }\n${guardScript}`;
+      // Stubs are shell functions rather than freshly written executables,
+      // which Linux can refuse to exec (ETXTBSY). The trusted launcher prints
+      // one rewritten manifest for a bump, and git drains the pathspecs piped
+      // to `add` as real git does, recording them.
+      const stubs = [
+        "bun_stub() {",
+        '  printf \'bun %s\\n\' "$*" >> "$CALLS"',
+        '  case "$*" in',
+        "    *\" bumpVersions \"*) printf 'packages/client/package.json\\n' ;;",
+        '    *" resolveVersionConflicts") return "$RESOLVE_STATUS" ;;',
+        "  esac",
+        "}",
+        "git() {",
+        '  printf \'%s\\n\' "$*" >> "$CALLS"',
+        "  if [ \"$1\" = rev-parse ]; then printf 'head\\n'; fi",
+        '  case "$*" in',
+        '    *" add --pathspec-from-file=-") cat >> "$CALLS" ;;',
+        '    *" merge -S "*) return "$MERGE_STATUS" ;;',
+        "  esac",
+        '  if [ "$1" = diff ]; then return "$DIFF_STATUS"; fi',
+        "}",
+      ].join("\n");
+      const shell = `set -euo pipefail\n${stubs}\n${guardScript}`;
       const runGuard = (
         reportOnly: string,
         bumpVersions: string,
@@ -211,7 +226,7 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
             BASE_REF: "main",
             BRANCH: "feature",
             BUMP_VERSIONS: bumpVersions,
-            BUN_BIN: bunStub,
+            BUN_BIN: "bun_stub",
             CALLS: callsFile,
             DIFF_STATUS: diffStatus,
             FETCHED_BASE: "base",
@@ -225,6 +240,7 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
         return {
           calls: readFileSync(callsFile, "utf8"),
           status: result.status,
+          stderr: result.stderr,
         };
       };
       const bump =
@@ -233,7 +249,7 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
         "-c core.hooksPath=/dev/null commit -S -m chore: bump package versions";
 
       for (const bumpVersions of ["true", "false"]) {
-        expect(runGuard("true", bumpVersions)).toEqual({
+        expect(runGuard("true", bumpVersions)).toMatchObject({
           calls: "",
           status: 0,
         });
@@ -246,7 +262,7 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
       expect(plain.calls).not.toContain(" commit ");
 
       const bumped = runGuard("false", "true");
-      expect(bumped.status).toBe(0);
+      expect(bumped).toMatchObject({ stderr: "", status: 0 });
       const mergeCall = bumped.calls.indexOf("merge -S --no-edit base");
       const bumpCall = bumped.calls.indexOf(bump);
       // Staging writes the index, which would otherwise run post-index-change.
@@ -257,6 +273,9 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
       expect(mergeCall).toBeGreaterThan(-1);
       expect(bumpCall).toBeGreaterThan(mergeCall);
       expect(addCall).toBeGreaterThan(bumpCall);
+      expect(bumped.calls).toContain(
+        "add --pathspec-from-file=-\npackages/client/package.json\n",
+      );
       expect(commitCall).toBeGreaterThan(addCall);
 
       // A conflicted sync is finished only for version-only conflicts under
@@ -591,14 +610,10 @@ test("ship-pr merges only a branch current with its base", () => {
     const gateScript = ship.slice(gateStart, gateEnd);
     const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "ship-gate-"));
     try {
-      const bunStub = path.join(temporaryDirectory, "bun");
-      writeFileSync(
-        bunStub,
-        `#!/bin/sh\nprintf 'bun %s\\n' "$*" >> "$CALLS"\nexit "$CHECK_STATUS"\n`,
-        { mode: 0o755 },
-      );
       const callsFile = path.join(temporaryDirectory, "calls");
+      // Shell-function stubs: a freshly written executable can hit ETXTBSY.
       const stubs = [
+        'bun_stub() { printf \'bun %s\\n\' "$*" >> "$CALLS"; return "$CHECK_STATUS"; }',
         "git() {",
         '  case "$*" in',
         '    *" fetch --quiet https://github.com/o/r main") ;;',
@@ -640,7 +655,7 @@ test("ship-pr merges only a branch current with its base", () => {
             ...current,
             ...overrides,
             BASE_URL: "https://github.com/o/r",
-            BUN_BIN: bunStub,
+            BUN_BIN: "bun_stub",
             CALLS: callsFile,
             PR_NUMBER: "7",
             REPO: "o/r",
