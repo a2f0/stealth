@@ -67,9 +67,7 @@ commits to review and have no round limit.
   pushes refuse unsigned commits.
 - The `@tearleads/agent-tool` package in the fetched base commit. During the
   package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
-  independently trusted installation outside the repository checkout. The
-  same variable supplies the version actions for `--bump-versions` when the
-  base's tool predates them.
+  independently trusted installation outside the repository checkout.
 - For Codex reviews: `codex` CLI configured (`OPENAI_API_KEY`).
 - For Claude Code reviews: `claude` CLI with `ANTHROPIC_API_KEY` available;
   bare mode intentionally does not read OAuth/keychain credentials.
@@ -189,30 +187,6 @@ verify_commit_trust() {
   rm -rf "$trust_dir"
   [ "$trust_status" -eq 0 ] || { echo "Error: refusing to push unsigned or co-authored commits" >&2; return 1; }
 }
-
-# The version actions postdate the agent-tool itself. When the trusted tool
-# lacks them, TEARLEADS_AGENT_TOOL_DIR may name a trusted installation outside
-# the checkout that has them; with neither, this prints nothing, and only a
-# branch that leaves every versioned package exactly as the base has it ships.
-resolve_version_tool() {
-  if [ -f "${AGENT_TOOL%/*}/version/bumpVersions.ts" ]; then
-    printf '%s\n' "$AGENT_TOOL"
-    return 0
-  fi
-  [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || return 0
-  version_tool=$("$REALPATH_BIN" "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || return 1
-  case "$version_tool" in
-    "$ROOT_DIR" | "$ROOT_DIR"/*)
-      echo "Error: trusted agent-tool must be outside the feature checkout" >&2
-      return 1
-      ;;
-  esac
-  [ -f "${version_tool%/*}/version/bumpVersions.ts" ] || {
-    echo "Error: $TEARLEADS_AGENT_TOOL_DIR has no version actions" >&2
-    return 1
-  }
-  printf '%s\n' "$version_tool"
-}
 ```
 
 If `$BRANCH` equals `$DEFAULT_BRANCH` (or a conventional `main`/`master`), report
@@ -287,7 +261,11 @@ Require a clean worktree before fetching or snapshotting anything:
      esac
    fi
    [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
-   VERSION_TOOL=$(resolve_version_tool) || exit 1
+   # The version actions postdate the agent-tool itself. A trusted base tool that
+   # lacks them leaves VERSION_TOOL empty, and then only a branch that changes no
+   # versioned package can ship.
+   VERSION_TOOL=""
+   [ ! -f "${AGENT_TOOL%/*}/version/bumpVersions.ts" ] || VERSION_TOOL="$AGENT_TOOL"
    if [ "$REPORT_ONLY" = true ]; then
      git merge-base --is-ancestor "$FETCHED_BASE" HEAD || { echo "Error: report-only review cannot ship a branch behind $BASE_REF; sync it and run a fresh review" >&2; exit 1; }
    fi
@@ -334,7 +312,7 @@ Require a clean worktree before fetching or snapshotting anything:
        fi
      elif [ "$BUMP_VERSIONS" = true ]; then
        git diff --quiet "$FETCHED_BASE" HEAD -- packages/api packages/client || {
-         echo "Error: the $BASE_REF agent-tool predates version bumps; set TEARLEADS_AGENT_TOOL_DIR to a trusted installation that has them" >&2
+         echo "Error: the $BASE_REF agent-tool predates version bumps, so it cannot bump a changed packages/api or packages/client; land the version actions on $BASE_REF first" >&2
          exit 1
        }
        echo "The $BASE_REF agent-tool predates version bumps; no versioned package changed, so none is needed"
@@ -371,13 +349,12 @@ Require a clean worktree before fetching or snapshotting anything:
    makes, and the staging above, disables repository hooks: an index write
    would otherwise run `post-index-change` in this credential-bearing shell.
 
-   The version actions come from `resolve_version_tool`: the trusted base
-   tool when it has them. A base that predates them — the PR that introduced
-   them, or an older base branch — has no version tool unless
-   `TEARLEADS_AGENT_TOOL_DIR` names a trusted installation outside the
-   checkout that does. Without one, the sync may only proceed when
-   `packages/api` and `packages/client` are exactly as the base has them, so
-   no bump is needed; any other branch stops with that guidance.
+   The version actions come only from the trusted base tool, never from
+   anywhere outside the repository. A base whose tool predates them — the PR
+   that introduced them, or an older base branch — leaves `VERSION_TOOL`
+   empty, and the sync then proceeds only when `packages/api` and
+   `packages/client` are exactly as the base has them, so no bump is needed;
+   any other branch stops until the version actions land on its base.
 
    **Merge, not rebase, and never force.** Every branch mutation in these skills
    pushes without force, and a rebase would need a force push; the squash-merge

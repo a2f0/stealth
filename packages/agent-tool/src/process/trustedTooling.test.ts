@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -496,10 +495,16 @@ test("shipping skills share one commit-trust gate and avoid zsh modifiers", () =
       expect(content.match(/\$[A-Za-z_]\w*:[A-Za-z&]/g) ?? []).toEqual([]);
       const gate = /^verify_commit_trust\(\) \{\n[\s\S]*?\n\}$/m.exec(content);
       if (gate) gates.add(gate[0]);
-      const versionTool = /^resolve_version_tool\(\) \{\n[\s\S]*?\n\}$/m.exec(
-        content,
-      );
-      if (versionTool) versionTools.push(versionTool[0]);
+      const versionTool =
+        /^ *VERSION_TOOL=""\n *\[ .* \] \|\| VERSION_TOOL=.*$/m.exec(content);
+      if (versionTool) {
+        versionTools.push(
+          versionTool[0]
+            .split("\n")
+            .map((line) => line.trim())
+            .join("\n"),
+        );
+      }
     }
   }
   expect(gates.size).toBe(1);
@@ -507,7 +512,9 @@ test("shipping skills share one commit-trust gate and avoid zsh modifiers", () =
   expect(versionTools.length).toBe(4);
   expect(new Set(versionTools).size).toBe(1);
 
-  const [resolveVersionTool = ""] = versionTools;
+  // The version actions come only from the trusted base snapshot: nothing
+  // outside the repository, TEARLEADS_AGENT_TOOL_DIR included, supplies them.
+  const [detectVersionTool = ""] = versionTools;
   const fixture = realpathSync(
     mkdtempSync(path.join(tmpdir(), "version-tool-")),
   );
@@ -525,41 +532,22 @@ test("shipping skills share one commit-trust gate and avoid zsh modifiers", () =
     };
     const current = tool("current", true);
     const predates = tool("predates", false);
-    const external = tool("external", true);
-    tool("external-old", false);
-    tool("checkout/tool", true);
-    const realpathBin = ["/usr/bin/realpath", "/bin/realpath"].find((bin) =>
-      existsSync(bin),
-    );
-    const resolve = (agentTool: string, externalDir = "") => {
-      const result = spawnSync(
+    tool("external", true);
+    const detect = (agentTool: string) =>
+      spawnSync(
         "/bin/bash",
-        ["-c", `set -eu\n${resolveVersionTool}\nresolve_version_tool`],
+        ["-c", `set -eu\n${detectVersionTool}\nprintf '%s\\n' "$VERSION_TOOL"`],
         {
           encoding: "utf8",
           env: {
             AGENT_TOOL: agentTool,
-            REALPATH_BIN: realpathBin ?? "realpath",
-            ROOT_DIR: path.join(fixture, "checkout"),
-            ...(externalDir ? { TEARLEADS_AGENT_TOOL_DIR: externalDir } : {}),
+            TEARLEADS_AGENT_TOOL_DIR: path.join(fixture, "external"),
           },
         },
-      );
-      return { status: result.status, stdout: result.stdout.trim() };
-    };
+      ).stdout.trim();
 
-    expect(resolve(current)).toEqual({ status: 0, stdout: current });
-    expect(resolve(predates)).toEqual({ status: 0, stdout: "" });
-    expect(resolve(predates, path.join(fixture, "external"))).toEqual({
-      status: 0,
-      stdout: external,
-    });
-    expect(resolve(predates, path.join(fixture, "external-old")).status).toBe(
-      1,
-    );
-    expect(resolve(predates, path.join(fixture, "checkout/tool")).status).toBe(
-      1,
-    );
+    expect(detect(current)).toBe(current);
+    expect(detect(predates)).toBe("");
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

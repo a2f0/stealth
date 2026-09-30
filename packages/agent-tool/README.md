@@ -171,10 +171,9 @@ caller's credentials.
 
 `cross-agent-review --bump-versions` runs these after each base sync, and
 `ship-pr` always passes that flag and gates its merge on `checkVersions`. Both
-take the actions from the trusted base snapshot; when that snapshot predates
-them, `TEARLEADS_AGENT_TOOL_DIR` may name a trusted installation that has them,
-and without one only a branch that leaves both versioned packages exactly as
-the base has them can ship.
+take the actions only from the trusted base snapshot of this repository; while
+that snapshot predates them, only a branch that leaves both versioned packages
+exactly as the base has them can ship.
 
 ## Ship (commit → review → repair → open/resume → merge → reset)
 
