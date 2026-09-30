@@ -7,8 +7,10 @@ import {
   spyOn,
   test,
 } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -22,7 +24,7 @@ import path from "node:path";
 
 import { bumpVersions, checkVersions, planVersions } from "./bumpVersions";
 import { resolveVersionConflicts } from "./resolveVersionConflicts";
-import type { VersionGit } from "./versionGit";
+import { createVersionGit } from "./versionGit";
 
 const repositories: string[] = [];
 let stdout: string[] = [];
@@ -41,24 +43,11 @@ const GIT_ENV = {
 };
 const GIT_CONFIG = ["-c", "core.hooksPath=/dev/null"];
 
-const testGit: VersionGit = {
-  run: (rootDir, args) =>
-    execFileSync("git", [...GIT_CONFIG, ...args], {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: GIT_ENV,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  tryRun: (rootDir, args) => {
-    const result = spawnSync("git", [...GIT_CONFIG, ...args], {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: GIT_ENV,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return result.status === 0 ? result.stdout : null;
-  },
-};
+// The production factory over the PATH git, so every test runs hook-free argv.
+const testGit = createVersionGit(
+  () => "git",
+  () => GIT_ENV,
+);
 
 function git(rootDir: string, args: string[]): string {
   return testGit.run(rootDir, args).trim();
@@ -386,5 +375,34 @@ describe("resolveVersionConflicts", () => {
 
   test("requires a merge in progress", () => {
     expect(resolveVersionConflicts(repository(), testGit)).toBe(1);
+  });
+
+  test("runs no repository hook while staging or bumping", () => {
+    const rootDir = repository();
+    const marker = `${rootDir}.hook-ran`;
+    repositories.push(marker);
+    const hook = path.join(rootDir, ".git/hooks/post-index-change");
+    mkdirSync(path.dirname(hook), { recursive: true });
+    writeFileSync(hook, `#!/bin/sh\ntouch "${marker}"\n`);
+    chmodSync(hook, 0o755);
+    // Control: an ordinary index write does run the hook.
+    write(rootDir, "README.md", "control\n");
+    spawnSync("git", ["add", "README.md"], { cwd: rootDir, env: GIT_ENV });
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    write(rootDir, "packages/client/src/app.ts", "export const a = 1;\n");
+    write(rootDir, CLIENT, manifest("@tearleads/client", "0.1.1"));
+    commitAll(rootDir, "feat: change client");
+    commitOnMain(rootDir, {
+      [CLIENT]: manifest("@tearleads/client", "0.1.2", '\n  "license": "MIT",'),
+    });
+    expect(mergeMain(rootDir)).not.toBe(0);
+    expect(resolveVersionConflicts(rootDir, testGit)).toBe(0);
+    git(rootDir, ["commit", "-q", "--no-edit"]);
+    bumpVersions(rootDir, mainOid(rootDir), testGit);
+
+    expect(read(rootDir, CLIENT)).toContain('"version": "0.1.3"');
+    expect(existsSync(marker)).toBe(false);
   });
 });

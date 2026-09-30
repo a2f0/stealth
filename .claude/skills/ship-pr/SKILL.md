@@ -73,7 +73,10 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 
 - `git` and `gh` (authenticated) on `PATH`.
 - The trusted `@tearleads/agent-tool` setup required by the delegated
-  `cross-agent-review`, `open-pr`, and `squash-merge` skills.
+  `cross-agent-review`, `open-pr`, and `squash-merge` skills. When the base's
+  tool predates the version actions, a PR that changes `packages/api` or
+  `packages/client` also needs `TEARLEADS_AGENT_TOOL_DIR` set to a trusted
+  installation that has them.
 - `node_modules` installed (`bun install`) so repository checks and hooks run.
 - Commit signing configured so `git commit -S` works without a prompt, and so
   git can verify the result (SSH signing also needs
@@ -199,6 +202,31 @@ verify_commit_trust() {
   rm -rf "$trust_dir"
   [ "$trust_status" -eq 0 ] || { echo "Error: refusing to push unsigned or co-authored commits" >&2; return 1; }
 }
+
+# The version actions postdate the agent-tool itself. When the trusted tool
+# lacks them, TEARLEADS_AGENT_TOOL_DIR may name a trusted installation outside
+# the checkout that has them; with neither, this prints nothing, and only a
+# branch that leaves every versioned package exactly as the base has it ships.
+resolve_version_tool() {
+  if [ -f "${AGENT_TOOL%/*}/version/bumpVersions.ts" ]; then
+    printf '%s\n' "$AGENT_TOOL"
+    return 0
+  fi
+  [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || return 0
+  version_tool=$("$REALPATH_BIN" "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || return 1
+  case "$version_tool" in
+    "$ROOT_DIR" | "$ROOT_DIR"/*)
+      echo "Error: trusted agent-tool must be outside the feature checkout" >&2
+      return 1
+      ;;
+  esac
+  [ -f "${version_tool%/*}/version/bumpVersions.ts" ] || {
+    echo "Error: $TEARLEADS_AGENT_TOOL_DIR has no version actions" >&2
+    return 1
+  }
+  printf '%s\n' "$version_tool"
+}
+VERSION_TOOL=$(resolve_version_tool) || exit 1
 ```
 
 The setup fetches the exact GitHub base and materializes `packages/agent-tool`
@@ -387,16 +415,23 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    BRANCH_CURRENT=false
    if [ "$CURRENT_BASE_SHA" = "$REVIEWED_BASE_SHA" ] &&
      [ "$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid -R "$REPO")" = "$REVIEWED_BASE_SHA" ] &&
-     git merge-base --is-ancestor "$CURRENT_BASE_SHA" "$REVIEWED_SHA" &&
-     "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" checkVersions "$CURRENT_BASE_SHA"; then
-     BRANCH_CURRENT=true
+     git merge-base --is-ancestor "$CURRENT_BASE_SHA" "$REVIEWED_SHA"; then
+     if [ -n "$VERSION_TOOL" ]; then
+       "$BUN_BIN" --no-env-file --config=/dev/null "$VERSION_TOOL" checkVersions "$CURRENT_BASE_SHA" && BRANCH_CURRENT=true
+     else
+       git diff --quiet "$CURRENT_BASE_SHA" "$REVIEWED_SHA" -- packages/api packages/client && BRANCH_CURRENT=true
+     fi
    fi
    ```
 
    Only exact equality with the fetched tip proves the review saw the base the
    PR will merge onto; ancestry proves the reviewed head contains it, and
    `checkVersions` proves that every changed versioned package at `HEAD` — the
-   reviewed head — sits exactly one patch past it.
+   reviewed head — sits exactly one patch past it. When the trusted tool
+   predates the version actions and `TEARLEADS_AGENT_TOOL_DIR` supplies none
+   (`VERSION_TOOL` is empty), only a head whose `packages/api` and
+   `packages/client` are exactly the base's needs no bump, so the gate
+   accepts only that.
 
    - **`BRANCH_CURRENT=true`** — continue.
    - **`BRANCH_CURRENT=false`** — the base advanced (or was rewound) after the

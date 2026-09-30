@@ -12,33 +12,49 @@ export interface VersionGit {
   readonly tryRun: (rootDir: string, args: readonly string[]) => string | null;
 }
 
-// Replace refs could make `git show <oid>:<path>` read a different object than
-// the one the caller pinned.
-function environment(): NodeJS.ProcessEnv {
-  return toolEnvironment({ GIT_NO_REPLACE_OBJECTS: "1" });
+/**
+ * Git access through `executable` with every repository hook disabled: an
+ * index write (`git add`, and even `git status`) would otherwise run
+ * `post-index-change` inside this credential-bearing process.
+ */
+export function createVersionGit(
+  executable: () => string,
+  environment: () => NodeJS.ProcessEnv,
+): VersionGit {
+  const argv = (args: readonly string[]) => [
+    "-c",
+    "core.hooksPath=/dev/null",
+    ...args,
+  ];
+  return {
+    run: (rootDir, args) =>
+      execFileSync(executable(), argv(args), {
+        cwd: rootDir,
+        encoding: "utf8",
+        env: environment(),
+        maxBuffer: MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    tryRun: (rootDir, args) => {
+      const result = spawnSync(executable(), argv(args), {
+        cwd: rootDir,
+        encoding: "utf8",
+        env: environment(),
+        maxBuffer: MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (result.error) throw result.error;
+      return result.status === 0 ? result.stdout : null;
+    },
+  };
 }
 
-export const trustedVersionGit: VersionGit = {
-  run: (rootDir, args) =>
-    execFileSync(toolExecutable("git"), [...args], {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: environment(),
-      maxBuffer: MAX_BUFFER_BYTES,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  tryRun: (rootDir, args) => {
-    const result = spawnSync(toolExecutable("git"), [...args], {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: environment(),
-      maxBuffer: MAX_BUFFER_BYTES,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    if (result.error) throw result.error;
-    return result.status === 0 ? result.stdout : null;
-  },
-};
+// Replace refs could make `git show <oid>:<path>` read a different object than
+// the one the caller pinned.
+export const trustedVersionGit = createVersionGit(
+  () => toolExecutable("git"),
+  () => toolEnvironment({ GIT_NO_REPLACE_OBJECTS: "1" }),
+);
 
 /** A committed blob's contents, or null when the path is absent there. */
 export function showFile(

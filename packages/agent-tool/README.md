@@ -165,8 +165,16 @@ It stages the result only when that merges cleanly and every conflicted path is
 a versioned manifest; otherwise it changes nothing and exits non-zero. The
 following `bumpVersions` then moves the version one past the base.
 
+Every Git call runs with repository hooks disabled, because an index write
+(`git add`, even `git status`) would otherwise run `post-index-change` with the
+caller's credentials.
+
 `cross-agent-review --bump-versions` runs these after each base sync, and
-`ship-pr` always passes that flag and gates its merge on `checkVersions`.
+`ship-pr` always passes that flag and gates its merge on `checkVersions`. Both
+take the actions from the trusted base snapshot; when that snapshot predates
+them, `TEARLEADS_AGENT_TOOL_DIR` may name a trusted installation that has them,
+and without one only a branch that leaves both versioned packages exactly as
+the base has them can ship.
 
 ## Ship (commit → review → repair → open/resume → merge → reset)
 

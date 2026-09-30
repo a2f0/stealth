@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -66,7 +69,9 @@ test("trusted skill launchers disable feature-checkout dotenv loading", () => {
     const launchers = readFileSync(path.join(repositoryRoot, skillPath), "utf8")
       .split("\n")
       .filter(
-        (line) => line.includes('"$BUN_BIN"') && line.includes('"$AGENT_TOOL"'),
+        (line) =>
+          line.includes('"$BUN_BIN"') &&
+          (line.includes('"$AGENT_TOOL"') || line.includes('"$VERSION_TOOL"')),
       );
     expect(launchers.length).toBeGreaterThan(0);
     expect(launchers.every((line) => line.includes(" --no-env-file "))).toBe(
@@ -190,12 +195,16 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
         `#!/bin/sh\nprintf 'bun %s\\n' "$*" >> "$CALLS"\ncase "$*" in *" bumpVersions "*) printf 'packages/client/package.json\\n' ;; *" resolveVersionConflicts") exit "$RESOLVE_STATUS" ;; esac\n`,
         { mode: 0o755 },
       );
-      const shell = `set -euo pipefail\ngit() { printf '%s\\n' "$*" >> "$CALLS"; if [ "$1" = rev-parse ]; then printf 'head\\n'; fi; if [ "\${3:-}" = merge ] && [ "\${4:-}" = -S ]; then return "$MERGE_STATUS"; fi; }\n${guardScript}`;
+      const shell = `set -euo pipefail\ngit() { printf '%s\\n' "$*" >> "$CALLS"; if [ "$1" = rev-parse ]; then printf 'head\\n'; fi; if [ "\${3:-}" = merge ] && [ "\${4:-}" = -S ]; then return "$MERGE_STATUS"; fi; if [ "$1" = diff ]; then return "$DIFF_STATUS"; fi; }\n${guardScript}`;
       const runGuard = (
         reportOnly: string,
         bumpVersions: string,
-        mergeStatus = "0",
-        resolveStatus = "0",
+        {
+          diffStatus = "0",
+          mergeStatus = "0",
+          resolveStatus = "0",
+          versionTool = "agent-tool.ts",
+        } = {},
       ) => {
         writeFileSync(callsFile, "");
         const result = spawnSync("/bin/bash", ["-c", shell], {
@@ -207,11 +216,13 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
             BUMP_VERSIONS: bumpVersions,
             BUN_BIN: bunStub,
             CALLS: callsFile,
+            DIFF_STATUS: diffStatus,
             FETCHED_BASE: "base",
             MERGE_STATUS: mergeStatus,
             PR_NUMBER: "",
             REPORT_ONLY: reportOnly,
             RESOLVE_STATUS: resolveStatus,
+            VERSION_TOOL: versionTool,
           },
         });
         return {
@@ -241,7 +252,10 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
       expect(bumped.status).toBe(0);
       const mergeCall = bumped.calls.indexOf("merge -S --no-edit base");
       const bumpCall = bumped.calls.indexOf(bump);
-      const addCall = bumped.calls.indexOf("add --pathspec-from-file=-");
+      // Staging writes the index, which would otherwise run post-index-change.
+      const addCall = bumped.calls.indexOf(
+        "-c core.hooksPath=/dev/null add --pathspec-from-file=-",
+      );
       const commitCall = bumped.calls.indexOf(bumpCommit);
       expect(mergeCall).toBeGreaterThan(-1);
       expect(bumpCall).toBeGreaterThan(mergeCall);
@@ -250,7 +264,7 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
 
       // A conflicted sync is finished only for version-only conflicts under
       // --bump-versions; anything else aborts the merge and stops.
-      const resolved = runGuard("false", "true", "1");
+      const resolved = runGuard("false", "true", { mergeStatus: "1" });
       expect(resolved.status).toBe(0);
       expect(resolved.calls).toContain("resolveVersionConflicts");
       expect(resolved.calls).toContain(
@@ -263,7 +277,10 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
         ["false", "0"],
         ["true", "1"],
       ] as const) {
-        const aborted = runGuard("false", bumpVersions, "1", resolveStatus);
+        const aborted = runGuard("false", bumpVersions, {
+          mergeStatus: "1",
+          resolveStatus,
+        });
         expect(aborted.status).toBe(1);
         expect(aborted.calls).toContain(
           "-c core.hooksPath=/dev/null merge --abort",
@@ -271,6 +288,29 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
         expect(aborted.calls).not.toContain(" commit ");
         expect(aborted.calls).not.toContain("bumpVersions");
       }
+
+      // A base whose tool predates the version actions ships only a branch
+      // that leaves the versioned packages exactly as the base has them.
+      const unchanged =
+        "diff --quiet base HEAD -- packages/api packages/client";
+      const bootstrap = runGuard("false", "true", { versionTool: "" });
+      expect(bootstrap.status).toBe(0);
+      expect(bootstrap.calls).toContain(unchanged);
+      expect(bootstrap.calls).not.toContain("bun ");
+      expect(bootstrap.calls).not.toContain(" commit ");
+      const needsBump = runGuard("false", "true", {
+        diffStatus: "1",
+        versionTool: "",
+      });
+      expect(needsBump.status).toBe(1);
+      expect(needsBump.calls).not.toContain(" commit ");
+      const conflicted = runGuard("false", "true", {
+        mergeStatus: "1",
+        versionTool: "",
+      });
+      expect(conflicted.status).toBe(1);
+      expect(conflicted.calls).toContain("merge --abort");
+      expect(conflicted.calls).not.toContain("resolveVersionConflicts");
     } finally {
       rmSync(temporaryDirectory, { recursive: true, force: true });
     }
@@ -438,6 +478,7 @@ test("shipping skills gate every commit push on the trusted commit-trust check",
 test("shipping skills share one commit-trust gate and avoid zsh modifiers", () => {
   const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
   const gates = new Set<string>();
+  const versionTools: string[] = [];
   for (const skillRoot of [".claude/skills", ".codex/skills"]) {
     for (const skill of [
       "cross-agent-review",
@@ -455,9 +496,73 @@ test("shipping skills share one commit-trust gate and avoid zsh modifiers", () =
       expect(content.match(/\$[A-Za-z_]\w*:[A-Za-z&]/g) ?? []).toEqual([]);
       const gate = /^verify_commit_trust\(\) \{\n[\s\S]*?\n\}$/m.exec(content);
       if (gate) gates.add(gate[0]);
+      const versionTool = /^resolve_version_tool\(\) \{\n[\s\S]*?\n\}$/m.exec(
+        content,
+      );
+      if (versionTool) versionTools.push(versionTool[0]);
     }
   }
   expect(gates.size).toBe(1);
+  // cross-agent-review and ship-pr, in both skill roots.
+  expect(versionTools.length).toBe(4);
+  expect(new Set(versionTools).size).toBe(1);
+
+  const [resolveVersionTool = ""] = versionTools;
+  const fixture = realpathSync(
+    mkdtempSync(path.join(tmpdir(), "version-tool-")),
+  );
+  try {
+    const tool = (dir: string, withVersions: boolean) => {
+      mkdirSync(path.join(fixture, dir, "src/version"), { recursive: true });
+      writeFileSync(path.join(fixture, dir, "src/index.ts"), "");
+      if (withVersions) {
+        writeFileSync(
+          path.join(fixture, dir, "src/version/bumpVersions.ts"),
+          "",
+        );
+      }
+      return path.join(fixture, dir, "src/index.ts");
+    };
+    const current = tool("current", true);
+    const predates = tool("predates", false);
+    const external = tool("external", true);
+    tool("external-old", false);
+    tool("checkout/tool", true);
+    const realpathBin = ["/usr/bin/realpath", "/bin/realpath"].find((bin) =>
+      existsSync(bin),
+    );
+    const resolve = (agentTool: string, externalDir = "") => {
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `set -eu\n${resolveVersionTool}\nresolve_version_tool`],
+        {
+          encoding: "utf8",
+          env: {
+            AGENT_TOOL: agentTool,
+            REALPATH_BIN: realpathBin ?? "realpath",
+            ROOT_DIR: path.join(fixture, "checkout"),
+            ...(externalDir ? { TEARLEADS_AGENT_TOOL_DIR: externalDir } : {}),
+          },
+        },
+      );
+      return { status: result.status, stdout: result.stdout.trim() };
+    };
+
+    expect(resolve(current)).toEqual({ status: 0, stdout: current });
+    expect(resolve(predates)).toEqual({ status: 0, stdout: "" });
+    expect(resolve(predates, path.join(fixture, "external"))).toEqual({
+      status: 0,
+      stdout: external,
+    });
+    expect(resolve(predates, path.join(fixture, "external-old")).status).toBe(
+      1,
+    );
+    expect(resolve(predates, path.join(fixture, "checkout/tool")).status).toBe(
+      1,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test("skills survive Claude Code argument substitution", () => {
@@ -526,6 +631,7 @@ test("ship-pr merges only a branch current with its base", () => {
         '    "rev-parse --verify FETCH_HEAD^{commit}") printf \'%s\\n\' "$FETCHED" ;;',
         '    "rev-parse HEAD") printf \'%s\\n\' "$LOCAL_HEAD" ;;',
         '    "merge-base --is-ancestor $FETCHED reviewed") return "$ANCESTOR_STATUS" ;;',
+        '    "diff --quiet $FETCHED reviewed -- packages/api packages/client") return "$DIFF_STATUS" ;;',
         "    *) printf 'unexpected git %s\\n' \"$*\" >&2; return 99 ;;",
         "  esac",
         "}",
@@ -542,10 +648,12 @@ test("ship-pr merges only a branch current with its base", () => {
       const current = {
         ANCESTOR_STATUS: "0",
         CHECK_STATUS: "0",
+        DIFF_STATUS: "0",
         FETCHED: "base",
         LOCAL_HEAD: "reviewed",
         PR_BASE: "base",
         PR_HEAD: "reviewed",
+        VERSION_TOOL: "agent-tool.ts",
       };
       const runGate = (overrides: Partial<typeof current> = {}) => {
         writeFileSync(callsFile, "");
@@ -554,7 +662,6 @@ test("ship-pr merges only a branch current with its base", () => {
           env: {
             ...current,
             ...overrides,
-            AGENT_TOOL: "agent-tool.ts",
             BASE_URL: "https://github.com/o/r",
             BUN_BIN: bunStub,
             CALLS: callsFile,
@@ -594,6 +701,18 @@ test("ship-pr merges only a branch current with its base", () => {
         });
       }
       expect(runGate({ FETCHED: "newer" }).calls).toBe("");
+
+      // A tool that predates the version actions accepts only a head whose
+      // versioned packages are exactly the base's.
+      expect(runGate({ VERSION_TOOL: "" })).toMatchObject({
+        calls: "",
+        status: 0,
+        stdout: "BRANCH_CURRENT=true",
+      });
+      expect(runGate({ DIFF_STATUS: "1", VERSION_TOOL: "" })).toMatchObject({
+        status: 0,
+        stdout: "BRANCH_CURRENT=false",
+      });
 
       // A head that moved off the reviewed commit is never refreshed over.
       for (const moved of [{ LOCAL_HEAD: "other" }, { PR_HEAD: "other" }]) {
