@@ -74,8 +74,9 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
 - `git` and `gh` (authenticated) on `PATH`.
 - The trusted `@tearleads/agent-tool` setup required by the delegated
   `cross-agent-review`, `open-pr`, and `squash-merge` skills. The version
-  actions come only from that trusted base tool; while it predates them, only
-  a PR that leaves `packages/api` and `packages/client` untouched can ship.
+  actions come only from the base's own agent-tool; while the base predates
+  them, only a PR that leaves `packages/api` and `packages/client` untouched
+  can ship.
 - `node_modules` installed (`bun install`) so repository checks and hooks run.
 - Commit signing configured so `git commit -S` works without a prompt, and so
   git can verify the result (SSH signing also needs
@@ -201,12 +202,6 @@ verify_commit_trust() {
   rm -rf "$trust_dir"
   [ "$trust_status" -eq 0 ] || { echo "Error: refusing to push unsigned or co-authored commits" >&2; return 1; }
 }
-
-# The version actions postdate the agent-tool itself. A trusted base tool that
-# lacks them leaves VERSION_TOOL empty, and then only a branch that changes no
-# versioned package can ship.
-VERSION_TOOL=""
-[ ! -f "${AGENT_TOOL%/*}/version/bumpVersions.ts" ] || VERSION_TOOL="$AGENT_TOOL"
 ```
 
 The setup fetches the exact GitHub base and materializes `packages/agent-tool`
@@ -396,8 +391,12 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    if [ "$CURRENT_BASE_SHA" = "$REVIEWED_BASE_SHA" ] &&
      [ "$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid -R "$REPO")" = "$REVIEWED_BASE_SHA" ] &&
      git merge-base --is-ancestor "$CURRENT_BASE_SHA" "$REVIEWED_SHA"; then
-     if [ -n "$VERSION_TOOL" ]; then
-       "$BUN_BIN" --no-env-file --config=/dev/null "$VERSION_TOOL" checkVersions "$CURRENT_BASE_SHA" && BRANCH_CURRENT=true
+     if git cat-file -e "${CURRENT_BASE_SHA}:packages/agent-tool/src/version/bumpVersions.ts" 2>/dev/null; then
+       VERSION_TOOL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-version-tool.XXXXXX") || exit 1
+       if git archive "$CURRENT_BASE_SHA" packages/agent-tool | tar -x -C "$VERSION_TOOL_DIR"; then
+         "$BUN_BIN" --no-env-file --config=/dev/null "$VERSION_TOOL_DIR/packages/agent-tool/src/index.ts" checkVersions "$CURRENT_BASE_SHA" && BRANCH_CURRENT=true
+       fi
+       rm -rf "$VERSION_TOOL_DIR"
      else
        git diff --quiet "$CURRENT_BASE_SHA" "$REVIEWED_SHA" -- packages/api packages/client && BRANCH_CURRENT=true
      fi
@@ -407,10 +406,12 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    Only exact equality with the fetched tip proves the review saw the base the
    PR will merge onto; ancestry proves the reviewed head contains it, and
    `checkVersions` proves that every changed versioned package at `HEAD` — the
-   reviewed head — sits exactly one patch past it. When the trusted base tool
-   predates the version actions (`VERSION_TOOL` is empty), only a head whose
-   `packages/api` and `packages/client` are exactly the base's needs no bump,
-   so the gate accepts only that.
+   reviewed head — sits exactly one patch past it. `checkVersions` is loaded
+   afresh from that exact base on every run of the gate, never from setup's
+   snapshot or an external installation, so version actions that land on the
+   base during a refresh take effect at once. When the base predates them,
+   only a head whose `packages/api` and `packages/client` are exactly the
+   base's needs no bump, so the gate accepts only that.
 
    - **`BRANCH_CURRENT=true`** — continue.
    - **`BRANCH_CURRENT=false`** — the base advanced (or was rewound) after the

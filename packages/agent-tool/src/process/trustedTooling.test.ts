@@ -1,11 +1,9 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -70,7 +68,7 @@ test("trusted skill launchers disable feature-checkout dotenv loading", () => {
       .filter(
         (line) =>
           line.includes('"$BUN_BIN"') &&
-          (line.includes('"$AGENT_TOOL"') || line.includes('"$VERSION_TOOL"')),
+          (line.includes('"$AGENT_TOOL"') || line.includes('"$VERSION_TOOL')),
       );
     expect(launchers.length).toBeGreaterThan(0);
     expect(launchers.every((line) => line.includes(" --no-env-file "))).toBe(
@@ -477,7 +475,6 @@ test("shipping skills gate every commit push on the trusted commit-trust check",
 test("shipping skills share one commit-trust gate and avoid zsh modifiers", () => {
   const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
   const gates = new Set<string>();
-  const versionTools: string[] = [];
   for (const skillRoot of [".claude/skills", ".codex/skills"]) {
     for (const skill of [
       "cross-agent-review",
@@ -495,62 +492,51 @@ test("shipping skills share one commit-trust gate and avoid zsh modifiers", () =
       expect(content.match(/\$[A-Za-z_]\w*:[A-Za-z&]/g) ?? []).toEqual([]);
       const gate = /^verify_commit_trust\(\) \{\n[\s\S]*?\n\}$/m.exec(content);
       if (gate) gates.add(gate[0]);
-      const versionTool =
-        /^ *VERSION_TOOL=""\n *\[ .* \] \|\| VERSION_TOOL=.*$/m.exec(content);
-      if (versionTool) {
-        versionTools.push(
-          versionTool[0]
-            .split("\n")
-            .map((line) => line.trim())
-            .join("\n"),
-        );
-      }
     }
   }
   expect(gates.size).toBe(1);
-  // cross-agent-review and ship-pr, in both skill roots.
-  expect(versionTools.length).toBe(4);
-  expect(new Set(versionTools).size).toBe(1);
+});
 
-  // The version actions come only from the trusted base snapshot: nothing
-  // outside the repository, TEARLEADS_AGENT_TOOL_DIR included, supplies them.
-  const [detectVersionTool = ""] = versionTools;
-  const fixture = realpathSync(
-    mkdtempSync(path.join(tmpdir(), "version-tool-")),
-  );
-  try {
-    const tool = (dir: string, withVersions: boolean) => {
-      mkdirSync(path.join(fixture, dir, "src/version"), { recursive: true });
-      writeFileSync(path.join(fixture, dir, "src/index.ts"), "");
-      if (withVersions) {
-        writeFileSync(
-          path.join(fixture, dir, "src/version/bumpVersions.ts"),
-          "",
-        );
-      }
-      return path.join(fixture, dir, "src/index.ts");
-    };
-    const current = tool("current", true);
-    const predates = tool("predates", false);
-    tool("external", true);
-    const detect = (agentTool: string) =>
-      spawnSync(
-        "/bin/bash",
-        ["-c", `set -eu\n${detectVersionTool}\nprintf '%s\\n' "$VERSION_TOOL"`],
-        {
-          encoding: "utf8",
-          env: {
-            AGENT_TOOL: agentTool,
-            TEARLEADS_AGENT_TOOL_DIR: path.join(fixture, "external"),
-          },
+test("cross-agent-review takes version actions only from the fetched base", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  const snippets = [".claude/skills", ".codex/skills"].map((skillRoot) => {
+    const content = readFileSync(
+      path.join(repositoryRoot, skillRoot, "cross-agent-review/SKILL.md"),
+      "utf8",
+    );
+    const snippet = /^ *VERSION_TOOL=""\n[\s\S]*?\n *fi$/m.exec(content);
+    expect(snippet).not.toBeNull();
+    return (snippet?.[0] ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .join("\n");
+  });
+  expect(new Set(snippets).size).toBe(1);
+
+  const [snippet = ""] = snippets;
+  const detect = (trustedTmp: string, baseHasVersions: boolean) =>
+    spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        `set -eu\ngit() { [ "$*" = "cat-file -e base:packages/agent-tool/src/version/bumpVersions.ts" ] && [ "$HAS_VERSIONS" = 1 ]; }\n${snippet}\nprintf '%s\\n' "$VERSION_TOOL"`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          AGENT_TOOL: "/tool/src/index.ts",
+          FETCHED_BASE: "base",
+          HAS_VERSIONS: baseHasVersions ? "1" : "0",
+          TRUSTED_AGENT_TOOL_TMP: trustedTmp,
         },
-      ).stdout.trim();
+      },
+    ).stdout.trim();
 
-    expect(detect(current)).toBe(current);
-    expect(detect(predates)).toBe("");
-  } finally {
-    rmSync(fixture, { recursive: true, force: true });
-  }
+  expect(detect("/materialized", true)).toBe("/tool/src/index.ts");
+  expect(detect("/materialized", false)).toBe("");
+  // An agent-tool from TEARLEADS_AGENT_TOOL_DIR (no base snapshot) never
+  // supplies the version actions, even when the base has them.
+  expect(detect("", true)).toBe("");
 });
 
 test("skills survive Claude Code argument substitution", () => {
@@ -620,9 +606,12 @@ test("ship-pr merges only a branch current with its base", () => {
         '    "rev-parse HEAD") printf \'%s\\n\' "$LOCAL_HEAD" ;;',
         '    "merge-base --is-ancestor $FETCHED reviewed") return "$ANCESTOR_STATUS" ;;',
         '    "diff --quiet $FETCHED reviewed -- packages/api packages/client") return "$DIFF_STATUS" ;;',
+        '    "cat-file -e $FETCHED:packages/agent-tool/src/version/bumpVersions.ts") [ "$HAS_VERSIONS" = 1 ] ;;',
+        "    \"archive $FETCHED packages/agent-tool\") printf 'archive\\n' ;;",
         "    *) printf 'unexpected git %s\\n' \"$*\" >&2; return 99 ;;",
         "  esac",
         "}",
+        'tar() { cat >/dev/null; printf \'tar %s\\n\' "$*" >> "$CALLS"; }',
         "gh() {",
         '  case "$*" in',
         "    *baseRefName*) printf 'main\\n' ;;",
@@ -638,10 +627,10 @@ test("ship-pr merges only a branch current with its base", () => {
         CHECK_STATUS: "0",
         DIFF_STATUS: "0",
         FETCHED: "base",
+        HAS_VERSIONS: "1",
         LOCAL_HEAD: "reviewed",
         PR_BASE: "base",
         PR_HEAD: "reviewed",
-        VERSION_TOOL: "agent-tool.ts",
       };
       const runGate = (overrides: Partial<typeof current> = {}) => {
         writeFileSync(callsFile, "");
@@ -657,6 +646,7 @@ test("ship-pr merges only a branch current with its base", () => {
             REPO: "o/r",
             REVIEWED_BASE_SHA: "base",
             REVIEWED_SHA: "reviewed",
+            TMPDIR: temporaryDirectory,
           },
         });
         return {
@@ -671,9 +661,18 @@ test("ship-pr merges only a branch current with its base", () => {
         status: 0,
         stdout: "BRANCH_CURRENT=true",
       });
-      expect(passing.calls).toBe(
-        "bun --no-env-file --config=/dev/null agent-tool.ts checkVersions base\n",
+      // checkVersions comes from a copy of this exact base, materialized for
+      // this run and removed afterwards — never setup's older snapshot.
+      expect(passing.calls).toMatch(
+        new RegExp(
+          `^tar -x -C (${temporaryDirectory}/tearleads-version-tool\\.\\w+)\nbun --no-env-file --config=/dev/null \\1/packages/agent-tool/src/index\\.ts checkVersions base\n$`,
+        ),
       );
+      expect(
+        readdirSync(temporaryDirectory).filter((entry) =>
+          entry.startsWith("tearleads-version-tool."),
+        ),
+      ).toEqual([]);
 
       // Base advanced past the review, GitHub's snapshot lags the fetched tip,
       // the head lacks the base, or a version trails it: refresh, don't merge.
@@ -690,14 +689,14 @@ test("ship-pr merges only a branch current with its base", () => {
       }
       expect(runGate({ FETCHED: "newer" }).calls).toBe("");
 
-      // A tool that predates the version actions accepts only a head whose
+      // A base that predates the version actions accepts only a head whose
       // versioned packages are exactly the base's.
-      expect(runGate({ VERSION_TOOL: "" })).toMatchObject({
+      expect(runGate({ HAS_VERSIONS: "0" })).toMatchObject({
         calls: "",
         status: 0,
         stdout: "BRANCH_CURRENT=true",
       });
-      expect(runGate({ DIFF_STATUS: "1", VERSION_TOOL: "" })).toMatchObject({
+      expect(runGate({ DIFF_STATUS: "1", HAS_VERSIONS: "0" })).toMatchObject({
         status: 0,
         stdout: "BRANCH_CURRENT=false",
       });

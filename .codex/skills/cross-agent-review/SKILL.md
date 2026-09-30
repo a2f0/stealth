@@ -261,11 +261,15 @@ Require a clean worktree before fetching or snapshotting anything:
      esac
    fi
    [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
-   # The version actions postdate the agent-tool itself. A trusted base tool that
-   # lacks them leaves VERSION_TOOL empty, and then only a branch that changes no
-   # versioned package can ship.
+   # The version actions postdate the agent-tool itself. Take them only from
+   # the tool materialized from this exact base — never an external
+   # installation. A base without them leaves VERSION_TOOL empty, and then only
+   # a branch that changes no versioned package can ship.
    VERSION_TOOL=""
-   [ ! -f "${AGENT_TOOL%/*}/version/bumpVersions.ts" ] || VERSION_TOOL="$AGENT_TOOL"
+   if [ -n "$TRUSTED_AGENT_TOOL_TMP" ] &&
+     git cat-file -e "${FETCHED_BASE}:packages/agent-tool/src/version/bumpVersions.ts" 2>/dev/null; then
+     VERSION_TOOL="$AGENT_TOOL"
+   fi
    if [ "$REPORT_ONLY" = true ]; then
      git merge-base --is-ancestor "$FETCHED_BASE" HEAD || { echo "Error: report-only review cannot ship a branch behind $BASE_REF; sync it and run a fresh review" >&2; exit 1; }
    fi
@@ -349,8 +353,9 @@ Require a clean worktree before fetching or snapshotting anything:
    makes, and the staging above, disables repository hooks: an index write
    would otherwise run `post-index-change` in this credential-bearing shell.
 
-   The version actions come only from the trusted base tool, never from
-   anywhere outside the repository. A base whose tool predates them — the PR
+   The version actions come only from the tool materialized from the fetched
+   base, never from anywhere outside the repository —
+   `TEARLEADS_AGENT_TOOL_DIR` included. A base whose tool predates them — the PR
    that introduced them, or an older base branch — leaves `VERSION_TOOL`
    empty, and the sync then proceeds only when `packages/api` and
    `packages/client` are exactly as the base has them, so no bump is needed;
