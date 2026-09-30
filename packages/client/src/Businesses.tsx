@@ -12,7 +12,14 @@ import {
   PageHeader,
   PageSection,
 } from "@tearleads/ui/react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   type Business,
   type BusinessInput,
@@ -73,6 +80,7 @@ function BusinessListPage({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
     setError(undefined);
@@ -86,14 +94,107 @@ function BusinessListPage({
   }, []);
   useEffect(() => void load(), [load]);
 
-  const showError = (message: string) => {
-    setNotice(undefined);
-    setError(message);
+  const changeBusinesses = (
+    change: (businesses: Business[]) => Business[],
+    message: string,
+  ) => {
+    setData((current) =>
+      current
+        ? { ...current, businesses: change(current.businesses) }
+        : current,
+    );
+    setError(undefined);
+    setNotice(message);
   };
 
   return (
+    <BusinessListView
+      adding={adding}
+      data={data}
+      error={error}
+      loading={loading}
+      notice={notice}
+      onAddingChange={setAdding}
+      onCreated={(business) => {
+        changeBusinesses(
+          (businesses) => [business, ...businesses],
+          "Business added.",
+        );
+        setAdding(false);
+      }}
+      onDeleted={(id) =>
+        changeBusinesses(
+          (businesses) => businesses.filter((business) => business.id !== id),
+          "Business deleted.",
+        )
+      }
+      onError={(message) => {
+        setNotice(undefined);
+        setError(message);
+      }}
+      onNavigate={onNavigate}
+      onUpdated={(updated) =>
+        changeBusinesses(
+          (businesses) =>
+            businesses.map((business) =>
+              business.id === updated.id ? updated : business,
+            ),
+          "Business updated.",
+        )
+      }
+    />
+  );
+}
+
+interface BusinessListViewProps {
+  adding: boolean;
+  data: BusinessListing | undefined;
+  error: string | undefined;
+  loading: boolean;
+  notice: string | undefined;
+  onAddingChange: (adding: boolean) => void;
+  onCreated: (business: Business) => void;
+  onDeleted: (id: string) => void;
+  onError: (message: string) => void;
+  onNavigate: (pathname: string) => void;
+  onUpdated: (business: Business) => void;
+}
+
+/**
+ * The first business is added from an open form. Once one exists, the form
+ * folds behind an "Add business" header action so the list leads the page.
+ */
+export function BusinessListView({
+  adding,
+  data,
+  error,
+  loading,
+  notice,
+  onAddingChange,
+  onCreated,
+  onDeleted,
+  onError,
+  onNavigate,
+  onUpdated,
+}: BusinessListViewProps) {
+  const canManage = data?.canManage ?? false;
+  const hasBusinesses = (data?.businesses.length ?? 0) > 0;
+  return (
     <Page>
       <PageHeader
+        actions={
+          canManage &&
+          hasBusinesses &&
+          !adding && (
+            <Button
+              icon="add"
+              onClick={() => onAddingChange(true)}
+              variant="primary"
+            >
+              Add business
+            </Button>
+          )
+        }
         description="Keep the businesses belonging to this organization in one place."
         eyebrow="Records"
         title="Businesses"
@@ -105,60 +206,23 @@ function BusinessListPage({
           <LoadingState label="Loading businesses…" />
         ) : data ? (
           <>
-            {data.canManage ? (
+            {!canManage && <ReadOnlyNotice />}
+            {canManage && (adding || !hasBusinesses) && (
               <BusinessCreateForm
-                onCreated={(business) => {
-                  setData((current) =>
-                    current
-                      ? {
-                          ...current,
-                          businesses: [business, ...current.businesses],
-                        }
-                      : current,
-                  );
-                  setError(undefined);
-                  setNotice("Business added.");
-                }}
-                onError={showError}
+                onCancel={
+                  hasBusinesses ? () => onAddingChange(false) : undefined
+                }
+                onCreated={onCreated}
+                onError={onError}
               />
-            ) : (
-              <ReadOnlyNotice />
             )}
             <BusinessList
               businesses={data.businesses}
-              canManage={data.canManage}
+              canManage={canManage}
+              onDeleted={onDeleted}
+              onError={onError}
               onNavigate={onNavigate}
-              onDeleted={(id) => {
-                setData((current) =>
-                  current
-                    ? {
-                        ...current,
-                        businesses: current.businesses.filter(
-                          (business) => business.id !== id,
-                        ),
-                      }
-                    : current,
-                );
-                setError(undefined);
-                setNotice("Business deleted.");
-              }}
-              onError={showError}
-              onUpdated={(updatedBusiness) => {
-                setData((current) =>
-                  current
-                    ? {
-                        ...current,
-                        businesses: current.businesses.map((business) =>
-                          business.id === updatedBusiness.id
-                            ? updatedBusiness
-                            : business,
-                        ),
-                      }
-                    : current,
-                );
-                setError(undefined);
-                setNotice("Business updated.");
-              }}
+              onUpdated={onUpdated}
             />
           </>
         ) : (
@@ -178,14 +242,24 @@ function ReadOnlyNotice() {
 }
 
 function BusinessCreateForm({
+  onCancel,
   onCreated,
   onError,
 }: {
+  /** Present when the form was opened on demand and can fold away again. */
+  onCancel: (() => void) | undefined;
   onCreated: (business: Business) => void;
   onError: (message: string) => void;
 }) {
   const [form, setForm] = useState<BusinessFormState>(emptyBusinessForm);
   const [busy, setBusy] = useState(false);
+  const nameField = useRef<HTMLInputElement>(null);
+  const openedOnDemand = Boolean(onCancel);
+  // The header button that opened the form is gone; move focus into the form.
+  // A form that is simply open on arrival leaves focus where it was.
+  useEffect(() => {
+    if (openedOnDemand) nameField.current?.focus();
+  }, [openedOnDemand]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -208,21 +282,33 @@ function BusinessCreateForm({
           <span className="textSm textSubtle">
             Only the business name is required.
           </span>
-          <Button
-            busy={busy}
-            disabled={!form.name.trim()}
-            icon="add"
-            type="submit"
-            variant="primary"
-          >
-            {busy ? "Adding…" : "Add business"}
-          </Button>
+          <div className="cluster">
+            {onCancel && (
+              <Button disabled={busy} onClick={onCancel} variant="ghost">
+                Cancel
+              </Button>
+            )}
+            <Button
+              busy={busy}
+              disabled={!form.name.trim()}
+              icon="add"
+              type="submit"
+              variant="primary"
+            >
+              {busy ? "Adding…" : "Add business"}
+            </Button>
+          </div>
         </>
       }
       onSubmit={(event) => void submit(event)}
       title="Add a business"
     >
-      <BusinessFields disabled={busy} form={form} onChange={setForm} />
+      <BusinessFields
+        disabled={busy}
+        form={form}
+        nameField={nameField}
+        onChange={setForm}
+      />
     </Card>
   );
 }
@@ -521,11 +607,13 @@ function BusinessFields({
   compact = false,
   disabled,
   form,
+  nameField,
   onChange,
 }: {
   compact?: boolean;
   disabled: boolean;
   form: BusinessFormState;
+  nameField?: RefObject<HTMLInputElement | null>;
   onChange: (form: BusinessFormState) => void;
 }) {
   const set = (field: keyof BusinessFormState, value: string) => {
@@ -543,6 +631,7 @@ function BusinessFields({
             maxLength={120}
             onChange={(event) => set("name", event.target.value)}
             placeholder="Acme, Inc."
+            ref={nameField}
             required
             type="text"
             value={form.name}
