@@ -6,6 +6,7 @@ import {
   Card,
   EmptyState,
   Icon,
+  type IconName,
   LoadingState,
   Page,
   PageBody,
@@ -22,6 +23,11 @@ import {
   listAuditTemplates,
   startAudit,
 } from "./auditApi";
+import {
+  type AuditTemplateView,
+  readAuditTemplateView,
+  storeAuditTemplateView,
+} from "./auditTemplateView";
 import { countLabel, formatLabel } from "./labels";
 
 export function AuditHome({
@@ -36,6 +42,9 @@ export function AuditHome({
   const [nextRunCursor, setNextRunCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
+  const [templateView, setTemplateView] = useState(() =>
+    readAuditTemplateView(),
+  );
   const [error, setError] = useState<string>();
 
   const load = useCallback(async () => {
@@ -80,6 +89,11 @@ export function AuditHome({
     }
   }
 
+  function changeTemplateView(view: AuditTemplateView) {
+    setTemplateView(view);
+    storeAuditTemplateView(view);
+  }
+
   async function loadMoreRuns() {
     if (!nextRunCursor) return;
     setLoadingMoreRuns(true);
@@ -104,13 +118,15 @@ export function AuditHome({
       />
       <PageBody>
         {error && <Banner tone="danger">{error}</Banner>}
-        <TemplateGrid
+        <TemplateLibrary
           busy={busy}
           canManageGlobal={canManageGlobal}
           onBegin={beginAudit}
           onEdit={(id) => onNavigate(`/audits/templates/${id}`)}
           onManage={(id) => onNavigate(`/audits/global-templates/${id}`)}
+          onViewChange={changeTemplateView}
           templates={templates}
+          view={templateView}
         />
         <AuditHistory
           hasMore={Boolean(nextRunCursor)}
@@ -170,22 +186,38 @@ interface TemplateActions {
   onManage: (id: string) => void;
 }
 
-function TemplateGrid({
+const templateViews: {
+  icon: IconName;
+  label: string;
+  view: AuditTemplateView;
+}[] = [
+  { icon: "grid", label: "Grid", view: "grid" },
+  { icon: "list", label: "List", view: "list" },
+];
+
+function TemplateLibrary({
   canManageGlobal,
+  onViewChange,
   templates,
+  view,
   ...actions
 }: TemplateActions & {
   canManageGlobal: boolean;
+  onViewChange: (view: AuditTemplateView) => void;
   templates: AuditTemplate[] | undefined;
+  view: AuditTemplateView;
 }) {
   return (
     <PageSection
       actions={
-        templates && (
-          <span className="sectionCount">
-            {countLabel(templates.length, "template")}
-          </span>
-        )
+        <div className="auditTemplateToolbar">
+          {templates && (
+            <span className="sectionCount">
+              {countLabel(templates.length, "template")}
+            </span>
+          )}
+          <TemplateViewSwitcher onChange={onViewChange} view={view} />
+        </div>
       }
       title="Checklist templates"
     >
@@ -199,6 +231,7 @@ function TemplateGrid({
             emptyTitle="No global forms"
             templates={templates.filter(({ scope }) => scope === "global")}
             title="Global forms"
+            view={view}
           />
           <TemplateCollection
             {...actions}
@@ -210,12 +243,38 @@ function TemplateGrid({
               ({ scope }) => scope === "organization",
             )}
             title="Organization forms"
+            view={view}
           />
         </div>
       ) : (
         <LoadingState label="Loading checklists…" />
       )}
     </PageSection>
+  );
+}
+
+function TemplateViewSwitcher({
+  onChange,
+  view,
+}: {
+  onChange: (view: AuditTemplateView) => void;
+  view: AuditTemplateView;
+}) {
+  return (
+    <fieldset className="segmented">
+      <legend className="srOnly">Checklist layout</legend>
+      {templateViews.map((option) => (
+        <button
+          aria-pressed={view === option.view}
+          key={option.view}
+          onClick={() => onChange(option.view)}
+          type="button"
+        >
+          <Icon name={option.icon} size={16} />
+          {option.label}
+        </button>
+      ))}
+    </fieldset>
   );
 }
 
@@ -226,6 +285,7 @@ function TemplateCollection({
   emptyTitle,
   templates,
   title,
+  view,
   ...actions
 }: TemplateActions & {
   canManageGlobal: boolean;
@@ -234,6 +294,7 @@ function TemplateCollection({
   emptyTitle: string;
   templates: AuditTemplate[];
   title: string;
+  view: AuditTemplateView;
 }) {
   return (
     <section className="auditCollection">
@@ -244,7 +305,24 @@ function TemplateCollection({
         </h3>
         <p className="textSm textMuted">{description}</p>
       </div>
-      {templates.length > 0 ? (
+      {templates.length === 0 ? (
+        <EmptyState compact icon="checklist" title={emptyTitle}>
+          {emptyMessage}
+        </EmptyState>
+      ) : view === "list" ? (
+        <Card className="auditTemplateList" flush>
+          <ul className="rowList">
+            {templates.map((template) => (
+              <TemplateRow
+                {...actions}
+                canManageGlobal={canManageGlobal}
+                key={template.id}
+                template={template}
+              />
+            ))}
+          </ul>
+        </Card>
+      ) : (
         <div className="gridAuto auditTemplateGrid">
           {templates.map((template) => (
             <TemplateCard
@@ -255,10 +333,6 @@ function TemplateCollection({
             />
           ))}
         </div>
-      ) : (
-        <EmptyState compact icon="checklist" title={emptyTitle}>
-          {emptyMessage}
-        </EmptyState>
       )}
     </section>
   );
@@ -266,14 +340,10 @@ function TemplateCollection({
 
 function TemplateCard({
   busy,
-  canManageGlobal,
   onBegin,
-  onEdit,
-  onManage,
   template,
+  ...actions
 }: TemplateActions & { canManageGlobal: boolean; template: AuditTemplate }) {
-  const isGlobal = template.scope === "global";
-  const sectionCount = template.definition.sections.length;
   return (
     <article className="card auditTemplateCard">
       <div className="auditTemplateBody">
@@ -288,40 +358,112 @@ function TemplateCard({
           {template.description || "A custom checklist."}
         </p>
         <p className="auditTemplateMeta">
-          <span className="cluster auditTemplateStat">
-            <Icon name="checklist" size={16} />
-            {countLabel(itemCount(template), "item")}
-          </span>
-          <span className="cluster auditTemplateStat">
-            <Icon name="layers" size={16} />
-            {countLabel(sectionCount, "section")}
-          </span>
-          <span className="auditTemplateStat mono">v{template.version}</span>
+          <TemplateStats template={template} />
         </p>
       </div>
       <div className="cardFooter auditTemplateFooter">
         <div className="cluster auditTemplateActions">
-          <Button icon="edit" onClick={() => onEdit(template.id)} size="sm">
-            {isGlobal ? "Customize" : "Edit"}
-          </Button>
-          {isGlobal && canManageGlobal && (
-            <Button onClick={() => onManage(template.id)} size="sm">
-              Manage global
-            </Button>
-          )}
+          <TemplateEditButtons {...actions} template={template} />
         </div>
-        <Button
+        <StartAuditButton
+          busy={busy}
           className="auditTemplateStart"
-          disabled={busy}
-          iconEnd="arrowRight"
-          onClick={() => void onBegin(template.id)}
-          size="sm"
-          variant="primary"
-        >
-          Start audit
-        </Button>
+          onBegin={onBegin}
+          template={template}
+        />
       </div>
     </article>
+  );
+}
+
+function TemplateRow({
+  busy,
+  onBegin,
+  template,
+  ...actions
+}: TemplateActions & { canManageGlobal: boolean; template: AuditTemplate }) {
+  return (
+    <li className="row auditTemplateRow">
+      <span className="rowMain">
+        <span className="rowTitle">{template.name}</span>
+        <span className="rowMeta">
+          {template.description || "A custom checklist."}
+        </span>
+      </span>
+      <span className="auditTemplateRowStats">
+        <Badge dot tone={templateStatusTone(template.status)}>
+          {formatLabel(template.status)}
+        </Badge>
+        <TemplateStats template={template} />
+      </span>
+      <span className="rowActions auditTemplateRowActions">
+        <TemplateEditButtons {...actions} template={template} />
+        <StartAuditButton busy={busy} onBegin={onBegin} template={template} />
+      </span>
+    </li>
+  );
+}
+
+function TemplateStats({ template }: { template: AuditTemplate }) {
+  return (
+    <>
+      <span className="cluster auditTemplateStat">
+        <Icon name="checklist" size={16} />
+        {countLabel(itemCount(template), "item")}
+      </span>
+      <span className="cluster auditTemplateStat">
+        <Icon name="layers" size={16} />
+        {countLabel(template.definition.sections.length, "section")}
+      </span>
+      <span className="auditTemplateStat mono">v{template.version}</span>
+    </>
+  );
+}
+
+function TemplateEditButtons({
+  canManageGlobal,
+  onEdit,
+  onManage,
+  template,
+}: Pick<TemplateActions, "onEdit" | "onManage"> & {
+  canManageGlobal: boolean;
+  template: AuditTemplate;
+}) {
+  const isGlobal = template.scope === "global";
+  return (
+    <>
+      <Button icon="edit" onClick={() => onEdit(template.id)} size="sm">
+        {isGlobal ? "Customize" : "Edit"}
+      </Button>
+      {isGlobal && canManageGlobal && (
+        <Button onClick={() => onManage(template.id)} size="sm">
+          Manage global
+        </Button>
+      )}
+    </>
+  );
+}
+
+function StartAuditButton({
+  busy,
+  className,
+  onBegin,
+  template,
+}: Pick<TemplateActions, "busy" | "onBegin"> & {
+  className?: string;
+  template: AuditTemplate;
+}) {
+  return (
+    <Button
+      className={className}
+      disabled={busy}
+      iconEnd="arrowRight"
+      onClick={() => void onBegin(template.id)}
+      size="sm"
+      variant="primary"
+    >
+      Start audit
+    </Button>
   );
 }
 
