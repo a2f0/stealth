@@ -1,6 +1,6 @@
 ---
 name: ship-pr
-description: Ship current work end-to-end — commit on a feature branch, cross-agent review and repair it, open or resume its PR with a single push after the review, merge the verified reviewed candidate through GitHub's policy gate, then return to the base branch, delete the merged branch, and reset the checkout
+description: Ship current work end-to-end — commit on a feature branch, patch-bump the changed backend/frontend versions, cross-agent review and repair it, open or resume its PR with a single push after the review, bring it up to date with its base, merge the verified reviewed candidate through GitHub's policy gate, then return to the base branch, delete the merged branch, and reset the checkout
 ---
 
 # Ship PR
@@ -15,6 +15,17 @@ Delegate PR creation, the review-and-repair loop, and the final merge to the
 `open-pr`, `cross-agent-review`, `squash-merge`, and `reset` skills. This skill
 owns the ordering and the merge gate; it does not re-implement the wrapped
 skills.
+
+Every package the PR changes among `packages/api` (the backend) and
+`packages/client` (the frontend) ships with a **patch version bump**: one past
+its version on the base it merges onto, recomputed each time the branch syncs
+with that base, so concurrent PRs never land the same or a backward version on
+the base.
+
+The branch is **up to date with its base when it merges**. Immediately before
+the merge, a freshness gate fetches the base's actual tip; a branch that is
+behind it is synced, re-bumped, and re-reviewed first, as many times as the
+base moves.
 
 The review gates the merge. `cross-agent-review` addresses actionable blocking
 findings and re-reviews every head it changes, then reports the final reviewed
@@ -41,9 +52,10 @@ actually contains the merge commit; the final checkout reset belongs to `reset`.
   `cross-agent-review`. **Defaults to `1`** there. Passes inspect one unchanged
   head; they are distinct from repair rounds.
 - `--report-only` (optional flag, position-independent): forwarded verbatim
-  to `cross-agent-review`, which skips base synchronization and repairs. This
-  flow stops on any blocking finding. Without this flag, repairs have no round
-  limit.
+  to `cross-agent-review`, which skips base synchronization, version bumps,
+  and repairs. This flow stops on any blocking finding, and before merging a
+  branch that is behind its base or still needs a version bump. Without this
+  flag, repairs have no round limit.
 - Reject the obsolete `--repair-rounds` flag rather than ignoring it. Use
   `--report-only` for a non-mutating review or omit the flag for unlimited
   repairs.
@@ -274,20 +286,22 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    empty it reviews the local commits against the default branch; with the
    resumed PR open it reviews the pushed head.
 
-2. **Review and repair** — invoke `cross-agent-review`, forwarding the
-   review-agent argument, and `--passes <n>` / `--report-only` when given.
+2. **Sync, bump, review, and repair** — invoke `cross-agent-review` with
+   **always** `--bump-versions`, forwarding the review-agent argument, and
+   `--passes <n>` / `--report-only` when given.
 
    That skill owns the review, the severity gate, and the repair loop:
    for each candidate head it first brings the branch up to date with its base
    (a merge of the latest base — local while there is no PR, so this flow's
-   single push is preserved), snapshots the head — the pushed PR head when one
+   single push is preserved), commits the patch bump for each changed versioned
+   package against that base, snapshots the head — the pushed PR head when one
    is open, the local HEAD otherwise — reviews it, repairs blocking findings
    (committing locally when there is no PR, pushing when there is), and
    re-reviews every head it changes. It reports back a **head SHA**, the exact
-   **base SHA** used for that review, a **verdict**, and the **repair rounds** it
-   performed. The head is reviewed on every verdict except
-   **review-could-not-run**, where it is the unreviewed candidate head — only
-   reachable here via `--merge-anyway`.
+   **base SHA** used for that review, a **verdict**, the **repair rounds** it
+   performed, and the **version bumps** it made. The head is reviewed on every
+   verdict except **review-could-not-run**, where it is the unreviewed
+   candidate head — only reachable here via `--merge-anyway`.
 
    Relay its output — which agent ran, whether it fell back, the findings, and
    what was repaired.
@@ -353,15 +367,78 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    ```
 
    If either differs — `open-pr` committed a stray change, the head moved, or
-   the base advanced — reconcile and re-review before merging.
+   the base advanced — reconcile and re-review (step 2) before merging.
 
-4. **Merge and clean up (bound to the reviewed head and base)** — query
-   the PR base once more and return to step 2 if it differs from
-   `REVIEWED_BASE_SHA`:
+4. **Bring the branch up to date, then merge and clean up (bound to the
+   reviewed head and base)** — never merge a branch that is behind its base or
+   whose versions trail it. Before every merge attempt, run this **freshness
+   gate**. It fetches the PR base branch's actual tip from GitHub — not only
+   GitHub's PR snapshot, which can lag a push to the base — and proves that the
+   reviewed head is the PR head, contains that exact tip, and carries the
+   version bumps computed against it:
 
    ```bash
-   test "$REVIEWED_BASE_SHA" = "$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid -R "$REPO")"
+   BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName -R "$REPO")
+   [ -n "$BASE_BRANCH" ] || { echo "Error: could not resolve the base branch of PR #$PR_NUMBER" >&2; exit 1; }
+   git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch --quiet "$BASE_URL" "$BASE_BRANCH" || { echo "Error: could not fetch $BASE_BRANCH from $BASE_URL" >&2; exit 1; }
+   CURRENT_BASE_SHA=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || { echo "Error: fetched base commit is unavailable" >&2; exit 1; }
+   test "$REVIEWED_SHA" = "$(git rev-parse HEAD)" || { echo "Error: local HEAD moved off reviewed head $REVIEWED_SHA" >&2; exit 1; }
+   test "$REVIEWED_SHA" = "$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")" || { echo "Error: PR #$PR_NUMBER head moved off reviewed head $REVIEWED_SHA; re-review required" >&2; exit 1; }
+   BRANCH_CURRENT=false
+   if [ "$CURRENT_BASE_SHA" = "$REVIEWED_BASE_SHA" ] &&
+     [ "$(gh pr view "$PR_NUMBER" --json baseRefOid -q .baseRefOid -R "$REPO")" = "$REVIEWED_BASE_SHA" ] &&
+     git merge-base --is-ancestor "$CURRENT_BASE_SHA" "$REVIEWED_SHA" &&
+     "$BUN_BIN" --no-env-file --config=/dev/null "$AGENT_TOOL" checkVersions "$CURRENT_BASE_SHA"; then
+     BRANCH_CURRENT=true
+   fi
    ```
+
+   Only exact equality with the fetched tip proves the review saw the base the
+   PR will merge onto; ancestry proves the reviewed head contains it, and
+   `checkVersions` proves that every changed versioned package at `HEAD` — the
+   reviewed head — sits exactly one patch past it.
+
+   - **`BRANCH_CURRENT=true`** — continue.
+   - **`BRANCH_CURRENT=false`** — the base advanced (or was rewound) after the
+     review, GitHub's PR snapshot has not caught up with it yet, or a version
+     trails the base. Do not merge. Do not merge the base or bump a version
+     here, and never push an unreviewed commit. With `--report-only`, stop
+     with the PR open: report-only review skips base synchronization and
+     version bumps, so it cannot produce a current head. Otherwise increment
+     `BASE_REFRESH_ROUND` (starting from `0`) and **return to step 2**:
+     `cross-agent-review`, invoked again with `--bump-versions` and the same
+     agent, pass, and report-only arguments, now finds the PR open, so it
+     merges the latest base, resolves version-only conflicts, re-bumps the
+     versions past that base, pushes without force, and reviews the
+     integrated head. Apply step 2's head checks and merge gate to the new
+     `REVIEWED_SHA` and `REVIEWED_BASE_SHA`, then run this gate again. The
+     refresh counter records work performed and never stops another required
+     refresh. If `cross-agent-review` stops because the fetched base does not
+     match GitHub's PR snapshot yet, GitHub is still catching up with the base
+     push; retry shortly.
+
+   A base refresh is not a repair round: it responds to external base
+   movement, while repair rounds address reviewer findings. It still requires
+   a complete re-review, because merging the base changes the candidate head
+   and can change the PR diff.
+
+   Once the gate passes, **wait for the PR's checks** on the reviewed head. A
+   refresh pushes a new head, so CI runs again, and the guarded merge refuses
+   anything short of GitHub's `CLEAN` merge state:
+
+   ```bash
+   gh pr checks "$PR_NUMBER" --watch --fail-fast -R "$REPO" || { echo "Error: checks did not pass on PR #$PR_NUMBER" >&2; exit 1; }
+   ```
+
+   In the seconds after a push, `gh` can report that no checks exist yet;
+   re-run it rather than treating that as a failure. A failing check stops the
+   flow with the PR open. Report it; a fix is a new change that goes back
+   through `cross-agent-review`.
+
+   CI takes minutes, and the base can move meanwhile. **Run the freshness gate
+   again once the checks finish**, and merge only when it passes with the checks
+   green on that same head. When it fails, refresh through step 2 as above and
+   wait for the new head's checks.
 
    Then invoke the `squash-merge` compatibility skill, passing
    `REVIEWED_SHA` as its **second (head-SHA) argument** and
@@ -404,6 +481,13 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    retry. Other non-zero results mean the merge failed or the head moved off
    `REVIEWED_SHA`; do not report success, and re-review a changed head.
 
+   When the merge fails with the PR still `OPEN` — including `squash-merge`
+   reporting that the base moved — run the freshness gate once more. If it now
+   fails, the base advanced between the gate and the merge: refresh through
+   step 2 and repeat this step. If it still passes, the failure was something
+   else; stop with the PR and checkout intact and report it. Never retry the
+   merge with a stale pair, and never clean up after a failed merge.
+
 5. **Reset the checkout** — invoke the `reset` skill with no arguments, but only
    when the merge landed and `--keep-branch` was **not** given. It puts the
    checkout on the repository default branch, fast-forwards it, and reinstalls
@@ -426,9 +510,12 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
    continue to step 6.
 
 6. **Report results**: the PR URL, review agent and fallback status, repair rounds
-   performed, findings fixed or waived, and the final merge subject including
-   its `(#<pr>)` reference. Note that the branch was pushed once, at open time
-   (or, on the resume path, that it was already open). Confirm the merge reached
+   performed, base refreshes performed, findings fixed or waived, the version
+   each changed package shipped at (for example
+   `packages/client 0.1.4 → 0.1.5`, or that neither versioned package changed),
+   and the final merge subject including its `(#<pr>)` reference. Note that
+   the branch was pushed once, at open time (or, on the resume path, that it
+   was already open). Confirm the merge reached
    `MERGED`, and state the branch returned to, that the merged branch was
    deleted, and that the hooks were reinstalled — or, when cleanup or the reset
    was skipped (`--keep-branch`, a dirty worktree, a merge that did not land),
@@ -436,10 +523,10 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
 
 ## Notes
 
-- **Order is enforced**: commit → review-and-repair → open/resume → merge →
-  cleanup → reset. A failure before the open step leaves committed local work and
-  no PR; a failure after it leaves the PR in a safe, open state. Either way it is
-  reported.
+- **Order is enforced**: commit → sync-bump-review-and-repair → open/resume →
+  freshness gate → merge → cleanup → reset. A failure before the open step
+  leaves committed local work and no PR; a failure after it leaves the PR in a
+  safe, open state. Either way it is reported.
 - **One push, after the review** — on the fresh path the branch is pushed exactly
   once, when the PR is opened, with feature-controlled hooks bypassed after the
   explicit gate. Reviewing local commits before the PR exists is what buys this
@@ -464,6 +551,21 @@ loop, subject-only reviewed merge, and `MERGED`-state verification.
   is an explicit `--merge-anyway` over a could-not-run verdict, where the bound
   head is a candidate that no review read — the merge is still pinned, but the
   reviewed-head guarantee is the thing the caller chose to waive.
+- **The branch is current when it merges.** The freshness gate compares the
+  reviewed base with the base branch's fetched tip — not just GitHub's PR
+  snapshot — before the checks wait and again right before the merge, and a
+  merge that fails with the PR still open re-runs it. A stale branch goes back
+  through `cross-agent-review`, which syncs, re-bumps, pushes, and re-reviews;
+  no round count stops this. The required strict up-to-date policy closes the
+  last race server-side: a head that no longer contains the base cannot merge.
+- **Version bumps are serialized by base freshness.** Only a head that contains
+  the latest base can merge, the review sync bumps each changed package to one
+  past exactly that base, and `checkVersions` confirms it on the reviewed head
+  just before the merge. Two PRs racing on the same package therefore land
+  consecutive patch versions in merge order: the loser falls behind, syncs (any
+  version-only conflict is resolved), bumps one past the winner, and is
+  reviewed again. `packages/agent-tool`, `packages/ui`, and
+  `packages/website` are not versioned by this flow.
 - **Title and subject stay in sync automatically**: `squash-merge` defaults to
   the PR title that `open-pr` set, so a single title argument (or none) suffices
   for both.

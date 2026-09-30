@@ -183,27 +183,93 @@ test("shipping skills fail closed without mutating report-only reviews", () => {
     const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "skill-guard-"));
     try {
       const callsFile = path.join(temporaryDirectory, "calls");
-      const shell = `set -euo pipefail\ngit() { printf '%s\\n' "$*" >> "$CALLS"; if [ "$1" = rev-parse ]; then printf 'head\\n'; fi; }\n${guardScript}`;
-      for (const reportOnly of ["true", "false"]) {
+      // The trusted launcher stub prints one rewritten manifest for a bump.
+      const bunStub = path.join(temporaryDirectory, "bun");
+      writeFileSync(
+        bunStub,
+        `#!/bin/sh\nprintf 'bun %s\\n' "$*" >> "$CALLS"\ncase "$*" in *" bumpVersions "*) printf 'packages/client/package.json\\n' ;; *" resolveVersionConflicts") exit "$RESOLVE_STATUS" ;; esac\n`,
+        { mode: 0o755 },
+      );
+      const shell = `set -euo pipefail\ngit() { printf '%s\\n' "$*" >> "$CALLS"; if [ "$1" = rev-parse ]; then printf 'head\\n'; fi; if [ "\${3:-}" = merge ] && [ "\${4:-}" = -S ]; then return "$MERGE_STATUS"; fi; }\n${guardScript}`;
+      const runGuard = (
+        reportOnly: string,
+        bumpVersions: string,
+        mergeStatus = "0",
+        resolveStatus = "0",
+      ) => {
         writeFileSync(callsFile, "");
         const result = spawnSync("/bin/bash", ["-c", shell], {
           encoding: "utf8",
           env: {
+            AGENT_TOOL: "agent-tool.ts",
             BASE_REF: "main",
             BRANCH: "feature",
+            BUMP_VERSIONS: bumpVersions,
+            BUN_BIN: bunStub,
             CALLS: callsFile,
             FETCHED_BASE: "base",
+            MERGE_STATUS: mergeStatus,
             PR_NUMBER: "",
             REPORT_ONLY: reportOnly,
+            RESOLVE_STATUS: resolveStatus,
           },
         });
-        expect(result.status).toBe(0);
-        const calls = readFileSync(callsFile, "utf8");
-        if (reportOnly === "true") {
-          expect(calls).toBe("");
-        } else {
-          expect(calls).toContain("merge -S --no-edit base");
-        }
+        return {
+          calls: readFileSync(callsFile, "utf8"),
+          status: result.status,
+        };
+      };
+      const bump =
+        "bun --no-env-file --config=/dev/null agent-tool.ts bumpVersions base";
+      const bumpCommit =
+        "-c core.hooksPath=/dev/null commit -S -m chore: bump package versions";
+
+      for (const bumpVersions of ["true", "false"]) {
+        expect(runGuard("true", bumpVersions)).toEqual({
+          calls: "",
+          status: 0,
+        });
+      }
+
+      const plain = runGuard("false", "false");
+      expect(plain.status).toBe(0);
+      expect(plain.calls).toContain("merge -S --no-edit base");
+      expect(plain.calls).not.toContain("bumpVersions");
+      expect(plain.calls).not.toContain(" commit ");
+
+      const bumped = runGuard("false", "true");
+      expect(bumped.status).toBe(0);
+      const mergeCall = bumped.calls.indexOf("merge -S --no-edit base");
+      const bumpCall = bumped.calls.indexOf(bump);
+      const addCall = bumped.calls.indexOf("add --pathspec-from-file=-");
+      const commitCall = bumped.calls.indexOf(bumpCommit);
+      expect(mergeCall).toBeGreaterThan(-1);
+      expect(bumpCall).toBeGreaterThan(mergeCall);
+      expect(addCall).toBeGreaterThan(bumpCall);
+      expect(commitCall).toBeGreaterThan(addCall);
+
+      // A conflicted sync is finished only for version-only conflicts under
+      // --bump-versions; anything else aborts the merge and stops.
+      const resolved = runGuard("false", "true", "1");
+      expect(resolved.status).toBe(0);
+      expect(resolved.calls).toContain("resolveVersionConflicts");
+      expect(resolved.calls).toContain(
+        "-c core.hooksPath=/dev/null commit -S --no-edit",
+      );
+      expect(resolved.calls).not.toContain("merge --abort");
+      expect(resolved.calls).toContain(bump);
+
+      for (const [bumpVersions, resolveStatus] of [
+        ["false", "0"],
+        ["true", "1"],
+      ] as const) {
+        const aborted = runGuard("false", bumpVersions, "1", resolveStatus);
+        expect(aborted.status).toBe(1);
+        expect(aborted.calls).toContain(
+          "-c core.hooksPath=/dev/null merge --abort",
+        );
+        expect(aborted.calls).not.toContain(" commit ");
+        expect(aborted.calls).not.toContain("bumpVersions");
       }
     } finally {
       rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -416,6 +482,127 @@ test("skills survive Claude Code argument substitution", () => {
         skillPath,
         matches: [],
       });
+    }
+  }
+});
+
+test("ship-pr merges only a branch current with its base", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  for (const skillRoot of [".claude/skills", ".codex/skills"]) {
+    const ship = readFileSync(
+      path.join(repositoryRoot, skillRoot, "ship-pr/SKILL.md"),
+      "utf8",
+    );
+    expect(ship).toContain(
+      "`cross-agent-review` with\n   **always** `--bump-versions`",
+    );
+
+    const gateStart = ship.indexOf("BASE_BRANCH=$(gh pr view");
+    const gateEnd = ship.indexOf("\n   ```", gateStart);
+    const checks = ship.indexOf('gh pr checks "$PR_NUMBER" --watch');
+    const recheck = ship.indexOf("**Run the freshness gate\n   again");
+    const merge = ship.indexOf(
+      'squash-merge \'\' "$REVIEWED_SHA" "$REVIEWED_BASE_SHA"',
+    );
+    expect(gateStart).toBeGreaterThan(-1);
+    expect(checks).toBeGreaterThan(gateEnd);
+    expect(recheck).toBeGreaterThan(checks);
+    expect(merge).toBeGreaterThan(recheck);
+
+    const gateScript = ship.slice(gateStart, gateEnd);
+    const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "ship-gate-"));
+    try {
+      const bunStub = path.join(temporaryDirectory, "bun");
+      writeFileSync(
+        bunStub,
+        `#!/bin/sh\nprintf 'bun %s\\n' "$*" >> "$CALLS"\nexit "$CHECK_STATUS"\n`,
+        { mode: 0o755 },
+      );
+      const callsFile = path.join(temporaryDirectory, "calls");
+      const stubs = [
+        "git() {",
+        '  case "$*" in',
+        '    *" fetch --quiet https://github.com/o/r main") ;;',
+        '    "rev-parse --verify FETCH_HEAD^{commit}") printf \'%s\\n\' "$FETCHED" ;;',
+        '    "rev-parse HEAD") printf \'%s\\n\' "$LOCAL_HEAD" ;;',
+        '    "merge-base --is-ancestor $FETCHED reviewed") return "$ANCESTOR_STATUS" ;;',
+        "    *) printf 'unexpected git %s\\n' \"$*\" >&2; return 99 ;;",
+        "  esac",
+        "}",
+        "gh() {",
+        '  case "$*" in',
+        "    *baseRefName*) printf 'main\\n' ;;",
+        "    *headRefOid*) printf '%s\\n' \"$PR_HEAD\" ;;",
+        "    *baseRefOid*) printf '%s\\n' \"$PR_BASE\" ;;",
+        "    *) printf 'unexpected gh %s\\n' \"$*\" >&2; return 99 ;;",
+        "  esac",
+        "}",
+      ].join("\n");
+      const shell = `set -euo pipefail\n${stubs}\n${gateScript}\nprintf 'BRANCH_CURRENT=%s\\n' "$BRANCH_CURRENT"`;
+      const current = {
+        ANCESTOR_STATUS: "0",
+        CHECK_STATUS: "0",
+        FETCHED: "base",
+        LOCAL_HEAD: "reviewed",
+        PR_BASE: "base",
+        PR_HEAD: "reviewed",
+      };
+      const runGate = (overrides: Partial<typeof current> = {}) => {
+        writeFileSync(callsFile, "");
+        const result = spawnSync("/bin/bash", ["-c", shell], {
+          encoding: "utf8",
+          env: {
+            ...current,
+            ...overrides,
+            AGENT_TOOL: "agent-tool.ts",
+            BASE_URL: "https://github.com/o/r",
+            BUN_BIN: bunStub,
+            CALLS: callsFile,
+            PR_NUMBER: "7",
+            REPO: "o/r",
+            REVIEWED_BASE_SHA: "base",
+            REVIEWED_SHA: "reviewed",
+          },
+        });
+        return {
+          calls: readFileSync(callsFile, "utf8"),
+          status: result.status,
+          stdout: result.stdout.trim(),
+        };
+      };
+
+      const passing = runGate();
+      expect(passing).toMatchObject({
+        status: 0,
+        stdout: "BRANCH_CURRENT=true",
+      });
+      expect(passing.calls).toBe(
+        "bun --no-env-file --config=/dev/null agent-tool.ts checkVersions base\n",
+      );
+
+      // Base advanced past the review, GitHub's snapshot lags the fetched tip,
+      // the head lacks the base, or a version trails it: refresh, don't merge.
+      for (const stale of [
+        { FETCHED: "newer" },
+        { PR_BASE: "older" },
+        { ANCESTOR_STATUS: "1" },
+        { CHECK_STATUS: "1" },
+      ]) {
+        expect(runGate(stale)).toMatchObject({
+          status: 0,
+          stdout: "BRANCH_CURRENT=false",
+        });
+      }
+      expect(runGate({ FETCHED: "newer" }).calls).toBe("");
+
+      // A head that moved off the reviewed commit is never refreshed over.
+      for (const moved of [{ LOCAL_HEAD: "other" }, { PR_HEAD: "other" }]) {
+        const result = runGate(moved);
+        expect(result.status).toBe(1);
+        expect(result.stdout).toBe("");
+      }
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
     }
   }
 });
