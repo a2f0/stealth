@@ -1,6 +1,7 @@
 # @tearleads/agent-tool
 
-Minimal CLI for cross-agent code review and reviewed PR merges.
+Minimal CLI for cross-agent code review, reviewed PR merges, and the version
+bumps that ship with them.
 
 ## Cross-agent review
 
@@ -132,14 +133,58 @@ deleting the merged branch live in the `squash-merge` skill *around* this call �
 as does its `--keep-branch` flag, which the tool does not accept. Invoking the
 tool directly merges without any of that cleanup.
 
+## Version bumps
+
+Keeps each versioned package — `packages/api` (the backend) and
+`packages/client` (the frontend) — one patch past its version on the base the
+branch merges onto.
+
+```bash
+# Rewrite the package.json versions that are off; prints the rewritten paths:
+bun packages/agent-tool/src/index.ts bumpVersions "$BASE_OID"
+# Exit non-zero when a versioned package at HEAD is not at its target:
+bun packages/agent-tool/src/index.ts checkVersions "$BASE_OID"
+# Mid-merge: finish a base merge whose only conflicts are those version fields:
+bun packages/agent-tool/src/index.ts resolveVersionConflicts
+```
+
+The target for each package is computed from committed `HEAD` and the full base
+OID: one patch past the base's version when the branch changes anything in the
+package (its `package.json` counts only for edits beyond `version`), the base's
+own version when it changes nothing, and the branch's version when that is a
+deliberate major or minor bump. Only the `version` line is rewritten, and
+`bumpVersions` refuses a manifest with uncommitted edits or one that is not a
+regular file. It never commits; the caller commits the printed paths. `bun.lock`
+is left alone: Bun neither rewrites nor rejects its stale workspace versions,
+even under `--frozen-lockfile`.
+
+`resolveVersionConflicts` re-runs the three-way merge of each conflicted
+manifest with every side's version set to one value: the branch's when it is a
+deliberate major or minor release over the incoming base, the base's otherwise.
+It stages the result only when that merges cleanly and every conflicted path is
+a versioned manifest; otherwise it changes nothing and exits non-zero. The
+following `bumpVersions` then moves the version one past the base.
+
+Every Git call runs with repository hooks disabled, because an index write
+(`git add`, even `git status`) would otherwise run `post-index-change` with the
+caller's credentials.
+
+`cross-agent-review --bump-versions` runs these after each base sync, and
+`ship-pr` always passes that flag and gates its merge on `checkVersions`. Both
+take the actions only from the trusted base snapshot of this repository; while
+that snapshot predates them, only a branch that leaves both versioned packages
+exactly as the base has them can ship.
+
 ## Ship (commit → review → repair → open/resume → merge → reset)
 
 The `ship-pr` skill commits the work on a feature branch, hands it to
-`cross-agent-review` — which reviews the local commits (or the pushed head when
-a PR is already open), repairs blocking findings in up to two rounds by default,
-and re-reviews every head it changes — then opens or resumes the PR with a
-single push and merges through GitHub only after re-verifying the reviewed head
-and base that review reports back.
+`cross-agent-review` — which syncs the base, patch-bumps the changed versioned
+packages, reviews the local commits (or the pushed head when a PR is already
+open), repairs blocking findings until none remain, and re-reviews every head
+it changes — then opens or resumes the PR with a single push. Before merging,
+it fetches the base branch's tip and sends a branch that has fallen behind back
+through that sync, bump, and review. It merges through GitHub only after
+re-verifying the reviewed head and base that review reports back.
 Opening the PR after the review is what keeps the branch to a single push
 through the pre-push hook. It finishes by handing off to `reset`, which returns
 the checkout to the default branch and reinstalls the repo's git hooks, so a

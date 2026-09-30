@@ -27,6 +27,13 @@
  *                               [head-sha] binds the merge to that head via
  *                               `--match-head-commit`; [base-sha] rejects a
  *                               base that moved after review.
+ *   bumpVersions <base-oid>     Patch-bump each changed versioned package one
+ *                               past its version at <base-oid> (prints the
+ *                               rewritten package.json paths)
+ *   checkVersions <base-oid>    Exit non-zero when a versioned package is not
+ *                               at the version bumpVersions would write
+ *   resolveVersionConflicts     Finish a base merge whose only conflicts are
+ *                               versioned package.json version fields
  */
 import { openPr } from "./pr/openPr";
 import { squashMerge } from "./pr/squashMerge";
@@ -34,9 +41,11 @@ import { runPreflight } from "./process/runPreflight";
 import { initializeTrustedTooling } from "./process/trustedTooling";
 import { solicitClaudeCodeReview } from "./review/solicitClaudeCodeReview";
 import { solicitCodexReview } from "./review/solicitCodexReview";
+import { bumpVersions, checkVersions } from "./version/bumpVersions";
+import { resolveVersionConflicts } from "./version/resolveVersionConflicts";
 
 const USAGE =
-  "Usage: agent-tool <solicitClaudeCodeReview|solicitCodexReview|openPr|runPreflight|squashMerge> [args]\n";
+  "Usage: agent-tool <solicitClaudeCodeReview|solicitCodexReview|openPr|runPreflight|squashMerge|bumpVersions|checkVersions|resolveVersionConflicts> [args]\n";
 
 function main(): number {
   const action = process.argv[2];
@@ -59,6 +68,12 @@ function main(): number {
         process.argv[4],
         process.argv[5],
       );
+    case "bumpVersions":
+      return bumpVersions(rootDir, process.argv[3]);
+    case "checkVersions":
+      return checkVersions(rootDir, process.argv[3]);
+    case "resolveVersionConflicts":
+      return resolveVersionConflicts(rootDir);
     default:
       process.stderr.write(`Unknown action: ${action ?? "(none)"}\n${USAGE}`);
       return 1;

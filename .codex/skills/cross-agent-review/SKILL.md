@@ -16,10 +16,12 @@ available.
 This skill owns the full **review → repair → re-review** loop and the severity
 gate that drives it. Each review round first brings the branch up to date with
 its base — a merge of the latest base, never a rebase — so the review reflects the
-branch as it will actually merge, not a stale snapshot. There is no limit on
-repair rounds: continue until no blocking findings remain. Each round changes
-the branch once and is followed by a fresh review of the new head, so the
-reported head is always a head that was itself reviewed. Pass `--report-only`
+branch as it will actually merge, not a stale snapshot. With
+`--bump-versions`, which `ship-pr` always passes, each sync also patch-bumps
+the changed backend and frontend package versions past that base. There is no
+limit on repair rounds: continue until no blocking findings remain. Each round
+changes the branch once and is followed by a fresh review of the new head, so
+the reported head is always a head that was itself reviewed. Pass `--report-only`
 for a review that changes nothing; report-only mode requires the branch to
 already contain the freshly fetched base so its reported base/head pair is
 actually shippable.
@@ -43,6 +45,12 @@ actually shippable.
   effort.
 - `--report-only` (optional flag, position-independent): surface findings
   without changing the branch, including base synchronization and repairs.
+- `--bump-versions` (optional flag, position-independent): after each base
+  sync, patch-bump every versioned package the branch changes —
+  `packages/api` (backend) and `packages/client` (frontend) — to one past its
+  version on the synced base, and let a base merge whose only conflicts are
+  those version fields finish on its own. `ship-pr` always passes it. Ignored
+  under `--report-only`, like the sync itself.
 - Reject the obsolete `--repair-rounds` flag rather than ignoring it. Use
   `--report-only` for a non-mutating review or omit the flag for unlimited
   repairs.
@@ -205,9 +213,10 @@ Require a clean worktree before fetching or snapshotting anything:
    Treat the invocation arguments as workflow inputs; skill arguments are not
    automatically shell positional parameters. Before any branch mutation, set
    `REPORT_ONLY=true` exactly when `--report-only` was supplied, and set it to
-   `false` otherwise. Set `REPAIR_ROUND=0` for reporting. Steps 2–5 re-enter at
-   step 2; preserve the counter across repairs. It records work performed and
-   never limits the loop.
+   `false` otherwise. Likewise set `BUMP_VERSIONS=true` exactly when
+   `--bump-versions` was supplied, and `false` otherwise. Set
+   `REPAIR_ROUND=0` for reporting. Steps 2–5 re-enter at step 2; preserve the
+   counter across repairs. It records work performed and never limits the loop.
 
 2. **Sync with the base, then snapshot the candidate head**: before reviewing,
    bring the branch up to date with its base, so the review — and the head that
@@ -252,6 +261,15 @@ Require a clean worktree before fetching or snapshotting anything:
      esac
    fi
    [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
+   # The version actions postdate the agent-tool itself. Take them only from
+   # the tool materialized from this exact base — never an external
+   # installation. A base without them leaves VERSION_TOOL empty, and then only
+   # a branch that changes no versioned package can ship.
+   VERSION_TOOL=""
+   if [ -n "$TRUSTED_AGENT_TOOL_TMP" ] &&
+     git cat-file -e "${FETCHED_BASE}:packages/agent-tool/src/version/bumpVersions.ts" 2>/dev/null; then
+     VERSION_TOOL="$AGENT_TOOL"
+   fi
    if [ "$REPORT_ONLY" = true ]; then
      git merge-base --is-ancestor "$FETCHED_BASE" HEAD || { echo "Error: report-only review cannot ship a branch behind $BASE_REF; sync it and run a fresh review" >&2; exit 1; }
    fi
@@ -278,11 +296,31 @@ Require a clean worktree before fetching or snapshotting anything:
    ```bash
    if [ "$REPORT_ONLY" != true ]; then
      PRE_SYNC_HEAD=$(git rev-parse HEAD)
-     git -c core.hooksPath=/dev/null merge -S --no-edit "$FETCHED_BASE" || {
-       git -c core.hooksPath=/dev/null merge --abort
-       echo "Error: merging the latest $BASE_REF into $BRANCH conflicts — resolve it and re-run" >&2
-       exit 1
-     }
+     if ! git -c core.hooksPath=/dev/null merge -S --no-edit "$FETCHED_BASE"; then
+       if [ "$BUMP_VERSIONS" = true ] && [ -n "$VERSION_TOOL" ] &&
+         "$BUN_BIN" --no-env-file --config=/dev/null "$VERSION_TOOL" resolveVersionConflicts &&
+         git -c core.hooksPath=/dev/null commit -S --no-edit; then
+         echo "Resolved version-only conflicts with $BASE_REF"
+       else
+         git -c core.hooksPath=/dev/null merge --abort
+         echo "Error: merging the latest $BASE_REF into $BRANCH conflicts — resolve it and re-run" >&2
+         exit 1
+       fi
+     fi
+
+     if [ "$BUMP_VERSIONS" = true ] && [ -n "$VERSION_TOOL" ]; then
+       BUMPED=$("$BUN_BIN" --no-env-file --config=/dev/null "$VERSION_TOOL" bumpVersions "$FETCHED_BASE") || exit 1
+       if [ -n "$BUMPED" ]; then
+         printf '%s\n' "$BUMPED" | git -c core.hooksPath=/dev/null add --pathspec-from-file=- || exit 1
+         git -c core.hooksPath=/dev/null commit -S -m 'chore: bump package versions' || exit 1
+       fi
+     elif [ "$BUMP_VERSIONS" = true ]; then
+       git diff --quiet "$FETCHED_BASE" HEAD -- packages/api packages/client || {
+         echo "Error: the $BASE_REF agent-tool predates version bumps, so it cannot bump a changed packages/api or packages/client; land the version actions on $BASE_REF first" >&2
+         exit 1
+       }
+       echo "The $BASE_REF agent-tool predates version bumps; no versioned package changed, so none is needed"
+     fi
 
      if [ -n "$PR_NUMBER" ] && [ "$(git rev-parse HEAD)" != "$PRE_SYNC_HEAD" ]; then
        verify_commit_trust "$FETCHED_BASE" || exit 1
@@ -291,18 +329,51 @@ Require a clean worktree before fetching or snapshotting anything:
    fi
    ```
 
+   **With `--bump-versions`**, two more things happen. First, a merge that
+   conflicts goes to `resolveVersionConflicts`, which finishes it only when
+   every conflict is the `version` field of a versioned `package.json`: two
+   branches that each patch-bumped the same package collide there whenever the
+   base moved by more than one bump. It takes the base's version (the bump
+   below replaces it), or the branch's own when that is a deliberate major or
+   minor release, and touches nothing — exiting non-zero, so the merge is
+   aborted — when any other line or file conflicts.
+
+   Then `bumpVersions` brings the versions in line with the synced base. Every
+   versioned package the branch changes goes to exactly one patch past its
+   version at `$FETCHED_BASE`; a deliberate major or minor bump on the branch
+   is kept; a package whose only change is a stale version goes back to the
+   base's version. The tool rewrites just the `version` line, prints the
+   `package.json` paths it rewrote, and never commits; the bump is committed on
+   its own, signed. It is recomputed from the base on every sync, so it is
+   always one past what the branch will merge onto — never a stale number taken
+   when the branch was cut — and it lands before the snapshot below, so the
+   review reads it like any other change. `bun.lock` also records workspace
+   versions, but Bun neither rewrites nor rejects a stale entry (even under
+   `--frozen-lockfile`), so the lockfile is left alone. Every Git call the tool
+   makes, and the staging above, disables repository hooks: an index write
+   would otherwise run `post-index-change` in this credential-bearing shell.
+
+   The version actions come only from the tool materialized from the fetched
+   base, never from anywhere outside the repository —
+   `TEARLEADS_AGENT_TOOL_DIR` included. A base whose tool predates them — the PR
+   that introduced them, or an older base branch — leaves `VERSION_TOOL`
+   empty, and the sync then proceeds only when `packages/api` and
+   `packages/client` are exactly as the base has them, so no bump is needed;
+   any other branch stops until the version actions land on its base.
+
    **Merge, not rebase, and never force.** Every branch mutation in these skills
    pushes without force, and a rebase would need a force push; the squash-merge
    flattens the merge commit anyway, so it costs nothing in the final history. **On
-   a conflict, abort and stop** — never auto-resolve, and never review a conflicted
-   tree.
+   a conflict, abort and stop** — never auto-resolve anything beyond the
+   version-only conflicts above, and never review a conflicted tree.
 
-   The merge moves `HEAD` only when the base actually advanced; on a branch
-   already current, or a later repair round where nothing new landed, it is a
-   no-op. **When a PR is open**, push the updated head without force so the
-   pushed head still matches what is reviewed — but **only when the merge
-   actually moved `HEAD`**, so an already-current branch does not push for
-   nothing. The merge commit is signed, and the push bypasses
+   The merge moves `HEAD` only when the base actually advanced, and the bump
+   only when a version is off; on a branch already current, or a later repair
+   round where nothing new landed, both are no-ops. **When a PR is open**, push
+   the updated head without force so the pushed head still matches what is
+   reviewed — but **only when the merge or the bump actually moved `HEAD`**, so
+   an already-current branch does not push for nothing. The merge commit is
+   signed, and the push bypasses
    feature-controlled hooks after running their commit-trust check from the
    trusted base; **with no PR**, the merge stays local and `open-pr` pushes it
    later, so the flow's single push is preserved:
@@ -509,6 +580,8 @@ Require a clean worktree before fetching or snapshotting anything:
    - Which agent performed the review (and whether fallback was used, and why)
    - The PR number and branch
    - The review findings from the final review
+   - **Version bumps** made under `--bump-versions` (package, old → new), or
+     that none were needed
    - **The head SHA** — normally `REVIEWED_SHA`, a head a review actually read.
      With an open PR it is the pushed head; with no PR it is a local, not-yet-
      pushed head that `open-pr` will push unchanged. On a
@@ -567,6 +640,11 @@ Require a clean worktree before fetching or snapshotting anything:
   aborts and stops for the user. `--report-only` skips it, keeping
   report-only inert, and refuses to proceed unless the current head already
   contains the freshly fetched base.
+- **`--bump-versions` keeps versions one patch past the base.** The bump is
+  redone after every sync against the exact base just merged, so a branch that
+  waited while other PRs merged still ends one past the latest base rather than
+  colliding with them. Only version-field conflicts in the versioned manifests
+  are resolved automatically; every other conflict still aborts and stops.
 - Both reviewers get the prompt/diff via stdin (not argv) to avoid
   "Argument list too long" failures on large PRs.
 - The Claude reviewer runs in `--bare --safe-mode`, disabling project hooks,
