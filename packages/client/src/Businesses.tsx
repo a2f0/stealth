@@ -12,11 +12,18 @@ import {
   PageHeader,
   PageSection,
 } from "@tearleads/ui/react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import {
   type Business,
   type BusinessInput,
-  type BusinessListing,
   createBusiness,
   deleteBusiness,
   getBusiness,
@@ -24,9 +31,12 @@ import {
   updateBusiness,
 } from "./businessesApi";
 import {
+  type BusinessListState,
+  businessListReducer,
   formatBusinessAddress,
   formatBusinessDate,
   formatEin,
+  initialBusinessListState,
 } from "./businessState";
 import { countLabel } from "./labels";
 import {
@@ -69,103 +79,139 @@ function BusinessListPage({
 }: {
   onNavigate: (pathname: string) => void;
 }) {
-  const [data, setData] = useState<BusinessListing>();
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
-  const [loading, setLoading] = useState(true);
+  const [state, dispatch] = useReducer(
+    businessListReducer,
+    initialBusinessListState,
+  );
   const load = useCallback(async () => {
-    setLoading(true);
-    setError(undefined);
+    dispatch({ type: "loadStarted" });
     try {
-      setData(await getBusinesses());
+      dispatch({ type: "loaded", data: await getBusinesses() });
     } catch (cause) {
-      setError(messageFrom(cause));
-    } finally {
-      setLoading(false);
+      dispatch({ type: "loadFailed", message: messageFrom(cause) });
     }
   }, []);
   useEffect(() => void load(), [load]);
 
-  const showError = (message: string) => {
-    setNotice(undefined);
-    setError(message);
-  };
+  return (
+    <BusinessListView
+      {...state}
+      onAddingChange={(adding) =>
+        dispatch({ type: adding ? "addOpened" : "addCancelled" })
+      }
+      onCreated={(business) => dispatch({ type: "created", business })}
+      onDeleted={(id) => dispatch({ type: "deleted", id })}
+      onError={(message) => dispatch({ type: "failed", message })}
+      onNavigate={onNavigate}
+      onUpdated={(business) => dispatch({ type: "updated", business })}
+    />
+  );
+}
 
+interface BusinessListViewProps extends BusinessListState {
+  onAddingChange: (adding: boolean) => void;
+  onCreated: (business: Business) => void;
+  onDeleted: (id: string) => void;
+  onError: (message: string) => void;
+  onNavigate: (pathname: string) => void;
+  onUpdated: (business: Business) => void;
+}
+
+/**
+ * The first business is added from an open form. Once one exists, the form
+ * folds behind an "Add business" header action so the list leads the page.
+ */
+export function BusinessListView(props: BusinessListViewProps) {
+  const { adding, data, onAddingChange } = props;
+  const canManage = data?.canManage ?? false;
+  const hasBusinesses = (data?.businesses.length ?? 0) > 0;
+  const formOpen = canManage && (adding || !hasBusinesses);
+  const addButton = useFocusWhenFolded(formOpen);
   return (
     <Page>
       <PageHeader
+        actions={
+          canManage &&
+          hasBusinesses &&
+          !adding && (
+            <Button
+              icon="add"
+              onClick={() => onAddingChange(true)}
+              ref={addButton}
+              variant="primary"
+            >
+              Add business
+            </Button>
+          )
+        }
         description="Keep the businesses belonging to this organization in one place."
         eyebrow="Records"
         title="Businesses"
       />
       <PageBody>
-        {error && <Banner tone="danger">{error}</Banner>}
-        {notice && <Banner tone="success">{notice}</Banner>}
-        {loading && !data ? (
-          <LoadingState label="Loading businesses…" />
-        ) : data ? (
-          <>
-            {data.canManage ? (
-              <BusinessCreateForm
-                onCreated={(business) => {
-                  setData((current) =>
-                    current
-                      ? {
-                          ...current,
-                          businesses: [business, ...current.businesses],
-                        }
-                      : current,
-                  );
-                  setError(undefined);
-                  setNotice("Business added.");
-                }}
-                onError={showError}
-              />
-            ) : (
-              <ReadOnlyNotice />
-            )}
-            <BusinessList
-              businesses={data.businesses}
-              canManage={data.canManage}
-              onNavigate={onNavigate}
-              onDeleted={(id) => {
-                setData((current) =>
-                  current
-                    ? {
-                        ...current,
-                        businesses: current.businesses.filter(
-                          (business) => business.id !== id,
-                        ),
-                      }
-                    : current,
-                );
-                setError(undefined);
-                setNotice("Business deleted.");
-              }}
-              onError={showError}
-              onUpdated={(updatedBusiness) => {
-                setData((current) =>
-                  current
-                    ? {
-                        ...current,
-                        businesses: current.businesses.map((business) =>
-                          business.id === updatedBusiness.id
-                            ? updatedBusiness
-                            : business,
-                        ),
-                      }
-                    : current,
-                );
-                setError(undefined);
-                setNotice("Business updated.");
-              }}
-            />
-          </>
-        ) : (
-          <BusinessEmptyState title="Businesses could not be loaded." />
-        )}
+        <BusinessListBody {...props} formOpen={formOpen} />
       </PageBody>
     </Page>
+  );
+}
+
+/**
+ * Folding the form away (cancelled, or a business was added) removes the
+ * focused field; hand focus to the button that reopens it.
+ */
+function useFocusWhenFolded(formOpen: boolean) {
+  const button = useRef<HTMLButtonElement>(null);
+  const wasFormOpen = useRef(formOpen);
+  useEffect(() => {
+    if (wasFormOpen.current && !formOpen) button.current?.focus();
+    wasFormOpen.current = formOpen;
+  }, [formOpen]);
+  return button;
+}
+
+function BusinessListBody({
+  data,
+  error,
+  formOpen,
+  loading,
+  notice,
+  onAddingChange,
+  onCreated,
+  onDeleted,
+  onError,
+  onNavigate,
+  onUpdated,
+}: BusinessListViewProps & { formOpen: boolean }) {
+  const hasBusinesses = (data?.businesses.length ?? 0) > 0;
+  return (
+    <>
+      {error && <Banner tone="danger">{error}</Banner>}
+      {notice && <Banner tone="success">{notice}</Banner>}
+      {loading && !data ? (
+        <LoadingState label="Loading businesses…" />
+      ) : data ? (
+        <>
+          {!data.canManage && <ReadOnlyNotice />}
+          {formOpen && (
+            <BusinessCreateForm
+              onCancel={hasBusinesses ? () => onAddingChange(false) : undefined}
+              onCreated={onCreated}
+              onError={onError}
+            />
+          )}
+          <BusinessList
+            businesses={data.businesses}
+            canManage={data.canManage}
+            onDeleted={onDeleted}
+            onError={onError}
+            onNavigate={onNavigate}
+            onUpdated={onUpdated}
+          />
+        </>
+      ) : (
+        <BusinessEmptyState title="Businesses could not be loaded." />
+      )}
+    </>
   );
 }
 
@@ -178,14 +224,24 @@ function ReadOnlyNotice() {
 }
 
 function BusinessCreateForm({
+  onCancel,
   onCreated,
   onError,
 }: {
+  /** Present when the form was opened on demand and can fold away again. */
+  onCancel: (() => void) | undefined;
   onCreated: (business: Business) => void;
   onError: (message: string) => void;
 }) {
   const [form, setForm] = useState<BusinessFormState>(emptyBusinessForm);
   const [busy, setBusy] = useState(false);
+  const nameField = useRef<HTMLInputElement>(null);
+  const openedOnDemand = Boolean(onCancel);
+  // The header button that opened the form is gone; move focus into the form.
+  // A form that is simply open on arrival leaves focus where it was.
+  useEffect(() => {
+    if (openedOnDemand) nameField.current?.focus();
+  }, [openedOnDemand]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -208,21 +264,33 @@ function BusinessCreateForm({
           <span className="textSm textSubtle">
             Only the business name is required.
           </span>
-          <Button
-            busy={busy}
-            disabled={!form.name.trim()}
-            icon="add"
-            type="submit"
-            variant="primary"
-          >
-            {busy ? "Adding…" : "Add business"}
-          </Button>
+          <div className="cluster">
+            {onCancel && (
+              <Button disabled={busy} onClick={onCancel} variant="ghost">
+                Cancel
+              </Button>
+            )}
+            <Button
+              busy={busy}
+              disabled={!form.name.trim()}
+              icon="add"
+              type="submit"
+              variant="primary"
+            >
+              {busy ? "Adding…" : "Add business"}
+            </Button>
+          </div>
         </>
       }
       onSubmit={(event) => void submit(event)}
       title="Add a business"
     >
-      <BusinessFields disabled={busy} form={form} onChange={setForm} />
+      <BusinessFields
+        disabled={busy}
+        form={form}
+        nameField={nameField}
+        onChange={setForm}
+      />
     </Card>
   );
 }
@@ -521,11 +589,13 @@ function BusinessFields({
   compact = false,
   disabled,
   form,
+  nameField,
   onChange,
 }: {
   compact?: boolean;
   disabled: boolean;
   form: BusinessFormState;
+  nameField?: RefObject<HTMLInputElement | null>;
   onChange: (form: BusinessFormState) => void;
 }) {
   const set = (field: keyof BusinessFormState, value: string) => {
@@ -543,6 +613,7 @@ function BusinessFields({
             maxLength={120}
             onChange={(event) => set("name", event.target.value)}
             placeholder="Acme, Inc."
+            ref={nameField}
             required
             type="text"
             value={form.name}
