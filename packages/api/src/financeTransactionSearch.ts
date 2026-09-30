@@ -1,4 +1,7 @@
+import { and, desc, eq, or, sql } from "drizzle-orm";
+import { getDb } from "./db";
 import type { FinanceContext } from "./financeContext";
+import { plaidAccounts, plaidTransactions } from "./schema";
 
 interface TransactionMatchRow {
   account_name: string;
@@ -28,33 +31,42 @@ export async function searchTransactions(context: FinanceContext) {
   }
   const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
   const amount = amountFrom(query);
-  const result = await context.env.DB.prepare(
-    `SELECT txn.id, txn.name, txn.merchant_name, txn.amount,
-            txn.currency_code, txn.transaction_date,
-            account.name AS account_name
-     FROM plaid_transactions AS txn
-     JOIN plaid_accounts AS account ON account.id = txn.account_record_id
-     WHERE txn.organization_id = ? AND txn.source_status = 'active'
-       AND (
-         ? = ''
-         OR txn.name LIKE ? ESCAPE '\\'
-         OR txn.merchant_name LIKE ? ESCAPE '\\'
-         OR (? IS NOT NULL AND abs(abs(txn.amount) - ?) < 0.005)
-       )
-     ORDER BY txn.transaction_date DESC, txn.id DESC
-     LIMIT ?`,
-  )
-    .bind(
-      context.get("organizationId"),
-      query,
-      pattern,
-      pattern,
-      amount,
-      amount,
-      resultLimit,
+  const rows = await getDb(context.env.DB)
+    .select({
+      id: plaidTransactions.id,
+      name: plaidTransactions.name,
+      merchant_name: plaidTransactions.merchantName,
+      amount: plaidTransactions.amount,
+      currency_code: plaidTransactions.currencyCode,
+      transaction_date: plaidTransactions.transactionDate,
+      account_name: plaidAccounts.name,
+    })
+    .from(plaidTransactions)
+    .innerJoin(
+      plaidAccounts,
+      eq(plaidAccounts.id, plaidTransactions.accountRecordId),
     )
-    .all<TransactionMatchRow>();
-  return context.json({ transactions: result.results.map(toMatch) });
+    .where(
+      and(
+        eq(plaidTransactions.organizationId, context.get("organizationId")),
+        eq(plaidTransactions.sourceStatus, "active"),
+        query === ""
+          ? undefined
+          : or(
+              sql`${plaidTransactions.name} like ${pattern} escape '\\'`,
+              sql`${plaidTransactions.merchantName} like ${pattern} escape '\\'`,
+              amount === null
+                ? undefined
+                : sql`abs(abs(${plaidTransactions.amount}) - ${amount}) < 0.005`,
+            ),
+      ),
+    )
+    .orderBy(
+      desc(plaidTransactions.transactionDate),
+      desc(plaidTransactions.id),
+    )
+    .limit(resultLimit);
+  return context.json({ transactions: rows.map(toMatch) });
 }
 
 /** "42.75", "$42.75", or "1,042" as an unsigned amount; otherwise null. */

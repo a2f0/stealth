@@ -1,12 +1,25 @@
+import { and, asc, desc, eq, exists, isNull, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { type Db, getDb } from "./db";
 import { userHasCapability } from "./organizationGroups";
+import {
+  equipment,
+  inboundEmailAttachments,
+  inboundEmailLinks,
+  inboundEmails,
+  libraryFolders,
+  plaidTransactions,
+} from "./schema";
 import type { Bindings } from "./types";
 
-type LinkContext = Context<{
-  Bindings: Bindings;
-  Variables: AuthVariables;
-}>;
+type LinkContext<Path extends string = string> = Context<
+  {
+    Bindings: Bindings;
+    Variables: AuthVariables;
+  },
+  Path
+>;
 
 type EmailLinkTargetType =
   | "equipment"
@@ -26,7 +39,7 @@ interface EmailLinkRow {
   folder_name: string | null;
   id: string;
   target_id: string;
-  target_type: EmailLinkTargetType;
+  target_type: string;
   transaction_amount: number | null;
   transaction_currency_code: string | null;
   transaction_date: string | null;
@@ -77,13 +90,18 @@ export async function createEmailLink(context: LinkContext) {
   }
   const organizationId = context.get("organizationId");
   const database = context.env.DB;
-  const email = await database
-    .prepare(
-      `SELECT id FROM inbound_emails
-       WHERE id = ? AND organization_id = ? AND deleted_at IS NULL`,
+  const db = getDb(database);
+  const email = await db
+    .select({ id: inboundEmails.id })
+    .from(inboundEmails)
+    .where(
+      and(
+        eq(inboundEmails.id, emailId),
+        eq(inboundEmails.organizationId, organizationId),
+        isNull(inboundEmails.deletedAt),
+      ),
     )
-    .bind(emailId, organizationId)
-    .first<{ id: string }>();
+    .get();
   if (!email) return context.json({ error: "Email not found." }, 404);
   if (
     input.targetType === "finance_transaction" &&
@@ -94,27 +112,28 @@ export async function createEmailLink(context: LinkContext) {
   // The target is checked in the insert itself: a target deleted a moment
   // earlier (after its cleanup trigger ran) must not gain an orphaned link.
   const id = crypto.randomUUID();
-  await database
-    .prepare(
-      `INSERT INTO inbound_email_links
-         (id, organization_id, email_id, target_type, target_id, created_by,
-          created_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?
-       WHERE EXISTS (${targetQueries[input.targetType]})
-       ON CONFLICT (email_id, target_type, target_id) DO NOTHING`,
+  const createdBy = context.get("authSession").user.id;
+  const createdAt = new Date().toISOString();
+  const targetFound = targetExists(
+    db,
+    input.targetType,
+    input.targetId,
+    organizationId,
+  );
+  await db
+    .insert(inboundEmailLinks)
+    .select(
+      sql`select ${id}, ${organizationId}, ${email.id}, ${input.targetType},
+                 ${input.targetId}, ${createdBy}, ${createdAt}
+          where ${targetFound}`,
     )
-    .bind(
-      id,
-      organizationId,
-      email.id,
-      input.targetType,
-      input.targetId,
-      context.get("authSession").user.id,
-      new Date().toISOString(),
-      input.targetId,
-      organizationId,
-    )
-    .run();
+    .onConflictDoNothing({
+      target: [
+        inboundEmailLinks.emailId,
+        inboundEmailLinks.targetType,
+        inboundEmailLinks.targetId,
+      ],
+    });
   const row = (await emailLinkRows(database, organizationId, email.id)).find(
     (link) =>
       link.target_type === input.targetType &&
@@ -125,14 +144,25 @@ export async function createEmailLink(context: LinkContext) {
   return context.json({ link }, link.id === id ? 201 : 200);
 }
 
-export async function deleteEmailLink(context: LinkContext) {
+export async function deleteEmailLink(
+  context: LinkContext<"/:id/links/:linkId">,
+) {
   const organizationId = context.get("organizationId");
-  const link = await context.env.DB.prepare(
-    `SELECT id, target_type FROM inbound_email_links
-     WHERE id = ? AND email_id = ? AND organization_id = ?`,
-  )
-    .bind(context.req.param("linkId"), context.req.param("id"), organizationId)
-    .first<{ id: string; target_type: EmailLinkTargetType }>();
+  const db = getDb(context.env.DB);
+  const link = await db
+    .select({
+      id: inboundEmailLinks.id,
+      target_type: inboundEmailLinks.targetType,
+    })
+    .from(inboundEmailLinks)
+    .where(
+      and(
+        eq(inboundEmailLinks.id, context.req.param("linkId")),
+        eq(inboundEmailLinks.emailId, context.req.param("id")),
+        eq(inboundEmailLinks.organizationId, organizationId),
+      ),
+    )
+    .get();
   if (!link) return context.json({ error: "Link not found." }, 404);
   if (
     link.target_type === "finance_transaction" &&
@@ -140,11 +170,14 @@ export async function deleteEmailLink(context: LinkContext) {
   ) {
     return financeRequired(context);
   }
-  await context.env.DB.prepare(
-    `DELETE FROM inbound_email_links WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(link.id, organizationId)
-    .run();
+  await db
+    .delete(inboundEmailLinks)
+    .where(
+      and(
+        eq(inboundEmailLinks.id, link.id),
+        eq(inboundEmailLinks.organizationId, organizationId),
+      ),
+    );
   return context.body(null, 204);
 }
 
@@ -158,27 +191,38 @@ export async function listLinkedEmails(
   targetType: EmailLinkTargetType,
   targetId?: string,
 ) {
-  const values = targetId
-    ? [organizationId, targetType, targetId]
-    : [organizationId, targetType];
-  const result = await database
-    .prepare(
-      `SELECT link.id AS link_id, link.target_id, email.id, email.subject,
-              email.envelope_from, email.received_at,
-              (SELECT COUNT(*) FROM inbound_email_attachments AS attachment
-               WHERE attachment.email_id = email.id) AS attachment_count
-       FROM inbound_email_links AS link
-       JOIN inbound_emails AS email
-         ON email.id = link.email_id
-        AND email.organization_id = link.organization_id
-       WHERE link.organization_id = ? AND link.target_type = ?
-         ${targetId ? "AND link.target_id = ?" : ""}
-         AND email.deleted_at IS NULL
-       ORDER BY email.received_at DESC, email.id DESC`,
+  const db = getDb(database);
+  const rows: LinkedEmailRow[] = await db
+    .select({
+      link_id: inboundEmailLinks.id,
+      target_id: inboundEmailLinks.targetId,
+      id: inboundEmails.id,
+      subject: inboundEmails.subject,
+      envelope_from: inboundEmails.envelopeFrom,
+      received_at: inboundEmails.receivedAt,
+      attachment_count: db.$count(
+        inboundEmailAttachments,
+        eq(inboundEmailAttachments.emailId, inboundEmails.id),
+      ),
+    })
+    .from(inboundEmailLinks)
+    .innerJoin(
+      inboundEmails,
+      and(
+        eq(inboundEmails.id, inboundEmailLinks.emailId),
+        eq(inboundEmails.organizationId, inboundEmailLinks.organizationId),
+      ),
     )
-    .bind(...values)
-    .all<LinkedEmailRow>();
-  return result.results;
+    .where(
+      and(
+        eq(inboundEmailLinks.organizationId, organizationId),
+        eq(inboundEmailLinks.targetType, targetType),
+        targetId ? eq(inboundEmailLinks.targetId, targetId) : undefined,
+        isNull(inboundEmails.deletedAt),
+      ),
+    )
+    .orderBy(desc(inboundEmails.receivedAt), desc(inboundEmails.id));
+  return rows;
 }
 
 export function toLinkedEmail(row: LinkedEmailRow) {
@@ -197,48 +241,107 @@ async function emailLinkRows(
   organizationId: string,
   emailId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT link.id, link.target_type, link.target_id,
-              folder.name AS folder_name,
-              item.type AS equipment_type, item.make AS equipment_make,
-              item.model AS equipment_model,
-              item.serial_number AS equipment_serial_number,
-              txn.name AS transaction_name,
-              txn.merchant_name AS transaction_merchant_name,
-              txn.amount AS transaction_amount,
-              txn.currency_code AS transaction_currency_code,
-              txn.transaction_date AS transaction_date
-       FROM inbound_email_links AS link
-       LEFT JOIN library_folders AS folder
-         ON link.target_type = 'library_folder'
-        AND folder.id = link.target_id
-        AND folder.organization_id = link.organization_id
-       LEFT JOIN equipment AS item
-         ON link.target_type = 'equipment'
-        AND item.id = link.target_id
-        AND item.organization_id = link.organization_id
-       LEFT JOIN plaid_transactions AS txn
-         ON link.target_type = 'finance_transaction'
-        AND txn.id = link.target_id
-        AND txn.organization_id = link.organization_id
-        AND txn.source_status = 'active'
-       WHERE link.email_id = ? AND link.organization_id = ?
-       ORDER BY link.created_at ASC, link.rowid ASC`,
+  const rows: EmailLinkRow[] = await getDb(database)
+    .select({
+      id: inboundEmailLinks.id,
+      target_type: inboundEmailLinks.targetType,
+      target_id: inboundEmailLinks.targetId,
+      folder_name: libraryFolders.name,
+      equipment_type: equipment.type,
+      equipment_make: equipment.make,
+      equipment_model: equipment.model,
+      equipment_serial_number: equipment.serialNumber,
+      transaction_name: plaidTransactions.name,
+      transaction_merchant_name: plaidTransactions.merchantName,
+      transaction_amount: plaidTransactions.amount,
+      transaction_currency_code: plaidTransactions.currencyCode,
+      transaction_date: plaidTransactions.transactionDate,
+    })
+    .from(inboundEmailLinks)
+    .leftJoin(
+      libraryFolders,
+      and(
+        eq(inboundEmailLinks.targetType, "library_folder"),
+        eq(libraryFolders.id, inboundEmailLinks.targetId),
+        eq(libraryFolders.organizationId, inboundEmailLinks.organizationId),
+      ),
     )
-    .bind(emailId, organizationId)
-    .all<EmailLinkRow>();
-  return result.results;
+    .leftJoin(
+      equipment,
+      and(
+        eq(inboundEmailLinks.targetType, "equipment"),
+        eq(equipment.id, inboundEmailLinks.targetId),
+        eq(equipment.organizationId, inboundEmailLinks.organizationId),
+      ),
+    )
+    .leftJoin(
+      plaidTransactions,
+      and(
+        eq(inboundEmailLinks.targetType, "finance_transaction"),
+        eq(plaidTransactions.id, inboundEmailLinks.targetId),
+        eq(plaidTransactions.organizationId, inboundEmailLinks.organizationId),
+        eq(plaidTransactions.sourceStatus, "active"),
+      ),
+    )
+    .where(
+      and(
+        eq(inboundEmailLinks.emailId, emailId),
+        eq(inboundEmailLinks.organizationId, organizationId),
+      ),
+    )
+    .orderBy(
+      asc(inboundEmailLinks.createdAt),
+      asc(sql`${inboundEmailLinks}.rowid`),
+    );
+  return rows;
 }
 
-/** Each target type's existence check, bound to (target id, organization). */
-const targetQueries: Record<EmailLinkTargetType, string> = {
-  equipment: `SELECT 1 FROM equipment WHERE id = ? AND organization_id = ?`,
-  finance_transaction: `SELECT 1 FROM plaid_transactions
-    WHERE id = ? AND organization_id = ? AND source_status = 'active'`,
-  library_folder: `SELECT 1 FROM library_folders
-    WHERE id = ? AND organization_id = ?`,
-};
+/** Whether the link target exists in the organization. */
+function targetExists(
+  db: Db,
+  targetType: EmailLinkTargetType,
+  targetId: string,
+  organizationId: string,
+) {
+  if (targetType === "equipment") {
+    return exists(
+      db
+        .select({ one: sql`1` })
+        .from(equipment)
+        .where(
+          and(
+            eq(equipment.id, targetId),
+            eq(equipment.organizationId, organizationId),
+          ),
+        ),
+    );
+  }
+  if (targetType === "finance_transaction") {
+    return exists(
+      db
+        .select({ one: sql`1` })
+        .from(plaidTransactions)
+        .where(
+          and(
+            eq(plaidTransactions.id, targetId),
+            eq(plaidTransactions.organizationId, organizationId),
+            eq(plaidTransactions.sourceStatus, "active"),
+          ),
+        ),
+    );
+  }
+  return exists(
+    db
+      .select({ one: sql`1` })
+      .from(libraryFolders)
+      .where(
+        and(
+          eq(libraryFolders.id, targetId),
+          eq(libraryFolders.organizationId, organizationId),
+        ),
+      ),
+  );
+}
 
 function canUseFinance(context: LinkContext) {
   return userHasCapability(

@@ -1,5 +1,7 @@
+import type { SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { handleEmail } from "./email";
+import { createTestD1, migratedDatabase } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const organizationId = "organization-1";
@@ -29,12 +31,12 @@ const rawEmail = [
 
 interface CapturedStatement {
   query: string;
-  values: unknown[];
+  values: readonly SQLQueryBindings[];
 }
 
 describe("inbound email", () => {
   it("stores the raw message, attachments, and metadata", async () => {
-    const database = createDatabase();
+    const database = await createDatabase();
     const storage = createStorage();
     const received = createMessage(rawEmail);
 
@@ -79,7 +81,7 @@ describe("inbound email", () => {
   });
 
   it("rejects mail sent to an unknown organization", async () => {
-    const database = createDatabase();
+    const database = await createDatabase();
     const storage = createStorage();
     const received = createMessage(
       rawEmail,
@@ -111,26 +113,26 @@ function createBindings(database: D1Database, storage: R2Bucket): Bindings {
   };
 }
 
-function createDatabase() {
+async function createDatabase() {
+  const database = await migratedDatabase();
+  database
+    .query(
+      "INSERT INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, ?)",
+    )
+    .run(
+      organizationId,
+      "Organization",
+      organizationId,
+      "2026-09-23T00:00:00Z",
+    );
   const statements: CapturedStatement[] = [];
-  const value = {
-    batch: async () => [],
-    prepare: (query: string) => {
-      let values: unknown[] = [];
-      const statement = {
-        bind: (...nextValues: unknown[]) => {
-          values = nextValues;
-          if (!query.includes("SELECT id FROM organization")) {
-            statements.push({ query, values });
-          }
-          return statement;
-        },
-        first: async () =>
-          values[0] === organizationId ? { id: organizationId } : null,
-      };
-      return statement;
+  const value = createTestD1(database, {
+    beforeExecute: (query, values) => {
+      if (!query.startsWith('select "id" from "organization"')) {
+        statements.push({ query, values });
+      }
     },
-  } as unknown as D1Database;
+  });
   return { statements, value };
 }
 

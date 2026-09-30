@@ -1,4 +1,25 @@
+import {
+  and,
+  asc,
+  count,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
+import { getDb } from "./db";
 import type { FinanceContext } from "./financeContext";
+import {
+  financeExpenseCategories,
+  financeTransactionAnnotations,
+  plaidTransactions,
+} from "./schema";
 
 /*
  * Expense reporting rules (Plaid amounts are positive for money leaving an
@@ -14,11 +35,8 @@ import type { FinanceContext } from "./financeContext";
  */
 const transferCategories = ["TRANSFER_OUT", "LOAN_PAYMENTS"];
 
-const reportFilter = `txn.organization_id = ?
-         AND txn.source_status = 'active'
-         AND txn.pending = 0
-         AND (? IS NULL OR txn.transaction_date >= ?)
-         AND (? IS NULL OR txn.transaction_date <= ?)`;
+const currencyOf = sql<string>`coalesce(${plaidTransactions.currencyCode}, '')`;
+const roundedTotal = sql<number>`round(sum(${plaidTransactions.amount}), 2)`;
 
 interface ExpenseRow {
   category_id: string | null;
@@ -58,16 +76,17 @@ export async function expenseReport(context: FinanceContext) {
   const [expenses, transfers, categories] = await Promise.all([
     expenseRows(database, organizationId, range),
     transferRows(database, organizationId, range),
-    database
-      .prepare(
-        `SELECT id, name FROM finance_expense_categories
-         WHERE organization_id = ? ORDER BY name COLLATE NOCASE ASC`,
-      )
-      .bind(organizationId)
-      .all<{ id: string; name: string }>(),
+    getDb(database)
+      .select({
+        id: financeExpenseCategories.id,
+        name: financeExpenseCategories.name,
+      })
+      .from(financeExpenseCategories)
+      .where(eq(financeExpenseCategories.organizationId, organizationId))
+      .orderBy(asc(sql`${financeExpenseCategories.name} collate nocase`)),
   ]);
   return context.json({
-    currencies: summarizeExpenses(expenses, transfers, categories.results),
+    currencies: summarizeExpenses(expenses, transfers, categories),
     from: range.from,
     to: range.to,
   });
@@ -126,24 +145,34 @@ async function expenseRows(
   organizationId: string,
   range: ReportRange,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT COALESCE(txn.currency_code, '') AS currency,
-              annotation.expense_category_id AS category_id,
-              ROUND(SUM(txn.amount), 2) AS total,
-              COUNT(*) AS transaction_count
-       FROM plaid_transactions AS txn
-       LEFT JOIN finance_transaction_annotations AS annotation
-         ON annotation.transaction_id = txn.id
-       WHERE ${reportFilter}
-         AND (annotation.expense_category_id IS NOT NULL
-           OR (txn.amount > 0
-             AND COALESCE(txn.category_primary, '') NOT IN (?, ?)))
-       GROUP BY currency, category_id`,
+  return getDb(database)
+    .select({
+      currency: currencyOf,
+      category_id: financeTransactionAnnotations.expenseCategoryId,
+      total: roundedTotal,
+      transaction_count: count(),
+    })
+    .from(plaidTransactions)
+    .leftJoin(
+      financeTransactionAnnotations,
+      eq(financeTransactionAnnotations.transactionId, plaidTransactions.id),
     )
-    .bind(...filterBindings(organizationId, range), ...transferCategories)
-    .all<ExpenseRow>();
-  return result.results;
+    .where(
+      and(
+        reportFilter(organizationId, range),
+        or(
+          isNotNull(financeTransactionAnnotations.expenseCategoryId),
+          and(
+            gt(plaidTransactions.amount, 0),
+            notInArray(
+              sql`coalesce(${plaidTransactions.categoryPrimary}, '')`,
+              transferCategories,
+            ),
+          ),
+        ),
+      ),
+    )
+    .groupBy(currencyOf, financeTransactionAnnotations.expenseCategoryId);
 }
 
 async function transferRows(
@@ -151,27 +180,40 @@ async function transferRows(
   organizationId: string,
   range: ReportRange,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT COALESCE(txn.currency_code, '') AS currency,
-              ROUND(SUM(txn.amount), 2) AS total,
-              COUNT(*) AS transaction_count
-       FROM plaid_transactions AS txn
-       LEFT JOIN finance_transaction_annotations AS annotation
-         ON annotation.transaction_id = txn.id
-       WHERE ${reportFilter}
-         AND annotation.expense_category_id IS NULL
-         AND txn.amount > 0
-         AND txn.category_primary IN (?, ?)
-       GROUP BY currency`,
+  return getDb(database)
+    .select({
+      currency: currencyOf,
+      total: roundedTotal,
+      transaction_count: count(),
+    })
+    .from(plaidTransactions)
+    .leftJoin(
+      financeTransactionAnnotations,
+      eq(financeTransactionAnnotations.transactionId, plaidTransactions.id),
     )
-    .bind(...filterBindings(organizationId, range), ...transferCategories)
-    .all<TransferRow>();
-  return result.results;
+    .where(
+      and(
+        reportFilter(organizationId, range),
+        isNull(financeTransactionAnnotations.expenseCategoryId),
+        gt(plaidTransactions.amount, 0),
+        inArray(plaidTransactions.categoryPrimary, transferCategories),
+      ),
+    )
+    .groupBy(currencyOf);
 }
 
-function filterBindings(organizationId: string, range: ReportRange) {
-  return [organizationId, range.from, range.from, range.to, range.to];
+function reportFilter(organizationId: string, range: ReportRange) {
+  return and(
+    eq(plaidTransactions.organizationId, organizationId),
+    eq(plaidTransactions.sourceStatus, "active"),
+    eq(plaidTransactions.pending, 0),
+    range.from === null
+      ? undefined
+      : gte(plaidTransactions.transactionDate, range.from),
+    range.to === null
+      ? undefined
+      : lte(plaidTransactions.transactionDate, range.to),
+  );
 }
 
 function categoryTotal(

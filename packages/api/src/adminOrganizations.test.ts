@@ -1,9 +1,10 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import { adminOrganizations } from "./adminOrganizations";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const proPriceId = "price_pro_test";
@@ -478,7 +479,7 @@ function bindingsFor(database: Database): Bindings {
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: toD1(database),
+    DB: createTestD1(database),
     EMAIL: {} as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.de",
@@ -518,38 +519,4 @@ function canceledSubscription() {
     metadata: { organization_id: targetOrganizationId },
     status: "canceled",
   };
-}
-
-function toD1(database: Database) {
-  return {
-    batch: async (statements: { execute: () => unknown }[]) =>
-      statements.map((statement) => statement.execute()),
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({
-          results: database.query(query).all(...values),
-          success: true,
-        }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        execute: () => {
-          const result = database.query(query).run(...values);
-          return {
-            meta: { changes: result.changes },
-            results: [],
-            success: true,
-          };
-        },
-        first: async () => database.query(query).get(...values),
-        run: async () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }

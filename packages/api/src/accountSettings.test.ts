@@ -1,9 +1,10 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import { accountSettings } from "./accountSettings";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 describe("default organization settings", () => {
@@ -110,7 +111,7 @@ async function createFixture() {
     await next();
   });
   app.route("/", accountSettings);
-  const bindings = { DB: toD1(database) } as Bindings;
+  const bindings = { DB: createTestD1(database) } as Bindings;
   return {
     database,
     defaultFor: (userId: string) =>
@@ -133,23 +134,4 @@ async function createFixture() {
         bindings,
       ),
   };
-}
-
-function toD1(database: Database) {
-  return {
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        run: async () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }

@@ -1,7 +1,10 @@
+import { and, desc, eq, sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { getDb } from "./db";
 import { maxFilenameBytes, normalizeFilename } from "./filenames";
 import { findLibraryFolder } from "./libraryFolders";
+import { objects as objectsTable } from "./schema";
 import type { Bindings, StoredObjectRow } from "./types";
 import { toStoredObject } from "./types";
 
@@ -11,6 +14,15 @@ const objects = new Hono<{
 }>();
 const maxUploadBytes = 25 * 1024 * 1024;
 const maxR2ObjectKeyBytes = 1_024;
+const storedObjectColumns = {
+  id: objectsTable.id,
+  object_key: objectsTable.objectKey,
+  filename: objectsTable.filename,
+  content_type: objectsTable.contentType,
+  size: objectsTable.size,
+  created_at: objectsTable.createdAt,
+  folder_id: objectsTable.folderId,
+};
 
 // Lists one folder's documents, or the documents at the library root.
 objects.get("/", async (context) => {
@@ -22,17 +34,20 @@ objects.get("/", async (context) => {
   ) {
     return folderNotFound(context);
   }
-  const result = await context.env.DB.prepare(
-    `SELECT id, object_key, filename, content_type, size, created_at,
-            folder_id
-     FROM objects
-     WHERE organization_id = ? AND kind = 'library' AND folder_id IS ?
-     ORDER BY created_at DESC LIMIT 100`,
-  )
-    .bind(organizationId, folderId)
-    .all<StoredObjectRow>();
+  const rows: StoredObjectRow[] = await getDb(context.env.DB)
+    .select(storedObjectColumns)
+    .from(objectsTable)
+    .where(
+      and(
+        eq(objectsTable.organizationId, organizationId),
+        eq(objectsTable.kind, "library"),
+        sql`${objectsTable.folderId} IS ${folderId}`,
+      ),
+    )
+    .orderBy(desc(objectsTable.createdAt))
+    .limit(100);
 
-  return context.json({ objects: result.results.map(toStoredObject) });
+  return context.json({ objects: rows.map(toStoredObject) });
 });
 
 objects.post("/", async (context) => {
@@ -84,23 +99,17 @@ objects.post("/", async (context) => {
   });
 
   try {
-    await context.env.DB.prepare(
-      `INSERT INTO objects
-       (id, organization_id, object_key, filename, content_type, size,
-        created_at, kind, folder_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'library', ?)`,
-    )
-      .bind(
-        id,
-        organizationId,
-        objectKey,
-        filename,
-        contentType,
-        file.size,
-        createdAt,
-        folderId,
-      )
-      .run();
+    await getDb(context.env.DB).insert(objectsTable).values({
+      id,
+      organizationId,
+      objectKey,
+      filename,
+      contentType,
+      size: file.size,
+      createdAt,
+      kind: "library",
+      folderId,
+    });
   } catch (error) {
     await context.env.STORAGE.delete(objectKey);
     throw error;
@@ -173,12 +182,10 @@ objects.patch("/:id", async (context) => {
   ) {
     return folderNotFound(context);
   }
-  await context.env.DB.prepare(
-    `UPDATE objects SET folder_id = ?
-     WHERE id = ? AND organization_id = ? AND kind = 'library'`,
-  )
-    .bind(folderId, row.id, organizationId)
-    .run();
+  await getDb(context.env.DB)
+    .update(objectsTable)
+    .set({ folderId })
+    .where(libraryObject(organizationId, row.id));
   return context.json({
     object: toStoredObject({ ...row, folder_id: folderId }),
   });
@@ -196,12 +203,9 @@ objects.delete("/:id", async (context) => {
   }
 
   await context.env.STORAGE.delete(row.object_key);
-  await context.env.DB.prepare(
-    `DELETE FROM objects
-     WHERE id = ? AND organization_id = ? AND kind = 'library'`,
-  )
-    .bind(row.id, organizationId)
-    .run();
+  await getDb(context.env.DB)
+    .delete(objectsTable)
+    .where(libraryObject(organizationId, row.id));
 
   return context.body(null, 204);
 });
@@ -210,16 +214,20 @@ async function findObject(
   database: D1Database,
   organizationId: string,
   id: string,
-) {
-  return database
-    .prepare(
-      `SELECT id, object_key, filename, content_type, size, created_at,
-              folder_id
-       FROM objects
-       WHERE id = ? AND organization_id = ? AND kind = 'library'`,
-    )
-    .bind(id, organizationId)
-    .first<StoredObjectRow>();
+): Promise<StoredObjectRow | undefined> {
+  return getDb(database)
+    .select(storedObjectColumns)
+    .from(objectsTable)
+    .where(libraryObject(organizationId, id))
+    .get();
+}
+
+function libraryObject(organizationId: string, id: string) {
+  return and(
+    eq(objectsTable.id, id),
+    eq(objectsTable.organizationId, organizationId),
+    eq(objectsTable.kind, "library"),
+  );
 }
 
 /** A folder id, null for the library root, or undefined when invalid. */

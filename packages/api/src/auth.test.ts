@@ -1,7 +1,8 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { app } from "./app";
 import { createAuth } from "./auth";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const baseURL = "https://api.test";
@@ -1098,7 +1099,7 @@ describe("password authentication", () => {
         },
         method: "PATCH",
       },
-      { ...fixture.bindings, DB: toD1(fixture.database) },
+      { ...fixture.bindings, DB: createTestD1(fixture.database) },
     );
     expect(saved.status).toBe(200);
 
@@ -1201,44 +1202,24 @@ function financeGroupFor(database: Database, organizationId: string) {
     .get(organizationId);
 }
 
-function toD1(database: Database) {
-  return {
-    batch: async (statements: Array<{ execute: () => unknown }>) =>
-      statements.map((statement) => statement.execute()),
-    exec: async (query: string) => database.exec(query),
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => {
-          const results = database.query(query).all(...values);
-          const meta = database
-            .query(
-              `SELECT changes() AS changes,
-                      last_insert_rowid() AS last_row_id`,
-            )
-            .get() as { changes: number; last_row_id: number };
-          return { meta, results, success: true };
-        },
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        execute: () => run(),
-        first: async () => database.query(query).get(...values),
-        raw: async () => database.query(query).values(...values),
-        run: async () => run(),
-      };
-      const run = () => {
-        const result = database.query(query).run(...values);
-        return {
-          meta: { changes: result.changes },
-          results: [],
-          success: true,
-        };
-      };
-      return statement;
+/**
+ * Better Auth keeps reading the SQLite database through its Bun dialect, while
+ * the app's own hook queries bind statements through the D1 binding API.
+ */
+function withD1Statements(database: Database) {
+  const binding = createTestD1(database);
+  return new Proxy(database, {
+    get(target, property) {
+      if (property === "prepare") {
+        return (query: string) =>
+          Object.assign(target.prepare(query), {
+            bind: binding.prepare(query).bind,
+          });
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
     },
-  } as unknown as D1Database;
+  }) as unknown as D1Database;
 }
 
 async function createFixture() {
@@ -1250,7 +1231,7 @@ async function createFixture() {
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: baseURL,
     CORS_ORIGIN: origin,
-    DB: database as unknown as D1Database,
+    DB: withD1Statements(database),
     EMAIL: {
       send: async (message: EmailMessageBuilder) => {
         messages.push(message);

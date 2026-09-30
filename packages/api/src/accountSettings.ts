@@ -1,5 +1,8 @@
+import { and, eq, exists, isNull, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { getDb } from "./db";
+import { member, organization, user } from "./schema";
 import type { Bindings } from "./types";
 
 const accountSettings = new Hono<{
@@ -20,19 +23,31 @@ accountSettings.patch("/default-organization", async (context) => {
   }
 
   const userId = context.get("authSession").user.id;
-  const result = await context.env.DB.prepare(
-    `UPDATE "user" SET "defaultOrganizationId" = ?, "defaultOrganizationPinned" = 1
-     WHERE "id" = ?
-       AND EXISTS (
-         SELECT 1 FROM "member"
-         JOIN "organization" ON organization.id = member.organizationId
-         WHERE member.userId = "user"."id"
-           AND member.organizationId = ?
-           AND organization.deletedAt IS NULL
-       )`,
-  )
-    .bind(body.organizationId, userId, body.organizationId)
-    .run();
+  const db = getDb(context.env.DB);
+  const result = await db
+    .update(user)
+    .set({
+      defaultOrganizationId: body.organizationId,
+      defaultOrganizationPinned: 1,
+    })
+    .where(
+      and(
+        eq(user.id, userId),
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(member)
+            .innerJoin(organization, eq(organization.id, member.organizationId))
+            .where(
+              and(
+                eq(member.userId, user.id),
+                eq(member.organizationId, body.organizationId),
+                isNull(organization.deletedAt),
+              ),
+            ),
+        ),
+      ),
+    );
   if (!result.meta.changes) {
     return context.json({ error: "Organization is unavailable." }, 403);
   }

@@ -1,10 +1,11 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import { organizationGroups, requireCapability } from "./organizationGroups";
 import { organizationSettings } from "./organizationSettings";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const organizationId = "org_owner-user";
@@ -284,32 +285,7 @@ async function jsonRequest<T = unknown>(
 }
 
 function bindingsFor(database: Database) {
-  return { DB: toD1(database) } as Bindings;
-}
-
-interface TestStatement {
-  execute: () => unknown;
-}
-
-function toD1(database: Database) {
-  return {
-    batch: async (statements: TestStatement[]) =>
-      statements.map((statement) => statement.execute()),
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({ results: database.query(query).all(...values) }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        execute: () => database.query(query).run(...values),
-        first: async () => database.query(query).get(...values),
-        run: async () => database.query(query).run(...values),
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
+  return { DB: createTestD1(database) } as Bindings;
 }
 
 async function applyMigration(database: Database, filename: string) {

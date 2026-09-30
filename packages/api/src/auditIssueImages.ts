@@ -1,7 +1,25 @@
+import {
+  and,
+  asc,
+  eq,
+  exists,
+  isNotNull,
+  isNull,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { columnNames, type Db, excluded, getDb } from "./db";
 import { maxFilenameBytes, normalizeFilename } from "./filenames";
 import { auditIssueImageUploadGraceMilliseconds } from "./objectLifecycle";
+import {
+  auditIssues,
+  auditIssueImages as issueImages,
+  objects,
+  user,
+} from "./schema";
 import type { Bindings } from "./types";
 
 const auditIssueImages = new Hono<{
@@ -68,11 +86,16 @@ export interface AuditIssueImageRow {
 auditIssueImages.post("/:issueId/images", async (context) => {
   const organizationId = context.get("organizationId");
   const issueId = context.req.param("issueId");
-  const issue = await context.env.DB.prepare(
-    `SELECT id FROM audit_issues WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(issueId, organizationId)
-    .first<{ id: string }>();
+  const issue = await getDb(context.env.DB)
+    .select({ id: auditIssues.id })
+    .from(auditIssues)
+    .where(
+      and(
+        eq(auditIssues.id, issueId),
+        eq(auditIssues.organizationId, organizationId),
+      ),
+    )
+    .get();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
 
   const releaseCapacity = acquireImageUploadCapacity(organizationId);
@@ -213,61 +236,56 @@ async function reserveAuditIssueImage(
   ).toISOString();
   const objectKey = `organizations/${organizationId}/audit-issues/${issueId}/${objectId}/image`;
   const filename = normalizeFilename(requestedFilename ?? "", "issue-image");
-  await database
-    .prepare(
-      `INSERT INTO objects
-       (id, organization_id, object_key, filename, content_type, size,
-        created_at, kind, deletion_pending, upload_token,
-        upload_lease_expires_at)
-       VALUES (?, ?, ?, ?, 'application/octet-stream', 0, ?,
-               'audit_issue_image', 1, ?, ?)`,
-    )
-    .bind(
-      objectId,
-      organizationId,
-      objectKey,
-      filename,
-      createdAt,
-      uploadToken,
-      uploadLeaseExpiresAt,
-    )
-    .run();
-  let reserved: { id: string } | null;
+  const db = getDb(database);
+  await db.insert(objects).values({
+    id: objectId,
+    organizationId,
+    objectKey,
+    filename,
+    contentType: "application/octet-stream",
+    size: 0,
+    createdAt,
+    kind: "audit_issue_image",
+    deletionPending: 1,
+    uploadToken,
+    uploadLeaseExpiresAt,
+  });
+  let reserved: { id: string } | undefined;
   try {
-    reserved = await database
-      .prepare(
-        `WITH RECURSIVE slots(slot) AS (
-           VALUES (1)
-           UNION ALL
-           SELECT slot + 1 FROM slots WHERE slot < ?
-         )
-         INSERT INTO audit_issue_images
-         (id, issue_id, object_id, uploaded_by, created_at, slot)
-         SELECT ?, ?, ?, ?, ?, slots.slot
-         FROM slots
-         WHERE NOT EXISTS (
-           SELECT 1 FROM audit_issue_images AS existing
-           WHERE existing.issue_id = ? AND existing.slot = slots.slot
-         )
-         ORDER BY slots.slot ASC
-         LIMIT 1
-         RETURNING id`,
-      )
-      .bind(
-        maxImagesPerIssue,
-        imageId,
-        issueId,
-        objectId,
-        userId,
-        createdAt,
-        issueId,
-      )
-      .first<{ id: string }>();
+    // Drizzle cannot build a recursive CTE, so claim the lowest free slot
+    // with one statement.
+    reserved = await db.get<{ id: string } | undefined>(
+      sql`with recursive slots(slot) as (
+            values (1)
+            union all
+            select slot + 1 from slots where slot < ${maxImagesPerIssue}
+          )
+          insert into ${issueImages}
+          (${columnNames(
+            issueImages.id,
+            issueImages.issueId,
+            issueImages.objectId,
+            issueImages.uploadedBy,
+            issueImages.createdAt,
+            issueImages.slot,
+          )})
+          select ${imageId}, ${issueId}, ${objectId}, ${userId}, ${createdAt},
+                 slots.slot
+          from slots
+          where not exists (
+            select 1 from ${issueImages}
+            where ${issueImages.issueId} = ${issueId}
+              and ${issueImages.slot} = slots.slot
+          )
+          order by slots.slot asc
+          limit 1
+          returning ${sql.identifier(issueImages.id.name)}`,
+    );
   } catch (cause) {
     await discardAuditIssueImageReservation(database, objectId, uploadToken);
     throw cause;
   }
-  if (reserved === null) {
+  if (!reserved) {
     await discardAuditIssueImageReservation(database, objectId, uploadToken);
     return null;
   }
@@ -279,26 +297,26 @@ async function discardAuditIssueImageReservation(
   objectId: string,
   uploadToken: string,
 ) {
-  await database.batch([
-    database
-      .prepare(
-        `DELETE FROM audit_issue_images
-         WHERE object_id = ? AND EXISTS (
-           SELECT 1 FROM objects
-           WHERE id = ? AND kind = 'audit_issue_image'
-             AND deletion_pending = 1 AND cleanup_token IS NULL
-             AND upload_token = ?
-         )`,
-      )
-      .bind(objectId, objectId, uploadToken),
-    database
-      .prepare(
-        `DELETE FROM objects
-         WHERE id = ? AND kind = 'audit_issue_image'
-           AND deletion_pending = 1 AND cleanup_token IS NULL
-           AND upload_token = ?`,
-      )
-      .bind(objectId, uploadToken),
+  const db = getDb(database);
+  const reservedObject = and(
+    eq(objects.id, objectId),
+    eq(objects.kind, "audit_issue_image"),
+    eq(objects.deletionPending, 1),
+    isNull(objects.cleanupToken),
+    eq(objects.uploadToken, uploadToken),
+  );
+  await db.batch([
+    db
+      .delete(issueImages)
+      .where(
+        and(
+          eq(issueImages.objectId, objectId),
+          exists(
+            db.select({ one: sql`1` }).from(objects).where(reservedObject),
+          ),
+        ),
+      ),
+    db.delete(objects).where(reservedObject),
   ]);
 }
 
@@ -330,15 +348,17 @@ async function abandonAuditIssueImageUpload(
   objectId: string,
   uploadToken: string,
 ) {
-  await database
-    .prepare(
-      `UPDATE objects
-       SET upload_token = NULL, upload_lease_expires_at = NULL
-       WHERE id = ? AND kind = 'audit_issue_image'
-         AND deletion_pending = 1 AND upload_token = ?`,
-    )
-    .bind(objectId, uploadToken)
-    .run();
+  await getDb(database)
+    .update(objects)
+    .set({ uploadToken: null, uploadLeaseExpiresAt: null })
+    .where(
+      and(
+        eq(objects.id, objectId),
+        eq(objects.kind, "audit_issue_image"),
+        eq(objects.deletionPending, 1),
+        eq(objects.uploadToken, uploadToken),
+      ),
+    );
 }
 
 async function persistAuditIssueImage(
@@ -353,21 +373,25 @@ async function persistAuditIssueImage(
     image,
   );
   try {
-    const activated = await environment.DB.prepare(
-      `UPDATE objects
-       SET size = ?, deletion_pending = 0, upload_token = NULL,
-           upload_lease_expires_at = NULL
-       WHERE id = ? AND kind = 'audit_issue_image'
-         AND deletion_pending = 1 AND cleanup_token IS NULL
-         AND upload_token = ?
-         AND EXISTS (
-           SELECT 1 FROM audit_issue_images AS reservation
-           WHERE reservation.object_id = objects.id
-             AND reservation.issue_id = ?
-         )`,
-    )
-      .bind(normalizedSize, image.objectId, image.uploadToken, image.issueId)
-      .run();
+    const db = getDb(environment.DB);
+    const activated = await db
+      .update(objects)
+      .set({
+        size: normalizedSize,
+        deletionPending: 0,
+        uploadToken: null,
+        uploadLeaseExpiresAt: null,
+      })
+      .where(
+        and(
+          eq(objects.id, image.objectId),
+          eq(objects.kind, "audit_issue_image"),
+          eq(objects.deletionPending, 1),
+          isNull(objects.cleanupToken),
+          eq(objects.uploadToken, image.uploadToken),
+          exists(reservationFor(db, image.issueId)),
+        ),
+      );
     if (Number(activated.meta.changes) !== 1) {
       throw new Error("Issue image reservation could not be activated.");
     }
@@ -389,26 +413,43 @@ interface AuditIssueImageActivationState {
 }
 
 type ActivationStateRead =
-  | { known: true; state: AuditIssueImageActivationState | null }
+  | { known: true; state: AuditIssueImageActivationState | undefined }
   | { known: false };
+
+/** The image row reserving the outer query's object for an issue. */
+function reservationFor(db: Db, issueId: string) {
+  return db
+    .select({ one: sql`1` })
+    .from(issueImages)
+    .where(
+      and(
+        eq(issueImages.objectId, objects.id),
+        eq(issueImages.issueId, issueId),
+      ),
+    );
+}
 
 async function readAuditIssueImageActivationState(
   database: D1Database,
   image: AuditIssueImageInsert,
 ): Promise<ActivationStateRead> {
   try {
-    const state = await database
-      .prepare(
-        `SELECT object_key, deletion_pending,
-                EXISTS (
-                  SELECT 1 FROM audit_issue_images
-                  WHERE object_id = objects.id AND issue_id = ?
-                ) AS reservation_exists
-         FROM objects
-         WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
+    const db = getDb(database);
+    const state = await db
+      .select({
+        object_key: objects.objectKey,
+        deletion_pending: objects.deletionPending,
+        reservation_exists: sql<number>`${exists(reservationFor(db, image.issueId))}`,
+      })
+      .from(objects)
+      .where(
+        and(
+          eq(objects.id, image.objectId),
+          eq(objects.organizationId, image.organizationId),
+          eq(objects.kind, "audit_issue_image"),
+        ),
       )
-      .bind(image.issueId, image.objectId, image.organizationId)
-      .first<AuditIssueImageActivationState>();
+      .get();
     return { known: true, state };
   } catch {
     return { known: false };
@@ -478,38 +519,40 @@ async function restoreAuditIssueImageCleanupTombstone(
   image: AuditIssueImageInsert,
   size: number,
 ) {
-  await database
-    .prepare(
-      `INSERT INTO objects
-       (id, organization_id, object_key, filename, content_type, size,
-        created_at, kind, deletion_pending, cleanup_token,
-        cleanup_claimed_at, upload_token, upload_lease_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'audit_issue_image', 1,
-               NULL, NULL, NULL, NULL)
-       ON CONFLICT(id) DO UPDATE SET
-         organization_id = excluded.organization_id,
-         object_key = excluded.object_key,
-         filename = excluded.filename,
-         content_type = excluded.content_type,
-         size = excluded.size,
-         deletion_pending = 1,
-         cleanup_token = NULL,
-         cleanup_claimed_at = NULL,
-         upload_token = NULL,
-         upload_lease_expires_at = NULL
-       WHERE objects.kind = 'audit_issue_image'
-         AND objects.deletion_pending = 1`,
-    )
-    .bind(
-      image.objectId,
-      image.organizationId,
-      image.objectKey,
-      image.filename,
-      image.contentType,
+  await getDb(database)
+    .insert(objects)
+    .values({
+      id: image.objectId,
+      organizationId: image.organizationId,
+      objectKey: image.objectKey,
+      filename: image.filename,
+      contentType: image.contentType,
       size,
-      new Date().toISOString(),
-    )
-    .run();
+      createdAt: new Date().toISOString(),
+      kind: "audit_issue_image",
+      deletionPending: 1,
+      cleanupToken: null,
+      cleanupClaimedAt: null,
+      uploadToken: null,
+      uploadLeaseExpiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: objects.id,
+      set: {
+        organizationId: excluded(objects.organizationId),
+        objectKey: excluded(objects.objectKey),
+        filename: excluded(objects.filename),
+        contentType: excluded(objects.contentType),
+        size: excluded(objects.size),
+        deletionPending: 1,
+        cleanupToken: null,
+        cleanupClaimedAt: null,
+        uploadToken: null,
+        uploadLeaseExpiresAt: null,
+      },
+      setWhere: sql`${eq(objects.kind, "audit_issue_image")}
+        and ${eq(objects.deletionPending, 1)}`,
+    });
 }
 
 async function refreshAuditIssueImageUploadLease(
@@ -520,25 +563,25 @@ async function refreshAuditIssueImageUploadLease(
   // Fill in the validated metadata before writing bytes so any later failure
   // leaves a complete durable cleanup tombstone.
   try {
-    const metadata = await database
-      .prepare(
-        `UPDATE objects
-       SET filename = ?, content_type = ?, upload_lease_expires_at = ?
-       WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'
-         AND deletion_pending = 1 AND cleanup_token IS NULL
-         AND upload_token = ?`,
-      )
-      .bind(
-        image.filename,
-        image.contentType,
-        new Date(
+    const metadata = await getDb(database)
+      .update(objects)
+      .set({
+        filename: image.filename,
+        contentType: image.contentType,
+        uploadLeaseExpiresAt: new Date(
           Date.now() + auditIssueImageUploadGraceMilliseconds,
         ).toISOString(),
-        image.objectId,
-        image.organizationId,
-        image.uploadToken,
-      )
-      .run();
+      })
+      .where(
+        and(
+          eq(objects.id, image.objectId),
+          eq(objects.organizationId, image.organizationId),
+          eq(objects.kind, "audit_issue_image"),
+          eq(objects.deletionPending, 1),
+          isNull(objects.cleanupToken),
+          eq(objects.uploadToken, image.uploadToken),
+        ),
+      );
     if (Number(metadata.meta.changes) !== 1) {
       throw new Error("Issue image reservation is no longer available.");
     }
@@ -776,44 +819,43 @@ async function deletePendingAuditIssueObject(
 ) {
   const cleanupToken = crypto.randomUUID();
   const claimedAt = new Date().toISOString();
-  const claimed = await environment.DB.prepare(
-    `UPDATE objects
-     SET cleanup_token = ?, cleanup_claimed_at = ?, upload_token = NULL,
-         upload_lease_expires_at = NULL
-     WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1
-       AND (cleanup_token IS NULL OR datetime(cleanup_claimed_at) <= datetime(?))
-       AND (
-         upload_token IS NULL OR (
-           upload_lease_expires_at IS NOT NULL
-           AND datetime(upload_lease_expires_at) <= datetime(?)
-         )
-       )
-     RETURNING object_key`,
-  )
-    .bind(
+  const db = getDb(environment.DB);
+  const claimed = await db
+    .update(objects)
+    .set({
       cleanupToken,
-      claimedAt,
-      object.id,
-      abandonedClaimCutoff,
-      uploadLeaseCutoff,
+      cleanupClaimedAt: claimedAt,
+      uploadToken: null,
+      uploadLeaseExpiresAt: null,
+    })
+    .where(
+      and(
+        eq(objects.id, object.id),
+        eq(objects.kind, "audit_issue_image"),
+        eq(objects.deletionPending, 1),
+        claimablePendingObject(abandonedClaimCutoff, uploadLeaseCutoff),
+      ),
     )
-    .first<{ object_key: string }>();
+    .returning({ objectKey: objects.objectKey })
+    .get();
   if (!claimed) return false;
-  await environment.STORAGE.delete(claimed.object_key);
-  await environment.DB.batch([
-    environment.DB.prepare(
-      `DELETE FROM audit_issue_images
-       WHERE object_id = ? AND EXISTS (
-         SELECT 1 FROM objects
-         WHERE id = ? AND kind = 'audit_issue_image'
-           AND deletion_pending = 1 AND cleanup_token = ?
-       )`,
-    ).bind(object.id, object.id, cleanupToken),
-    environment.DB.prepare(
-      `DELETE FROM objects
-       WHERE id = ? AND kind = 'audit_issue_image' AND deletion_pending = 1
-         AND cleanup_token = ?`,
-    ).bind(object.id, cleanupToken),
+  await environment.STORAGE.delete(claimed.objectKey);
+  const claimedObject = and(
+    eq(objects.id, object.id),
+    eq(objects.kind, "audit_issue_image"),
+    eq(objects.deletionPending, 1),
+    eq(objects.cleanupToken, cleanupToken),
+  );
+  await db.batch([
+    db
+      .delete(issueImages)
+      .where(
+        and(
+          eq(issueImages.objectId, object.id),
+          exists(db.select({ one: sql`1` }).from(objects).where(claimedObject)),
+        ),
+      ),
+    db.delete(objects).where(claimedObject),
   ]);
   return true;
 }
@@ -838,25 +880,22 @@ export async function purgePendingAuditIssueImages(
   ).toISOString(),
   uploadLeaseCutoff = new Date().toISOString(),
 ) {
-  const result = await environment.DB.prepare(
-    `SELECT id FROM objects
-     WHERE kind = 'audit_issue_image' AND deletion_pending = 1
-       AND datetime(created_at) <= datetime(?)
-       AND (cleanup_token IS NULL OR datetime(cleanup_claimed_at) <= datetime(?))
-       AND (
-         upload_token IS NULL OR (
-           upload_lease_expires_at IS NOT NULL
-           AND datetime(upload_lease_expires_at) <= datetime(?)
-         )
-       )
-     ORDER BY created_at ASC, id ASC
-     LIMIT ?`,
-  )
-    .bind(cutoff, cutoff, uploadLeaseCutoff, pendingCleanupBatchSize)
-    .all<PendingAuditIssueObject>();
+  const pendingObjects = await getDb(environment.DB)
+    .select({ id: objects.id })
+    .from(objects)
+    .where(
+      and(
+        eq(objects.kind, "audit_issue_image"),
+        eq(objects.deletionPending, 1),
+        sql`datetime(${objects.createdAt}) <= datetime(${cutoff})`,
+        claimablePendingObject(cutoff, uploadLeaseCutoff),
+      ),
+    )
+    .orderBy(asc(objects.createdAt), asc(objects.id))
+    .limit(pendingCleanupBatchSize);
   let firstFailure: unknown;
   let purged = 0;
-  for (const object of result.results) {
+  for (const object of pendingObjects) {
     try {
       const deleted = await deletePendingAuditIssueObject(
         environment,
@@ -885,17 +924,32 @@ auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
   if (!row) return context.json({ error: "Issue image not found." }, 404);
   // Atomically hide the image and release its unique issue slot before R2
   // cleanup. A failed R2 delete leaves a durable object tombstone for cron.
-  await context.env.DB.batch([
-    context.env.DB.prepare(
-      `UPDATE objects
-       SET deletion_pending = 1, cleanup_token = NULL,
-           cleanup_claimed_at = NULL, upload_token = NULL,
-           upload_lease_expires_at = NULL
-       WHERE id = ? AND organization_id = ? AND kind = 'audit_issue_image'`,
-    ).bind(row.object_id, organizationId),
-    context.env.DB.prepare(
-      `DELETE FROM audit_issue_images WHERE id = ? AND object_id = ?`,
-    ).bind(row.id, row.object_id),
+  const db = getDb(context.env.DB);
+  await db.batch([
+    db
+      .update(objects)
+      .set({
+        deletionPending: 1,
+        cleanupToken: null,
+        cleanupClaimedAt: null,
+        uploadToken: null,
+        uploadLeaseExpiresAt: null,
+      })
+      .where(
+        and(
+          eq(objects.id, row.object_id),
+          eq(objects.organizationId, organizationId),
+          eq(objects.kind, "audit_issue_image"),
+        ),
+      ),
+    db
+      .delete(issueImages)
+      .where(
+        and(
+          eq(issueImages.id, row.id),
+          eq(issueImages.objectId, row.object_id),
+        ),
+      ),
   ]);
   try {
     await deletePendingAuditIssueObject(context.env, {
@@ -912,17 +966,16 @@ export async function findAuditIssueImages(
   organizationId: string,
   auditId: string,
 ) {
-  const result = await database
-    .prepare(
-      `${imageSelect}
-       WHERE issue.organization_id = ? AND issue.audit_id = ?
-         AND object.kind = 'audit_issue_image'
-         AND object.deletion_pending = 0
-       ORDER BY image.created_at ASC`,
+  return selectImages(database)
+    .where(
+      and(
+        eq(auditIssues.organizationId, organizationId),
+        eq(auditIssues.auditId, auditId),
+        eq(objects.kind, "audit_issue_image"),
+        eq(objects.deletionPending, 0),
+      ),
     )
-    .bind(organizationId, auditId)
-    .all<AuditIssueImageRow>();
-  return result.results;
+    .orderBy(asc(issueImages.createdAt));
 }
 
 async function findAuditIssueImage(
@@ -932,27 +985,63 @@ async function findAuditIssueImage(
   imageId: string,
   includePending = false,
 ) {
-  return database
-    .prepare(
-      `${imageSelect}
-       WHERE issue.organization_id = ? AND issue.id = ? AND image.id = ?
-         AND object.kind = 'audit_issue_image'
-         ${includePending ? "" : "AND object.deletion_pending = 0"}`,
+  return selectImages(database)
+    .where(
+      and(
+        eq(auditIssues.organizationId, organizationId),
+        eq(auditIssues.id, issueId),
+        eq(issueImages.id, imageId),
+        eq(objects.kind, "audit_issue_image"),
+        includePending ? undefined : eq(objects.deletionPending, 0),
+      ),
     )
-    .bind(organizationId, issueId, imageId)
-    .first<AuditIssueImageRow>();
+    .get();
 }
 
-const imageSelect = `
-  SELECT image.id, image.issue_id, image.object_id, image.created_at,
-         object.deletion_pending,
-         object.object_key, object.filename, object.content_type, object.size,
-         uploader.id AS uploaded_by_id, uploader.name AS uploaded_by_name,
-         uploader.email AS uploaded_by_email
-  FROM audit_issue_images AS image
-  JOIN audit_issues AS issue ON issue.id = image.issue_id
-  JOIN objects AS object ON object.id = image.object_id
-  JOIN user AS uploader ON uploader.id = image.uploaded_by`;
+function selectImages(database: D1Database) {
+  return getDb(database)
+    .select({
+      id: issueImages.id,
+      issue_id: issueImages.issueId,
+      object_id: issueImages.objectId,
+      created_at: issueImages.createdAt,
+      deletion_pending: objects.deletionPending,
+      object_key: objects.objectKey,
+      filename: objects.filename,
+      content_type: objects.contentType,
+      size: objects.size,
+      uploaded_by_id: user.id,
+      uploaded_by_name: user.name,
+      uploaded_by_email: user.email,
+    })
+    .from(issueImages)
+    .innerJoin(auditIssues, eq(auditIssues.id, issueImages.issueId))
+    .innerJoin(objects, eq(objects.id, issueImages.objectId))
+    .innerJoin(user, eq(user.id, issueImages.uploadedBy));
+}
+
+/**
+ * A pending object whose cleanup claim is free or abandoned and whose upload
+ * lease is absent or expired.
+ */
+function claimablePendingObject(
+  abandonedClaimCutoff: string,
+  uploadLeaseCutoff: string,
+): SQL | undefined {
+  return and(
+    or(
+      isNull(objects.cleanupToken),
+      sql`datetime(${objects.cleanupClaimedAt}) <= datetime(${abandonedClaimCutoff})`,
+    ),
+    or(
+      isNull(objects.uploadToken),
+      and(
+        isNotNull(objects.uploadLeaseExpiresAt),
+        sql`datetime(${objects.uploadLeaseExpiresAt}) <= datetime(${uploadLeaseCutoff})`,
+      ),
+    ),
+  );
+}
 
 export function toAuditIssueImage(row: AuditIssueImageRow) {
   return {

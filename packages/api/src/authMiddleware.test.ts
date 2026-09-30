@@ -1,3 +1,4 @@
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
@@ -7,6 +8,7 @@ import {
   requireOrganization,
   requireOrganizationPluginAccess,
 } from "./authMiddleware";
+import { createTestD1, migratedDatabase } from "./testDatabase";
 import type { Bindings } from "./types";
 
 describe("organization middleware", () => {
@@ -95,7 +97,7 @@ describe("organization middleware", () => {
 
   it("blocks an unseated member from organization auth data but permits switching", async () => {
     const bindings = {
-      DB: membershipDatabase(["active-org"], [], [], "owner-id"),
+      DB: await membershipDatabase(["active-org"], [], [], "owner-id"),
     } as Bindings;
     const protectedResponse = await authOrganizationApp().request(
       "/api/auth/organization/list-members?organizationId=active-org",
@@ -117,7 +119,7 @@ describe("organization middleware", () => {
 
   it("rejects organization selectors that conflict with a canonical resource", async () => {
     const bindings = {
-      DB: membershipDatabase(
+      DB: await membershipDatabase(
         ["active-org", "unseated-org"],
         [],
         [],
@@ -142,7 +144,12 @@ describe("organization middleware", () => {
 
   it("lets a verified member leave without a Free-plan seat", async () => {
     const bindings = {
-      DB: membershipDatabase(["active-org"], [], ["active-org"], "owner-id"),
+      DB: await membershipDatabase(
+        ["active-org"],
+        [],
+        ["active-org"],
+        "owner-id",
+      ),
     } as Bindings;
     const response = await combinedAuthOrganizationApp().request(
       "/api/auth/organization/leave",
@@ -453,7 +460,7 @@ function testApp(
   return app;
 }
 
-function requestOrganization(
+async function requestOrganization(
   activeOrganizationId: string | null,
   defaultOrganizationId: string | null,
   memberships: string[],
@@ -465,7 +472,7 @@ function requestOrganization(
     defaultOrganizationId,
     twoFactorState,
   ).request("/", undefined, {
-    DB: membershipDatabase(
+    DB: await membershipDatabase(
       memberships,
       deletedMemberships,
       twoFactorState.twoFactorRequired ? memberships : [],
@@ -474,7 +481,7 @@ function requestOrganization(
   } as Bindings);
 }
 
-function pluginRequest(
+async function pluginRequest(
   path: string,
   body: Record<string, unknown> | null,
   activeOrganizationId: string | null,
@@ -524,7 +531,7 @@ function pluginRequest(
         }
       : undefined,
     {
-      DB: membershipDatabase(
+      DB: await membershipDatabase(
         memberships,
         [],
         twoFactorRequiredOrganizations,
@@ -541,57 +548,154 @@ interface ResourceOrganizations {
   team?: Record<string, string>;
 }
 
-function membershipDatabase(
+/**
+ * A migrated database seeded so each lookup the middleware makes finds its
+ * case: the user's memberships (some in deleted organizations or requiring
+ * two-factor), each organization's Free-plan seat holder, no billing, and the
+ * organizations that own invitations, members, and teams.
+ */
+async function membershipDatabase(
   memberships: string[],
   deletedMemberships: string[],
   twoFactorRequiredOrganizations: string[],
   freeSeatUserIds: string | Record<string, string> = "user-id",
   resourceOrganizations: ResourceOrganizations = {},
 ) {
-  return {
-    prepare: (query: string) => ({
-      bind: (firstValue: string, ...organizationIds: string[]) => ({
-        all: async () => ({
-          results:
-            firstValue === "user-id"
-              ? [...memberships, ...deletedMemberships]
-                  .filter(
-                    (organizationId) =>
-                      (organizationIds.length === 0 ||
-                        organizationIds.includes(organizationId)) &&
-                      (!deletedMemberships.includes(organizationId) ||
-                        !query.includes('organization."deletedAt" IS NULL')),
-                  )
-                  .map((organizationId) => ({
-                    organizationId,
-                    role: "member",
-                    twoFactorRequired:
-                      twoFactorRequiredOrganizations.includes(organizationId),
-                  }))
-              : [],
-        }),
-        first: async () => {
-          if (query.includes("FROM organization_billing")) return null;
-          if (query.includes("SELECT userId")) {
-            return {
-              userId:
-                typeof freeSeatUserIds === "string"
-                  ? freeSeatUserIds
-                  : freeSeatUserIds[firstValue],
-            };
-          }
-          for (const table of ["invitation", "member", "team"] as const) {
-            if (
-              query.includes(`FROM "${table}"`) ||
-              query.includes(`FROM ${table}`)
-            ) {
-              const organizationId = resourceOrganizations[table]?.[firstValue];
-              return organizationId ? { organizationId } : null;
-            }
-          }
-          return null;
-        },
-      }),
-    }),
-  } as unknown as D1Database;
+  const database = await migratedDatabase();
+  const seatUserFor = (organizationId: string) =>
+    typeof freeSeatUserIds === "string"
+      ? freeSeatUserIds
+      : (freeSeatUserIds[organizationId] ?? "user-id");
+  const organizationIds = new Set<string>([
+    ...memberships,
+    ...deletedMemberships,
+    ...twoFactorRequiredOrganizations,
+    ...Object.keys(typeof freeSeatUserIds === "string" ? {} : freeSeatUserIds),
+    ...[
+      resourceOrganizations.invitation,
+      resourceOrganizations.member,
+      resourceOrganizations.team,
+    ].flatMap((records) => Object.values(records ?? {})),
+  ]);
+  const userIds = new Set(["user-id", "owner-id", "resource-user-id"]);
+  for (const organizationId of organizationIds) {
+    userIds.add(seatUserFor(organizationId));
+  }
+  for (const userId of userIds) {
+    run(
+      database,
+      `INSERT INTO user
+       (id, name, email, emailVerified, createdAt, updatedAt, role, banned)
+       VALUES (?, ?, ?, 1, ?, ?, 'user', 0)`,
+      userId,
+      userId,
+      `${userId}@example.com`,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+    );
+  }
+  for (const organizationId of organizationIds) {
+    seedOrganization(
+      database,
+      organizationId,
+      deletedMemberships.includes(organizationId),
+      seatUserFor(organizationId),
+    );
+  }
+  for (const organizationId of [...memberships, ...deletedMemberships]) {
+    run(
+      database,
+      `INSERT INTO member
+       (id, organizationId, userId, role, createdAt, twoFactorRequired)
+       VALUES (?, ?, 'user-id', 'member', ?, ?)`,
+      `${organizationId}-member`,
+      organizationId,
+      "2026-01-02T00:00:00.000Z",
+      twoFactorRequiredOrganizations.includes(organizationId) ? 1 : 0,
+    );
+  }
+  seedResources(database, resourceOrganizations);
+  return createTestD1(database);
+}
+
+/** Seeds an organization whose Free-plan seat belongs to `seatUserId`. */
+function seedOrganization(
+  database: Database,
+  organizationId: string,
+  deleted: boolean,
+  seatUserId: string,
+) {
+  run(
+    database,
+    `INSERT INTO organization (id, name, slug, createdAt, deletedAt)
+     VALUES (?, ?, ?, ?, ?)`,
+    organizationId,
+    organizationId,
+    organizationId,
+    "2026-01-01T00:00:00.000Z",
+    deleted ? "2026-01-02T00:00:00.000Z" : null,
+  );
+  if (seatUserId === "user-id") return;
+  // An earlier owner holds the seat; the user's own membership comes later.
+  run(
+    database,
+    `INSERT INTO member (id, organizationId, userId, role, createdAt)
+     VALUES (?, ?, ?, 'owner', ?)`,
+    `${organizationId}-seat`,
+    organizationId,
+    seatUserId,
+    "2026-01-01T00:00:00.000Z",
+  );
+}
+
+function seedResources(
+  database: Database,
+  resourceOrganizations: ResourceOrganizations,
+) {
+  const createdAt = "2026-01-03T00:00:00.000Z";
+  for (const [id, organizationId] of Object.entries(
+    resourceOrganizations.invitation ?? {},
+  )) {
+    run(
+      database,
+      `INSERT INTO invitation
+       (id, organizationId, email, role, status, expiresAt, createdAt,
+        inviterId)
+       VALUES (?, ?, 'invitee@example.com', 'member', 'pending', ?, ?,
+               'owner-id')`,
+      id,
+      organizationId,
+      "2099-01-01T00:00:00.000Z",
+      createdAt,
+    );
+  }
+  for (const [id, organizationId] of Object.entries(
+    resourceOrganizations.member ?? {},
+  )) {
+    run(
+      database,
+      `INSERT INTO member (id, organizationId, userId, role, createdAt)
+       VALUES (?, ?, 'resource-user-id', 'member', ?)`,
+      id,
+      organizationId,
+      createdAt,
+    );
+  }
+  for (const [id, organizationId] of Object.entries(
+    resourceOrganizations.team ?? {},
+  )) {
+    run(
+      database,
+      `INSERT INTO team (id, name, organizationId, createdAt)
+       VALUES (?, ?, ?, ?)`,
+      id,
+      id,
+      organizationId,
+      createdAt,
+    );
+  }
+}
+
+function run(database: Database, query: string, ...values: SQLQueryBindings[]) {
+  database.query(query).run(...values);
 }

@@ -1,6 +1,9 @@
+import { and, desc, eq, sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
+import { columnNames, type Db, getDb } from "./db";
 import { canManageOrganization } from "./organizationMembers";
+import { businesses as businessesTable } from "./schema";
 import type { Bindings } from "./types";
 
 interface BusinessRow {
@@ -25,33 +28,39 @@ type BusinessContext = Context<BusinessEnv>;
 const invalidBusinessMessage =
   "Business details are invalid. Use a valid name, EIN, incorporation date, street address, city, two-letter state, and ZIP code.";
 
+const businessColumns = {
+  id: businessesTable.id,
+  name: businessesTable.name,
+  ein: businessesTable.ein,
+  incorporation_date: businessesTable.incorporationDate,
+  street_address: businessesTable.streetAddress,
+  city: businessesTable.city,
+  state: businessesTable.state,
+  zip: businessesTable.zip,
+  created_at: businessesTable.createdAt,
+  updated_at: businessesTable.updatedAt,
+};
+
 export const businesses = new Hono<BusinessEnv>();
 
 businesses.get("/", async (context) => {
-  const result = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address, city, state,
-            zip, created_at, updated_at
-     FROM businesses
-     WHERE organization_id = ?
-     ORDER BY created_at DESC, id DESC`,
-  )
-    .bind(context.get("organizationId"))
-    .all<BusinessRow>();
+  const rows: BusinessRow[] = await getDb(context.env.DB)
+    .select(businessColumns)
+    .from(businessesTable)
+    .where(eq(businessesTable.organizationId, context.get("organizationId")))
+    .orderBy(desc(businessesTable.createdAt), desc(businessesTable.id));
   return context.json({
-    businesses: result.results.map(businessResponse),
+    businesses: rows.map(businessResponse),
     canManage: canManage(context),
   });
 });
 
 businesses.get("/:id", async (context) => {
-  const business = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address, city, state,
-            zip, created_at, updated_at
-     FROM businesses
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(context.req.param("id"), context.get("organizationId"))
-    .first<BusinessRow>();
+  const business = await findBusiness(
+    getDb(context.env.DB),
+    context.req.param("id"),
+    context.get("organizationId"),
+  );
   if (!business) return context.json({ error: "Business not found." }, 404);
   return context.json({ business: businessResponse(business) });
 });
@@ -66,27 +75,42 @@ businesses.post("/", async (context) => {
 
   const id = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-  const result = await context.env.DB.prepare(
-    `INSERT OR IGNORE INTO businesses
-       (id, organization_id, name, ein, incorporation_date, street_address,
-        city, state, zip, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      id,
-      context.get("organizationId"),
-      input.name,
-      input.ein ?? null,
-      input.incorporationDate ?? null,
-      input.streetAddress ?? null,
-      input.city ?? null,
-      input.state ?? null,
-      input.zip ?? null,
-      context.get("authSession").user.id,
-      timestamp,
-      timestamp,
-    )
-    .run();
+  // OR IGNORE, unlike ON CONFLICT DO NOTHING, also skips CHECK violations,
+  // which the builder cannot express.
+  const result = await getDb(context.env.DB).run(
+    sql`INSERT OR IGNORE INTO ${businessesTable}
+          (${columnNames(
+            businessesTable.id,
+            businessesTable.organizationId,
+            businessesTable.name,
+            businessesTable.ein,
+            businessesTable.incorporationDate,
+            businessesTable.streetAddress,
+            businessesTable.city,
+            businessesTable.state,
+            businessesTable.zip,
+            businessesTable.createdBy,
+            businessesTable.createdAt,
+            businessesTable.updatedAt,
+          )})
+        VALUES (${sql.join(
+          [
+            id,
+            context.get("organizationId"),
+            input.name,
+            input.ein ?? null,
+            input.incorporationDate ?? null,
+            input.streetAddress ?? null,
+            input.city ?? null,
+            input.state ?? null,
+            input.zip ?? null,
+            context.get("authSession").user.id,
+            timestamp,
+            timestamp,
+          ].map((value) => sql`${value}`),
+          sql`, `,
+        )})`,
+  );
   if (result.meta.changes !== 1) {
     return context.json(
       { error: "A business with that EIN already exists." },
@@ -121,14 +145,8 @@ businesses.patch("/:id", async (context) => {
   }
 
   const id = context.req.param("id");
-  const existing = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address, city, state,
-            zip, created_at, updated_at
-     FROM businesses
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(id, context.get("organizationId"))
-    .first<BusinessRow>();
+  const db = getDb(context.env.DB);
+  const existing = await findBusiness(db, id, context.get("organizationId"));
   if (!existing) return context.json({ error: "Business not found." }, 404);
 
   const timestamp = new Date().toISOString();
@@ -144,39 +162,38 @@ businesses.patch("/:id", async (context) => {
       : input.streetAddress;
   const state = input.state === undefined ? existing.state : input.state;
   const zip = input.zip === undefined ? existing.zip : input.zip;
-  const result = await context.env.DB.prepare(
-    `UPDATE OR IGNORE businesses
-     SET name = ?, ein = ?, incorporation_date = ?, street_address = ?,
-         city = ?, state = ?, zip = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(
-      input.name,
-      ein,
-      incorporationDate,
-      streetAddress,
-      city,
-      state,
-      zip,
-      timestamp,
-      id,
-      context.get("organizationId"),
-    )
-    .run();
+  // The update builder cannot express UPDATE OR IGNORE.
+  const result = await db.run(
+    sql`UPDATE OR IGNORE ${businessesTable}
+        SET ${sql.join(
+          (
+            [
+              [businessesTable.name, input.name],
+              [businessesTable.ein, ein],
+              [businessesTable.incorporationDate, incorporationDate],
+              [businessesTable.streetAddress, streetAddress],
+              [businessesTable.city, city],
+              [businessesTable.state, state],
+              [businessesTable.zip, zip],
+              [businessesTable.updatedAt, timestamp],
+            ] as const
+          ).map(
+            ([column, value]) => sql`${sql.identifier(column.name)} = ${value}`,
+          ),
+          sql`, `,
+        )}
+        WHERE ${and(
+          eq(businessesTable.id, id),
+          eq(businessesTable.organizationId, context.get("organizationId")),
+        )}`,
+  );
   if (result.meta.changes !== 1) {
     return context.json(
       { error: "A business with that EIN already exists." },
       409,
     );
   }
-  const updated = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address, city, state,
-            zip, created_at, updated_at
-     FROM businesses
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(id, context.get("organizationId"))
-    .first<BusinessRow>();
+  const updated = await findBusiness(db, id, context.get("organizationId"));
   if (!updated) return context.json({ error: "Business not found." }, 404);
   return context.json({
     business: businessResponse(updated),
@@ -185,17 +202,37 @@ businesses.patch("/:id", async (context) => {
 
 businesses.delete("/:id", async (context) => {
   if (!canManage(context)) return managerRequired(context);
-  const result = await context.env.DB.prepare(
-    `DELETE FROM businesses
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(context.req.param("id"), context.get("organizationId"))
+  const result = await getDb(context.env.DB)
+    .delete(businessesTable)
+    .where(
+      and(
+        eq(businessesTable.id, context.req.param("id")),
+        eq(businessesTable.organizationId, context.get("organizationId")),
+      ),
+    )
     .run();
   if (result.meta.changes !== 1) {
     return context.json({ error: "Business not found." }, 404);
   }
   return context.body(null, 204);
 });
+
+function findBusiness(
+  db: Db,
+  id: string,
+  organizationId: string,
+): Promise<BusinessRow | undefined> {
+  return db
+    .select(businessColumns)
+    .from(businessesTable)
+    .where(
+      and(
+        eq(businessesTable.id, id),
+        eq(businessesTable.organizationId, organizationId),
+      ),
+    )
+    .get();
+}
 
 function businessInput(body: unknown) {
   if (!body || typeof body !== "object") return null;

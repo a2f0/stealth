@@ -1,3 +1,20 @@
+import {
+  and,
+  asc,
+  eq,
+  exists,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import {
@@ -11,8 +28,16 @@ import {
   isDefinitiveCheckrRejection,
   listCheckrCandidateInvitations,
 } from "./checkr";
+import { type Db, getDb } from "./db";
 import { normalizeFilename } from "./filenames";
 import { canManageOrganization } from "./organizationMembers";
+import {
+  deletedObjectCleanup,
+  employeeRequirements,
+  invitation,
+  member,
+  user,
+} from "./schema";
 import type { Bindings } from "./types";
 
 type RequirementKind = "form" | "background_check" | "credit_check";
@@ -59,42 +84,70 @@ const employeeForms = new Hono<EmployeeFormsEnv>();
 const maxDocumentBytes = 10 * 1024 * 1024;
 const maxMultipartBytes = maxDocumentBytes + 256 * 1024;
 const documentTypes = new Set(["application/pdf", "image/jpeg", "image/png"]);
+const expiredCheckrStatuses = [
+  "expired",
+  "canceled",
+  "deleted",
+  "partially_canceled",
+];
+const targetUser = alias(user, "target");
+
+function selectRequirements(db: Db) {
+  return db
+    .select({
+      id: employeeRequirements.id,
+      kind: employeeRequirements.kind,
+      title: employeeRequirements.title,
+      due_date: employeeRequirements.dueDate,
+      status: employeeRequirements.status,
+      document_key: employeeRequirements.documentKey,
+      document_filename: employeeRequirements.documentFilename,
+      document_size: employeeRequirements.documentSize,
+      document_revision: employeeRequirements.documentRevision,
+      invitation_id: employeeRequirements.invitationId,
+      invitation_status: invitation.status,
+      member_id: employeeRequirements.memberId,
+      completed_at: employeeRequirements.completedAt,
+      checkr_candidate_id: employeeRequirements.checkrCandidateId,
+      checkr_invitation_id: employeeRequirements.checkrInvitationId,
+      checkr_report_id: employeeRequirements.checkrReportId,
+      checkr_result: employeeRequirements.checkrResult,
+      checkr_invitation_status: employeeRequirements.checkrInvitationStatus,
+      checkr_starting_at: employeeRequirements.checkrStartingAt,
+      checkr_start_nonce: employeeRequirements.checkrStartNonce,
+      checkr_start_nonce_at: employeeRequirements.checkrStartNonceAt,
+      checkr_start_package: employeeRequirements.checkrStartPackage,
+      checkr_attempt: employeeRequirements.checkrAttempt,
+      checkr_refresh_revision: employeeRequirements.checkrRefreshRevision,
+      target_email: sql<
+        string | null
+      >`COALESCE(${targetUser.email}, ${invitation.email}, ${employeeRequirements.targetEmail})`,
+      target_name: targetUser.name,
+    })
+    .from(employeeRequirements)
+    .leftJoin(member, eq(member.id, employeeRequirements.memberId))
+    .leftJoin(targetUser, eq(targetUser.id, member.userId))
+    .leftJoin(invitation, eq(invitation.id, employeeRequirements.invitationId))
+    .$dynamic();
+}
 
 employeeForms.get("/", async (context) => {
   const organizationId = context.get("organizationId");
   const manager = canManageOrganization(context.get("organizationRole"));
   const userId = context.get("authSession").user.id;
-  const result = await context.env.DB.prepare(
-    `SELECT requirement.id, requirement.kind, requirement.title,
-            requirement.due_date, requirement.status, requirement.document_key,
-            requirement.document_filename, requirement.document_size,
-            requirement.document_revision,
-            requirement.invitation_id, invitation.status AS invitation_status,
-            requirement.member_id,
-            requirement.completed_at, requirement.checkr_candidate_id,
-            requirement.checkr_invitation_id, requirement.checkr_report_id,
-            requirement.checkr_result, requirement.checkr_invitation_status,
-            requirement.checkr_starting_at, requirement.checkr_start_nonce,
-            requirement.checkr_start_nonce_at, requirement.checkr_attempt,
-            requirement.checkr_start_package,
-            requirement.checkr_refresh_revision,
-            COALESCE(target.email, invitation.email, requirement.target_email)
-              AS target_email,
-            target.name AS target_name
-     FROM employee_requirements AS requirement
-     LEFT JOIN member ON member.id = requirement.member_id
-     LEFT JOIN user AS target ON target.id = member.userId
-     LEFT JOIN invitation ON invitation.id = requirement.invitation_id
-     WHERE requirement.organization_id = ?
-       AND (${manager ? "1 = 1" : "member.userId = ?"})
-     ORDER BY requirement.due_date ASC, requirement.created_at ASC`,
-  )
-    .bind(...(manager ? [organizationId] : [organizationId, userId]))
-    .all<RequirementRow>();
+  const rows = (await selectRequirements(getDb(context.env.DB))
+    .where(
+      and(
+        eq(employeeRequirements.organizationId, organizationId),
+        manager ? undefined : eq(member.userId, userId),
+      ),
+    )
+    .orderBy(
+      asc(employeeRequirements.dueDate),
+      asc(employeeRequirements.createdAt),
+    )) as RequirementRow[];
   return context.json({
-    requirements: result.results.map((row) =>
-      toRequirement(row, manager, context.env),
-    ),
+    requirements: rows.map((row) => toRequirement(row, manager, context.env)),
   });
 });
 
@@ -124,49 +177,38 @@ employeeForms.post("/", async (context) => {
     return context.json({ error: "Choose 1 to 20 valid requirements." }, 400);
   }
   const organizationId = context.get("organizationId");
-  const target = await context.env.DB.prepare(
-    memberId
-      ? `SELECT user.email, user.id AS user_id
-         FROM member JOIN user ON user.id = member.userId
-         WHERE member.id = ? AND member.organizationId = ?`
-      : `SELECT email, NULL AS user_id FROM invitation
-         WHERE id = ? AND organizationId = ? AND status = 'pending'`,
-  )
-    .bind(memberId ?? invitationId, organizationId)
-    .first<{ email: string; user_id: string | null }>();
+  const targetId = (memberId ?? invitationId) as string;
+  const db = getDb(context.env.DB);
+  const target = await findAssignmentTarget(
+    db,
+    memberId,
+    targetId,
+    organizationId,
+  );
   if (!target) return context.json({ error: "Person not found." }, 404);
 
   const now = new Date().toISOString();
   const requirements = body.requirements as RequirementInput[];
   const ids = requirements.map(() => crypto.randomUUID());
-  const inserted = await context.env.DB.batch(
-    requirements.map((requirement, index) =>
-      context.env.DB.prepare(
-        `INSERT INTO employee_requirements
-         (id, organization_id, invitation_id, member_id, target_email,
-          assigned_user_id,
-          kind, title, due_date, created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-         WHERE EXISTS (
-           SELECT 1 FROM ${memberId ? "member" : "invitation"}
-           WHERE id = ? AND organizationId = ?
-             ${memberId ? "" : "AND status = 'pending'"}
-         )`,
-      ).bind(
-        ids[index],
+  const inserted = await db.batch(
+    insertRequirements(
+      db,
+      memberId,
+      targetId,
+      organizationId,
+      requirements.map((requirement, index) => ({
+        id: ids[index],
         organizationId,
         invitationId,
         memberId,
-        target.email.toLowerCase(),
-        target.user_id,
-        requirement.kind,
-        requirement.title.trim(),
-        requirement.dueDate,
-        now,
-        now,
-        memberId ?? invitationId,
-        organizationId,
-      ),
+        targetEmail: target.email.toLowerCase(),
+        assignedUserId: target.user_id,
+        kind: requirement.kind,
+        title: requirement.title.trim(),
+        dueDate: requirement.dueDate,
+        createdAt: now,
+        updatedAt: now,
+      })),
     ),
   );
   if (inserted.some((result) => result.meta.changes !== 1)) {
@@ -177,6 +219,81 @@ employeeForms.post("/", async (context) => {
   }
   return context.json({ ids }, 201);
 });
+
+function assignmentTargetWhere(
+  memberId: string | null,
+  targetId: string,
+  organizationId: string,
+) {
+  return memberId
+    ? and(eq(member.id, targetId), eq(member.organizationId, organizationId))
+    : and(
+        eq(invitation.id, targetId),
+        eq(invitation.organizationId, organizationId),
+        eq(invitation.status, "pending"),
+      );
+}
+
+async function findAssignmentTarget(
+  db: Db,
+  memberId: string | null,
+  targetId: string,
+  organizationId: string,
+): Promise<{ email: string; user_id: string | null } | undefined> {
+  const where = assignmentTargetWhere(memberId, targetId, organizationId);
+  return memberId
+    ? db
+        .select({ email: user.email, user_id: user.id })
+        .from(member)
+        .innerJoin(user, eq(user.id, member.userId))
+        .where(where)
+        .get()
+    : db
+        .select({ email: invitation.email, user_id: sql<string | null>`NULL` })
+        .from(invitation)
+        .where(where)
+        .get();
+}
+
+type RequirementColumn = keyof typeof employeeRequirements.$inferInsert;
+
+/**
+ * One insert per requirement that writes nothing once the member or pending
+ * invitation is gone. Drizzle's insert().select() takes every column in table
+ * order, so omitted columns select their schema default as values() would.
+ */
+function insertRequirements(
+  db: Db,
+  memberId: string | null,
+  targetId: string,
+  organizationId: string,
+  rows: Partial<Record<RequirementColumn, unknown>>[],
+) {
+  const where = assignmentTargetWhere(memberId, targetId, organizationId);
+  const statements = rows.map((values) => {
+    const fields = Object.fromEntries(
+      Object.entries(getTableColumns(employeeRequirements)).map(
+        ([key, column]) => [
+          key,
+          sql`${key in values ? values[key as RequirementColumn] : (column.default ?? null)}`.as(
+            key,
+          ),
+        ],
+      ),
+    ) as Record<RequirementColumn, SQL.Aliased>;
+    return db
+      .insert(employeeRequirements)
+      .select(
+        memberId
+          ? db.select(fields).from(member).where(where)
+          : db.select(fields).from(invitation).where(where),
+      );
+  });
+  return statements as [
+    (typeof statements)[number],
+    ...(typeof statements)[number][],
+  ];
+}
 
 employeeForms.patch("/:id", async (context) => {
   if (!canManageOrganization(context.get("organizationRole"))) {
@@ -192,41 +309,47 @@ employeeForms.patch("/:id", async (context) => {
     return context.json({ error: "Invalid status or due date." }, 400);
   }
   const now = new Date().toISOString();
-  const updated = await context.env.DB.prepare(
-    `UPDATE employee_requirements
-     SET status = COALESCE(?, status), due_date = COALESCE(?, due_date),
-         completed_at = CASE
-           WHEN ? IS NULL THEN completed_at
-           WHEN ? = 'complete' THEN ?
-           ELSE NULL
-         END,
-         checkr_refresh_revision = checkr_refresh_revision +
-           CASE WHEN ? IS NOT NULL AND kind <> 'form' THEN 1 ELSE 0 END,
-         updated_at = ?
-     WHERE id = ? AND organization_id = ?
-       AND (? IS NULL OR kind <> 'form' OR document_revision = ?)
-       AND (? IS NULL OR checkr_invitation_id IS NULL OR
-            checkr_invitation_status IN
-              ('expired', 'canceled', 'deleted', 'partially_canceled'))
-       AND (? IS NULL OR
-            (checkr_starting_at IS NULL AND checkr_start_nonce IS NULL))`,
-  )
-    .bind(
-      status ?? null,
-      dueDate ?? null,
-      status ?? null,
-      status ?? null,
-      now,
-      status ?? null,
-      now,
-      row.id,
-      context.get("organizationId"),
-      status ?? null,
-      body.documentRevision ?? null,
-      status ?? null,
-      status ?? null,
-    )
-    .run();
+  const updated = await getDb(context.env.DB)
+    .update(employeeRequirements)
+    .set({
+      status: sql`COALESCE(${status ?? null}, ${employeeRequirements.status})`,
+      dueDate: sql`COALESCE(${dueDate ?? null}, ${employeeRequirements.dueDate})`,
+      completedAt: sql`CASE
+        WHEN ${status ?? null} IS NULL THEN ${employeeRequirements.completedAt}
+        WHEN ${status ?? null} = 'complete' THEN ${now}
+        ELSE NULL
+      END`,
+      checkrRefreshRevision: sql`${employeeRequirements.checkrRefreshRevision} +
+        CASE WHEN ${status ?? null} IS NOT NULL
+          AND ${employeeRequirements.kind} <> 'form' THEN 1 ELSE 0 END`,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(employeeRequirements.id, row.id),
+        eq(employeeRequirements.organizationId, context.get("organizationId")),
+        or(
+          sql`${status ?? null} IS NULL`,
+          ne(employeeRequirements.kind, "form"),
+          sql`${employeeRequirements.documentRevision} = ${body.documentRevision ?? null}`,
+        ),
+        or(
+          sql`${status ?? null} IS NULL`,
+          isNull(employeeRequirements.checkrInvitationId),
+          inArray(
+            employeeRequirements.checkrInvitationStatus,
+            expiredCheckrStatuses,
+          ),
+        ),
+        or(
+          sql`${status ?? null} IS NULL`,
+          and(
+            isNull(employeeRequirements.checkrStartingAt),
+            isNull(employeeRequirements.checkrStartNonce),
+          ),
+        ),
+      ),
+    );
   if (!updated.meta.changes) {
     return context.json({ error: "The form changed. Please try again." }, 409);
   }
@@ -249,16 +372,23 @@ employeeForms.delete("/:id", async (context) => {
       409,
     );
   }
-  const deleted = await context.env.DB.prepare(
-    `DELETE FROM employee_requirements
-     WHERE id = ? AND organization_id = ? AND checkr_starting_at IS NULL
-       AND checkr_start_nonce IS NULL
-       AND (checkr_invitation_id IS NULL OR
-            checkr_invitation_status IN
-              ('expired', 'canceled', 'deleted', 'partially_canceled'))`,
-  )
-    .bind(row.id, context.get("organizationId"))
-    .run();
+  const deleted = await getDb(context.env.DB)
+    .delete(employeeRequirements)
+    .where(
+      and(
+        eq(employeeRequirements.id, row.id),
+        eq(employeeRequirements.organizationId, context.get("organizationId")),
+        isNull(employeeRequirements.checkrStartingAt),
+        isNull(employeeRequirements.checkrStartNonce),
+        or(
+          isNull(employeeRequirements.checkrInvitationId),
+          inArray(
+            employeeRequirements.checkrInvitationStatus,
+            expiredCheckrStatuses,
+          ),
+        ),
+      ),
+    );
   if (!deleted.meta.changes) {
     return context.json(
       { error: "Screening is changing. Try again later." },
@@ -288,52 +418,23 @@ employeeForms.post("/:id/document", async (context) => {
   }
   const key = `organizations/${context.get("organizationId")}/employee-forms/${row.id}/${crypto.randomUUID()}`;
   const filename = normalizeFilename(file.name, "form", 200);
-  await context.env.DB.prepare(
-    `INSERT INTO deleted_object_cleanup
-       (id, organization_id, object_key, deleted_at, cleanup_token,
-        cleanup_claimed_at)
-     VALUES (?, ?, ?, ?, NULL, NULL)`,
-  )
-    .bind(
-      `employee-form-upload:${crypto.randomUUID()}`,
-      context.get("organizationId"),
-      key,
-      new Date().toISOString(),
-    )
-    .run();
+  const db = getDb(context.env.DB);
+  await db.insert(deletedObjectCleanup).values({
+    id: `employee-form-upload:${crypto.randomUUID()}`,
+    organizationId: context.get("organizationId"),
+    objectKey: key,
+    deletedAt: new Date().toISOString(),
+    cleanupToken: null,
+    cleanupClaimedAt: null,
+  });
   try {
     await context.env.STORAGE.put(key, file, {
       httpMetadata: { contentType: file.type },
     });
-    const updated = await context.env.DB.prepare(
-      `UPDATE employee_requirements
-       SET document_key = ?, document_filename = ?, document_size = ?,
-           document_revision = document_revision + 1,
-           status = 'submitted', completed_at = NULL, updated_at = ?
-       WHERE id = ? AND organization_id = ? AND document_key IS ?
-         AND EXISTS (
-           SELECT 1 FROM deleted_object_cleanup
-           WHERE object_key = ? AND cleanup_token IS NULL
-         )
-         AND (? = 1 OR EXISTS (
-           SELECT 1 FROM member WHERE member.id = employee_requirements.member_id
-             AND member.organizationId = ? AND member.userId = ?
-         ))`,
-    )
-      .bind(
-        key,
-        filename,
-        file.size,
-        new Date().toISOString(),
-        row.id,
-        context.get("organizationId"),
-        row.document_key,
-        key,
-        canManageOrganization(context.get("organizationRole")) ? 1 : 0,
-        context.get("organizationId"),
-        context.get("authSession").user.id,
-      )
-      .run();
+    const updated = await linkUploadedDocument(context, row, key, {
+      filename,
+      size: file.size,
+    });
     if (!updated.meta.changes) {
       await context.env.STORAGE.delete(key).catch(console.error);
       return context.json(
@@ -342,12 +443,19 @@ employeeForms.post("/:id/document", async (context) => {
       );
     }
   } catch (cause) {
-    const linked = await context.env.DB.prepare(
-      `SELECT document_key FROM employee_requirements
-       WHERE id = ? AND organization_id = ?`,
-    )
-      .bind(row.id, context.get("organizationId"))
-      .first<{ document_key: string | null }>();
+    const linked = await db
+      .select({ document_key: employeeRequirements.documentKey })
+      .from(employeeRequirements)
+      .where(
+        and(
+          eq(employeeRequirements.id, row.id),
+          eq(
+            employeeRequirements.organizationId,
+            context.get("organizationId"),
+          ),
+        ),
+      )
+      .get();
     if (linked?.document_key === key) {
       return context.json({ filename, status: "submitted" });
     }
@@ -356,6 +464,59 @@ employeeForms.post("/:id/document", async (context) => {
   }
   return context.json({ filename, status: "submitted" });
 });
+
+function linkUploadedDocument(
+  context: Context<EmployeeFormsEnv>,
+  row: RequirementRow,
+  key: string,
+  document: { filename: string; size: number },
+) {
+  const db = getDb(context.env.DB);
+  return db
+    .update(employeeRequirements)
+    .set({
+      documentKey: key,
+      documentFilename: document.filename,
+      documentSize: document.size,
+      documentRevision: sql`${employeeRequirements.documentRevision} + 1`,
+      status: "submitted",
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(employeeRequirements.id, row.id),
+        eq(employeeRequirements.organizationId, context.get("organizationId")),
+        sql`${employeeRequirements.documentKey} IS ${row.document_key}`,
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(deletedObjectCleanup)
+            .where(
+              and(
+                eq(deletedObjectCleanup.objectKey, key),
+                isNull(deletedObjectCleanup.cleanupToken),
+              ),
+            ),
+        ),
+        or(
+          sql`${canManageOrganization(context.get("organizationRole")) ? 1 : 0} = 1`,
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(member)
+              .where(
+                and(
+                  eq(member.id, employeeRequirements.memberId),
+                  eq(member.organizationId, context.get("organizationId")),
+                  eq(member.userId, context.get("authSession").user.id),
+                ),
+              ),
+          ),
+        ),
+      ),
+    );
+}
 
 async function readBoundedDocumentFile(request: Request) {
   const contentType = request.headers.get("content-type");
@@ -569,31 +730,29 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
       ? "pending"
       : "in_progress";
   const now = new Date().toISOString();
-  const refreshed = await context.env.DB.prepare(
-    `UPDATE employee_requirements
-     SET checkr_invitation_status = ?, checkr_report_id = ?,
-         checkr_result = ?, status = ?,
-         completed_at = CASE WHEN ? = 'complete'
-           THEN COALESCE(completed_at, ?) ELSE NULL END,
-         updated_at = ?,
-         checkr_refresh_revision = checkr_refresh_revision + 1
-     WHERE id = ? AND organization_id = ? AND checkr_invitation_id = ?
-       AND checkr_refresh_revision = ?`,
-  )
-    .bind(
-      screeningStatus,
-      reportId,
-      report?.result ?? null,
-      nextStatus,
-      nextStatus,
-      now,
-      now,
-      row.id,
-      context.get("organizationId"),
-      row.checkr_invitation_id,
-      row.checkr_refresh_revision,
-    )
-    .run();
+  const refreshed = await getDb(context.env.DB)
+    .update(employeeRequirements)
+    .set({
+      checkrInvitationStatus: screeningStatus,
+      checkrReportId: reportId,
+      checkrResult: report?.result ?? null,
+      status: nextStatus,
+      completedAt: sql`CASE WHEN ${nextStatus} = 'complete'
+        THEN COALESCE(${employeeRequirements.completedAt}, ${now}) ELSE NULL END`,
+      updatedAt: now,
+      checkrRefreshRevision: sql`${employeeRequirements.checkrRefreshRevision} + 1`,
+    })
+    .where(
+      and(
+        eq(employeeRequirements.id, row.id),
+        eq(employeeRequirements.organizationId, context.get("organizationId")),
+        eq(employeeRequirements.checkrInvitationId, row.checkr_invitation_id),
+        eq(
+          employeeRequirements.checkrRefreshRevision,
+          row.checkr_refresh_revision,
+        ),
+      ),
+    );
   if (!refreshed.meta.changes) {
     return context.json({ error: "Screening changed. Please refresh." }, 409);
   }
@@ -622,46 +781,66 @@ async function claimCheckrStart(
       context.env,
       row.kind as "background_check" | "credit_check",
     ) || row.checkr_start_package;
-  return context.env.DB.prepare(
-    `UPDATE employee_requirements
-     SET checkr_start_nonce = CASE
-           WHEN checkr_invitation_id IS NOT NULL THEN ?
-           ELSE COALESCE(checkr_start_nonce, ?)
-         END,
-         checkr_start_nonce_at = CASE
-           WHEN checkr_invitation_id IS NOT NULL OR checkr_start_nonce_at IS NULL
-             THEN ? ELSE checkr_start_nonce_at
-         END,
-         checkr_starting_at = ?,
-         checkr_start_package = CASE
-           WHEN checkr_start_nonce IS NULL OR checkr_invitation_id IS NOT NULL
-             THEN ? ELSE COALESCE(checkr_start_package, ?) END,
-         checkr_attempt = CASE WHEN checkr_invitation_id IS NOT NULL
-           THEN checkr_attempt + 1 ELSE checkr_attempt END,
-         checkr_invitation_id = NULL, checkr_invitation_status = NULL,
-         checkr_report_id = NULL, checkr_result = NULL,
-         status = 'pending', completed_at = NULL, updated_at = ?
-     WHERE id = ? AND organization_id = ?
-       AND (checkr_invitation_id IS NULL OR
-            checkr_invitation_status IN
-              ('expired', 'canceled', 'deleted', 'partially_canceled'))
-       AND (checkr_starting_at IS NULL OR checkr_starting_at < ?)
-     RETURNING checkr_candidate_id, checkr_start_nonce,
-               checkr_start_nonce_at, checkr_start_package`,
-  )
-    .bind(
-      nonce,
-      nonce,
-      now.toISOString(),
-      now.toISOString(),
-      packageSlug,
-      packageSlug,
-      now.toISOString(),
-      row.id,
-      context.get("organizationId"),
-      new Date(now.getTime() - 5 * 60_000).toISOString(),
+  const {
+    checkrAttempt,
+    checkrInvitationId,
+    checkrStartNonce,
+    checkrStartNonceAt,
+    checkrStartPackage,
+    checkrStartingAt,
+  } = employeeRequirements;
+  return getDb(context.env.DB)
+    .update(employeeRequirements)
+    .set({
+      checkrStartNonce: sql`CASE
+        WHEN ${checkrInvitationId} IS NOT NULL THEN ${nonce}
+        ELSE COALESCE(${checkrStartNonce}, ${nonce})
+      END`,
+      checkrStartNonceAt: sql`CASE
+        WHEN ${checkrInvitationId} IS NOT NULL OR ${checkrStartNonceAt} IS NULL
+          THEN ${now.toISOString()} ELSE ${checkrStartNonceAt}
+      END`,
+      checkrStartingAt: now.toISOString(),
+      checkrStartPackage: sql`CASE
+        WHEN ${checkrStartNonce} IS NULL OR ${checkrInvitationId} IS NOT NULL
+          THEN ${packageSlug} ELSE COALESCE(${checkrStartPackage}, ${packageSlug}) END`,
+      checkrAttempt: sql`CASE WHEN ${checkrInvitationId} IS NOT NULL
+        THEN ${checkrAttempt} + 1 ELSE ${checkrAttempt} END`,
+      checkrInvitationId: null,
+      checkrInvitationStatus: null,
+      checkrReportId: null,
+      checkrResult: null,
+      status: "pending",
+      completedAt: null,
+      updatedAt: now.toISOString(),
+    })
+    .where(
+      and(
+        eq(employeeRequirements.id, row.id),
+        eq(employeeRequirements.organizationId, context.get("organizationId")),
+        or(
+          isNull(checkrInvitationId),
+          inArray(
+            employeeRequirements.checkrInvitationStatus,
+            expiredCheckrStatuses,
+          ),
+        ),
+        or(
+          isNull(checkrStartingAt),
+          lt(
+            checkrStartingAt,
+            new Date(now.getTime() - 5 * 60_000).toISOString(),
+          ),
+        ),
+      ),
     )
-    .first<CheckrStartClaim>();
+    .returning({
+      checkr_candidate_id: employeeRequirements.checkrCandidateId,
+      checkr_start_nonce: checkrStartNonce,
+      checkr_start_nonce_at: checkrStartNonceAt,
+      checkr_start_package: checkrStartPackage,
+    })
+    .get() as Promise<CheckrStartClaim | undefined>;
 }
 
 async function launchCheckrScreening(
@@ -689,19 +868,13 @@ async function launchCheckrScreening(
       ).id;
     if (!candidateId) throw new Error("Checkr did not return a candidate ID.");
     if (!claim.checkr_candidate_id) {
-      const stored = await context.env.DB.prepare(
-        `UPDATE employee_requirements
-         SET checkr_candidate_id = ?, updated_at = ?
-         WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
-      )
-        .bind(
-          candidateId,
-          new Date().toISOString(),
-          row.id,
-          context.get("organizationId"),
-          claim.checkr_start_nonce,
-        )
-        .run();
+      const stored = await getDb(context.env.DB)
+        .update(employeeRequirements)
+        .set({
+          checkrCandidateId: candidateId,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(checkrStartAttempt(context, row.id, claim.checkr_start_nonce));
       if (!stored.meta.changes) return null;
     }
     if (row.kind === "form") return null;
@@ -747,14 +920,25 @@ async function launchCheckrScreening(
       throw new Error("Checkr did not return an invitation ID.");
     return await storeCheckrInvitation(context, row, nonce, invitation, true);
   } catch (cause) {
-    await context.env.DB.prepare(
-      `UPDATE employee_requirements SET checkr_starting_at = NULL
-       WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
-    )
-      .bind(row.id, context.get("organizationId"), nonce)
-      .run();
+    await getDb(context.env.DB)
+      .update(employeeRequirements)
+      .set({ checkrStartingAt: null })
+      .where(checkrStartAttempt(context, row.id, nonce));
     throw cause;
   }
+}
+
+/** Matches the requirement while it still holds this Checkr start attempt. */
+function checkrStartAttempt(
+  context: Context<EmployeeFormsEnv>,
+  requirementId: string,
+  nonce: string,
+) {
+  return and(
+    eq(employeeRequirements.id, requirementId),
+    eq(employeeRequirements.organizationId, context.get("organizationId")),
+    eq(employeeRequirements.checkrStartNonce, nonce),
+  );
 }
 
 async function requestCheckrForStart<T>(
@@ -786,21 +970,19 @@ async function rotateExpiredCheckrNonce(
     return nonce;
   }
   const nextNonce = crypto.randomUUID();
-  const rotated = await context.env.DB.prepare(
-    `UPDATE employee_requirements
-     SET checkr_start_nonce = ?, checkr_start_nonce_at = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?
-       AND checkr_starting_at IS NOT NULL`,
-  )
-    .bind(
-      nextNonce,
-      new Date().toISOString(),
-      new Date().toISOString(),
-      requirementId,
-      context.get("organizationId"),
-      nonce,
-    )
-    .run();
+  const rotated = await getDb(context.env.DB)
+    .update(employeeRequirements)
+    .set({
+      checkrStartNonce: nextNonce,
+      checkrStartNonceAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        checkrStartAttempt(context, requirementId, nonce),
+        isNotNull(employeeRequirements.checkrStartingAt),
+      ),
+    );
   return rotated.meta.changes ? nextNonce : null;
 }
 
@@ -808,15 +990,19 @@ async function screeningTargetActive(
   context: Context<EmployeeFormsEnv>,
   requirementId: string,
 ) {
-  const active = await context.env.DB.prepare(
-    `SELECT requirement.id FROM employee_requirements AS requirement
-     LEFT JOIN member ON member.id = requirement.member_id
-     LEFT JOIN invitation ON invitation.id = requirement.invitation_id
-     WHERE requirement.id = ? AND requirement.organization_id = ?
-       AND (member.id IS NOT NULL OR invitation.status = 'pending')`,
-  )
-    .bind(requirementId, context.get("organizationId"))
-    .first<{ id: string }>();
+  const active = await getDb(context.env.DB)
+    .select({ id: employeeRequirements.id })
+    .from(employeeRequirements)
+    .leftJoin(member, eq(member.id, employeeRequirements.memberId))
+    .leftJoin(invitation, eq(invitation.id, employeeRequirements.invitationId))
+    .where(
+      and(
+        eq(employeeRequirements.id, requirementId),
+        eq(employeeRequirements.organizationId, context.get("organizationId")),
+        or(isNotNull(member.id), eq(invitation.status, "pending")),
+      ),
+    )
+    .get();
   return Boolean(active);
 }
 
@@ -826,23 +1012,17 @@ async function releaseUnresolvedCheckrStart(
   nonce: string,
   clearNonce: boolean,
 ) {
-  await context.env.DB.prepare(
-    `UPDATE employee_requirements
-     SET checkr_starting_at = NULL,
-         checkr_start_nonce = CASE WHEN ? = 1 THEN NULL ELSE checkr_start_nonce END,
-         checkr_start_nonce_at = CASE WHEN ? = 1 THEN NULL ELSE checkr_start_nonce_at END,
-         updated_at = ?
-     WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
-  )
-    .bind(
-      clearNonce ? 1 : 0,
-      clearNonce ? 1 : 0,
-      new Date().toISOString(),
-      requirementId,
-      context.get("organizationId"),
-      nonce,
-    )
-    .run();
+  await getDb(context.env.DB)
+    .update(employeeRequirements)
+    .set({
+      checkrStartingAt: null,
+      checkrStartNonce: sql`CASE WHEN ${clearNonce ? 1 : 0} = 1
+        THEN NULL ELSE ${employeeRequirements.checkrStartNonce} END`,
+      checkrStartNonceAt: sql`CASE WHEN ${clearNonce ? 1 : 0} = 1
+        THEN NULL ELSE ${employeeRequirements.checkrStartNonceAt} END`,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(checkrStartAttempt(context, requirementId, nonce));
 }
 
 async function findPriorCheckrInvitation(
@@ -916,25 +1096,21 @@ async function storeCheckrInvitation(
   invitation: Awaited<ReturnType<typeof createCheckrInvitation>>,
   cancelIfOrphaned: boolean,
 ) {
-  const stored = await context.env.DB.prepare(
-    `UPDATE employee_requirements
-     SET checkr_invitation_id = ?, checkr_invitation_status = ?,
-         checkr_report_id = ?, status = ?,
-         checkr_starting_at = NULL, checkr_start_nonce = NULL,
-         checkr_start_nonce_at = NULL, updated_at = ?
-     WHERE id = ? AND organization_id = ? AND checkr_start_nonce = ?`,
-  )
-    .bind(
-      invitation.id,
-      invitation.status,
-      invitation.report_id,
-      isExpiredCheckrStatus(invitation.status) ? "pending" : "in_progress",
-      new Date().toISOString(),
-      row.id,
-      context.get("organizationId"),
-      nonce,
-    )
-    .run();
+  const stored = await getDb(context.env.DB)
+    .update(employeeRequirements)
+    .set({
+      checkrInvitationId: invitation.id,
+      checkrInvitationStatus: invitation.status,
+      checkrReportId: invitation.report_id,
+      status: isExpiredCheckrStatus(invitation.status)
+        ? "pending"
+        : "in_progress",
+      checkrStartingAt: null,
+      checkrStartNonce: null,
+      checkrStartNonceAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(checkrStartAttempt(context, row.id, nonce));
   if (stored.meta.changes) return invitation;
   const current = await findRequirement(context);
   if (current?.checkr_invitation_id === invitation.id) return invitation;
@@ -957,27 +1133,24 @@ export async function assignAcceptedInvitationRequirements(
   invitationId: string,
   memberId: string,
 ) {
-  const statement = database.prepare(
-    `UPDATE employee_requirements
-     SET invitation_id = NULL, member_id = ?,
-         assigned_user_id = (SELECT userId FROM member WHERE id = ?),
-         updated_at = ?
-     WHERE organization_id = ? AND invitation_id = ?`,
-  );
-  const values = [
-    memberId,
-    memberId,
-    new Date().toISOString(),
-    organizationId,
-    invitationId,
-  ];
-  if (typeof statement.bind === "function") {
-    await statement.bind(...values).run();
-  } else {
-    await (
-      statement as unknown as { run: (...values: string[]) => unknown }
-    ).run(...values);
-  }
+  const db = getDb(database);
+  await db
+    .update(employeeRequirements)
+    .set({
+      invitationId: null,
+      memberId,
+      assignedUserId: sql`${db
+        .select({ userId: member.userId })
+        .from(member)
+        .where(eq(member.id, memberId))}`,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(employeeRequirements.organizationId, organizationId),
+        eq(employeeRequirements.invitationId, invitationId),
+      ),
+    );
 }
 
 export async function assignRenewedInvitationRequirements(
@@ -986,32 +1159,36 @@ export async function assignRenewedInvitationRequirements(
   invitationId: string,
   email: string,
 ) {
-  const statement = database.prepare(
-    `UPDATE employee_requirements
-     SET invitation_id = ?, updated_at = ?
-     WHERE organization_id = ? AND member_id IS NULL
-       AND assigned_user_id IS NULL
-       AND target_email = ? COLLATE NOCASE
-       AND (invitation_id IS NULL OR EXISTS (
-         SELECT 1 FROM invitation AS old
-         WHERE old.id = employee_requirements.invitation_id
-           AND (old.status <> 'pending' OR old.expiresAt <= ?)
-       ))`,
-  );
-  const values = [
-    invitationId,
-    new Date().toISOString(),
-    organizationId,
-    email,
-    new Date().toISOString(),
-  ];
-  if (typeof statement.bind === "function") {
-    await statement.bind(...values).run();
-  } else {
-    await (
-      statement as unknown as { run: (...values: string[]) => unknown }
-    ).run(...values);
-  }
+  const db = getDb(database);
+  const old = alias(invitation, "old");
+  await db
+    .update(employeeRequirements)
+    .set({ invitationId, updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(employeeRequirements.organizationId, organizationId),
+        isNull(employeeRequirements.memberId),
+        isNull(employeeRequirements.assignedUserId),
+        sql`${employeeRequirements.targetEmail} = ${email} COLLATE NOCASE`,
+        or(
+          isNull(employeeRequirements.invitationId),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(old)
+              .where(
+                and(
+                  eq(old.id, employeeRequirements.invitationId),
+                  or(
+                    ne(old.status, "pending"),
+                    lte(old.expiresAt, new Date().toISOString()),
+                  ),
+                ),
+              ),
+          ),
+        ),
+      ),
+    );
 }
 
 function toRequirement(row: RequirementRow, manager: boolean, env: Bindings) {
@@ -1141,28 +1318,14 @@ function isCity(value: unknown): value is string | undefined {
 }
 
 async function findRequirement(context: Context<EmployeeFormsEnv>) {
-  return context.env.DB.prepare(
-    `SELECT requirement.id, requirement.kind, requirement.title,
-            requirement.due_date, requirement.status, requirement.document_key,
-            document_filename, document_size, document_revision,
-            invitation_id,
-            invitation.status AS invitation_status, member_id,
-            completed_at, checkr_candidate_id, checkr_invitation_id,
-            checkr_report_id, checkr_result, checkr_invitation_status,
-            checkr_starting_at, checkr_start_nonce,
-            checkr_start_nonce_at, checkr_start_package,
-            checkr_attempt, checkr_refresh_revision,
-            COALESCE(target.email, invitation.email, requirement.target_email)
-              AS target_email,
-            target.name AS target_name
-     FROM employee_requirements AS requirement
-     LEFT JOIN member ON member.id = requirement.member_id
-     LEFT JOIN user AS target ON target.id = member.userId
-     LEFT JOIN invitation ON invitation.id = requirement.invitation_id
-     WHERE requirement.id = ? AND requirement.organization_id = ?`,
-  )
-    .bind(context.req.param("id"), context.get("organizationId"))
-    .first<RequirementRow>();
+  return selectRequirements(getDb(context.env.DB))
+    .where(
+      and(
+        eq(employeeRequirements.id, context.req.param("id") as string),
+        eq(employeeRequirements.organizationId, context.get("organizationId")),
+      ),
+    )
+    .get() as Promise<RequirementRow | undefined>;
 }
 
 async function canAccessRequirement(
@@ -1171,16 +1334,18 @@ async function canAccessRequirement(
 ) {
   if (canManageOrganization(context.get("organizationRole"))) return true;
   if (!row.member_id) return false;
-  const member = await context.env.DB.prepare(
-    `SELECT id FROM member WHERE id = ? AND organizationId = ? AND userId = ?`,
-  )
-    .bind(
-      row.member_id,
-      context.get("organizationId"),
-      context.get("authSession").user.id,
+  const membership = await getDb(context.env.DB)
+    .select({ id: member.id })
+    .from(member)
+    .where(
+      and(
+        eq(member.id, row.member_id),
+        eq(member.organizationId, context.get("organizationId")),
+        eq(member.userId, context.get("authSession").user.id),
+      ),
     )
-    .first<{ id: string }>();
-  return Boolean(member);
+    .get();
+  return Boolean(membership);
 }
 
 function managerRequired(context: Context<EmployeeFormsEnv>) {

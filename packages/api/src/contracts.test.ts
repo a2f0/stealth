@@ -11,6 +11,7 @@ import {
 } from "./contractReminders";
 import { contracts } from "./contracts";
 import { signing } from "./signing";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const timestamp = "2026-09-20T12:00:00.000Z";
@@ -571,8 +572,11 @@ describe("contracts", () => {
     const fixture = await createFixture();
     const id = await fixture.prepare(draft());
     // A save from another tab lands between validation and the send.
-    fixture.onQuery = (query) => {
-      if (query.includes("SET status = 'sent'")) {
+    fixture.onQuery = (query, values) => {
+      if (
+        query.startsWith('update "contracts" set "status" = ?') &&
+        values[0] === "sent"
+      ) {
         fixture.database
           .query("UPDATE contracts SET revision = revision + 1 WHERE id = ?")
           .run(id);
@@ -732,7 +736,9 @@ async function createFixture() {
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: toD1(database, (query) => fixture.onQuery?.(query)),
+    DB: createTestD1(database, {
+      beforeExecute: (query, values) => fixture.onQuery?.(query, values),
+    }),
     EMAIL: {
       send: async (message: SentEmail) => {
         emails.push(message);
@@ -802,7 +808,9 @@ async function createFixture() {
   }
 
   const owner = as("owner-user", "org-1");
-  const fixture: { onQuery?: (query: string) => void } = {};
+  const fixture: {
+    onQuery?: (query: string, values: readonly SQLQueryBindings[]) => void;
+  } = {};
   return Object.assign(fixture, {
     ...owner,
     as,
@@ -864,47 +872,6 @@ async function samplePdf() {
   document.addPage([612, 792]);
   document.addPage([612, 792]).setRotation(degrees(90));
   return document.save();
-}
-
-interface TestStatement {
-  execute: () => { changes: number };
-}
-
-/** A D1 stand-in; `onQuery` runs before each statement executes. */
-function toD1(database: Database, onQuery: (query: string) => void) {
-  return {
-    // D1 runs a batch as one transaction.
-    batch: async (statements: TestStatement[]) =>
-      database.transaction(() =>
-        statements.map((statement) => ({
-          meta: { changes: statement.execute().changes },
-        })),
-      )(),
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({
-          results: database.query(query).all(...values),
-          success: true,
-        }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        execute: () => {
-          onQuery(query);
-          return database.query(query).run(...values);
-        },
-        first: async () => database.query(query).get(...values),
-        run: async () => {
-          onQuery(query);
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes }, success: true };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }
 
 function storageFor(

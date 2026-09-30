@@ -1,10 +1,25 @@
 import {
+  and,
+  asc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  notExists,
+  or,
+  sql,
+} from "drizzle-orm";
+import {
   advanceContract,
   type ContractEnvironment,
   findContractById,
   listRecipients,
   notifyRecipients,
 } from "./contractRecords";
+import { getDb } from "./db";
+import { contractRecipients, contracts, organization } from "./schema";
 
 const reminderBatchSize = 50;
 const resumeBatchSize = 5;
@@ -34,35 +49,53 @@ export async function resumeStalledContracts(
   environment: ContractEnvironment,
   now = new Date(),
 ) {
-  const database = environment.DB;
-  const stalled = await database
-    .prepare(
-      `SELECT contract.id FROM contracts AS contract
-       JOIN organization ON organization.id = contract.organization_id
-       WHERE contract.status = 'sent' AND organization.deletedAt IS NULL
-         AND contract.resume_attempts < ?
-         AND NOT EXISTS (
-           SELECT 1 FROM contract_recipients
-           WHERE contract_id = contract.id AND status IN ('sent', 'viewed')
-         )
-       ORDER BY contract.resume_attempted_at IS NOT NULL,
-                contract.resume_attempted_at ASC
-       LIMIT ?`,
+  const db = getDb(environment.DB);
+  const stalled = await db
+    .select({ id: contracts.id })
+    .from(contracts)
+    .innerJoin(organization, eq(organization.id, contracts.organizationId))
+    .where(
+      and(
+        eq(contracts.status, "sent"),
+        isNull(organization.deletedAt),
+        lt(contracts.resumeAttempts, maxResumeAttempts),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(contractRecipients)
+            .where(
+              and(
+                eq(contractRecipients.contractId, contracts.id),
+                inArray(contractRecipients.status, ["sent", "viewed"]),
+              ),
+            ),
+        ),
+      ),
     )
-    .bind(maxResumeAttempts, resumeBatchSize)
-    .all<{ id: string }>();
+    .orderBy(
+      isNotNull(contracts.resumeAttemptedAt),
+      asc(contracts.resumeAttemptedAt),
+    )
+    .limit(resumeBatchSize);
   const leaseExpired = new Date(now.getTime() - resumeLeaseMs).toISOString();
   let resumed = 0;
-  for (const { id } of stalled.results) {
-    const claim = await database
-      .prepare(
-        `UPDATE contracts
-         SET resume_attempts = resume_attempts + 1, resume_attempted_at = ?
-         WHERE id = ? AND status = 'sent'
-           AND (resume_attempted_at IS NULL OR resume_attempted_at < ?)`,
-      )
-      .bind(now.toISOString(), id, leaseExpired)
-      .run();
+  for (const { id } of stalled) {
+    const claim = await db
+      .update(contracts)
+      .set({
+        resumeAttemptedAt: now.toISOString(),
+        resumeAttempts: sql`${contracts.resumeAttempts} + 1`,
+      })
+      .where(
+        and(
+          eq(contracts.id, id),
+          eq(contracts.status, "sent"),
+          or(
+            isNull(contracts.resumeAttemptedAt),
+            lt(contracts.resumeAttemptedAt, leaseExpired),
+          ),
+        ),
+      );
     if (claim.meta.changes !== 1) continue;
     try {
       await advanceContract(environment, id);
@@ -84,39 +117,46 @@ export async function sendContractReminders(
   now = new Date(),
 ) {
   const database = environment.DB;
-  const due = await database
-    .prepare(
-      `SELECT recipient.id, recipient.contract_id,
-              COALESCE(recipient.last_reminded_at, recipient.notified_at)
-                AS last_emailed_at
-       FROM contract_recipients AS recipient
-       JOIN contracts AS contract ON contract.id = recipient.contract_id
-       JOIN organization ON organization.id = contract.organization_id
-       WHERE contract.status = 'sent' AND organization.deletedAt IS NULL
-         AND contract.reminder_interval_days IS NOT NULL
-         AND recipient.status IN ('sent', 'viewed')
-         AND julianday(?) - julianday(
-           COALESCE(recipient.last_reminded_at, recipient.notified_at)
-         ) >= contract.reminder_interval_days
-       ORDER BY last_emailed_at ASC
-       LIMIT ?`,
+  const db = getDb(database);
+  const lastEmailedAt = sql<string>`coalesce(${contractRecipients.lastRemindedAt}, ${contractRecipients.notifiedAt})`;
+  const due = await db
+    .select({
+      contractId: contractRecipients.contractId,
+      id: contractRecipients.id,
+      lastEmailedAt,
+    })
+    .from(contractRecipients)
+    .innerJoin(contracts, eq(contracts.id, contractRecipients.contractId))
+    .innerJoin(organization, eq(organization.id, contracts.organizationId))
+    .where(
+      and(
+        eq(contracts.status, "sent"),
+        isNull(organization.deletedAt),
+        isNotNull(contracts.reminderIntervalDays),
+        inArray(contractRecipients.status, ["sent", "viewed"]),
+        gte(
+          sql`julianday(${now.toISOString()}) - julianday(${lastEmailedAt})`,
+          contracts.reminderIntervalDays,
+        ),
+      ),
     )
-    .bind(now.toISOString(), reminderBatchSize)
-    .all<{ contract_id: string; id: string; last_emailed_at: string }>();
+    .orderBy(asc(lastEmailedAt))
+    .limit(reminderBatchSize);
   const claimed = new Map<string, Set<string>>();
-  for (const recipient of due.results) {
-    const claim = await database
-      .prepare(
-        `UPDATE contract_recipients SET last_reminded_at = ?
-         WHERE id = ?
-           AND COALESCE(last_reminded_at, notified_at) = ?`,
-      )
-      .bind(now.toISOString(), recipient.id, recipient.last_emailed_at)
-      .run();
+  for (const recipient of due) {
+    const claim = await db
+      .update(contractRecipients)
+      .set({ lastRemindedAt: now.toISOString() })
+      .where(
+        and(
+          eq(contractRecipients.id, recipient.id),
+          eq(lastEmailedAt, recipient.lastEmailedAt),
+        ),
+      );
     if (claim.meta.changes !== 1) continue;
-    const ids = claimed.get(recipient.contract_id) ?? new Set<string>();
+    const ids = claimed.get(recipient.contractId) ?? new Set<string>();
     ids.add(recipient.id);
-    claimed.set(recipient.contract_id, ids);
+    claimed.set(recipient.contractId, ids);
   }
   let reminded = 0;
   for (const [contractId, ids] of claimed) {

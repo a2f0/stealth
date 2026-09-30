@@ -1,3 +1,16 @@
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  inArray,
+  lt,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import { Hono } from "hono";
 import {
   type AuditDefinition,
@@ -13,8 +26,17 @@ import {
 } from "./auditIssueImages";
 import type { AuthVariables } from "./authMiddleware";
 import { freeFormTemplateLimit, organizationTemplateLimit } from "./billing";
+import { type Db, getDb } from "./db";
 import { nfpa70eStarter } from "./nfpa70eStarter";
 import { residentialCoreStarter } from "./residentialAuditLibrary";
+import {
+  auditIssues,
+  audits as auditRuns,
+  auditTemplateFamilies,
+  auditTemplateVersions,
+  member,
+  user,
+} from "./schema";
 import type { Bindings } from "./types";
 
 const audits = new Hono<{
@@ -29,7 +51,7 @@ interface TemplateRow {
   description: string;
   id: string;
   name: string;
-  scope: "global" | "organization";
+  scope: string;
   status: string;
   updated_at: string;
   version: number;
@@ -92,36 +114,51 @@ interface IssueRow {
   updated_at: string;
 }
 
-interface MemberRow {
-  email: string;
-  id: string;
-  name: string;
+const templateColumns = {
+  id: auditTemplateFamilies.id,
+  scope: auditTemplateFamilies.scope,
+  current_version: auditTemplateFamilies.currentVersion,
+  created_at: auditTemplateFamilies.createdAt,
+  updated_at: auditTemplateFamilies.updatedAt,
+  version_id: auditTemplateVersions.id,
+  version: auditTemplateVersions.version,
+  name: auditTemplateVersions.name,
+  description: auditTemplateVersions.description,
+  definition: auditTemplateVersions.definition,
+  status: auditTemplateVersions.status,
+  version_created_at: auditTemplateVersions.createdAt,
+  version_created_by_id: auditTemplateVersions.createdBy,
+  version_created_by_name: user.name,
+  version_created_by_email: user.email,
+};
+
+function selectTemplates(database: D1Database, versionJoin: SQL) {
+  return getDb(database)
+    .select(templateColumns)
+    .from(auditTemplateFamilies)
+    .innerJoin(
+      auditTemplateVersions,
+      and(
+        eq(auditTemplateVersions.templateId, auditTemplateFamilies.id),
+        versionJoin,
+      ),
+    )
+    .innerJoin(user, eq(user.id, auditTemplateVersions.createdBy));
 }
 
-const templateColumns = `
-  family.id,
-  family.scope,
-  family.current_version,
-  family.created_at,
-  family.updated_at,
-  version.id AS version_id,
-  version.version,
-  version.name,
-  version.description,
-  version.definition,
-  version.status,
-  version.created_at AS version_created_at,
-  version.created_by AS version_created_by_id,
-  creator.name AS version_created_by_name,
-  creator.email AS version_created_by_email`;
-
-const templateSelect = `
-  SELECT ${templateColumns}
-  FROM audit_template_families AS family
-  JOIN audit_template_versions AS version
-    ON version.template_id = family.id
-   AND version.version = family.current_version
-  JOIN user AS creator ON creator.id = version.created_by`;
+const auditColumns = {
+  id: auditRuns.id,
+  template_id: auditRuns.templateId,
+  template_family_id: auditRuns.templateFamilyId,
+  template_version: auditRuns.templateVersion,
+  template_name: auditRuns.templateName,
+  definition: auditRuns.definition,
+  responses: auditRuns.responses,
+  status: auditRuns.status,
+  completed_at: auditRuns.completedAt,
+  created_at: auditRuns.createdAt,
+  updated_at: auditRuns.updatedAt,
+};
 
 const auditRunPageSize = 100;
 
@@ -134,14 +171,18 @@ const auditLibraryActor = {
 audits.get("/templates", async (context) => {
   const organizationId = context.get("organizationId");
   await ensureStarterTemplates(context.env.DB);
-  const result = await context.env.DB.prepare(
-    `${templateSelect}
-     WHERE family.scope = 'global' OR family.organization_id = ?
-     ORDER BY family.updated_at DESC`,
+  const templates = await selectTemplates(
+    context.env.DB,
+    eq(auditTemplateVersions.version, auditTemplateFamilies.currentVersion),
   )
-    .bind(organizationId)
-    .all<TemplateRow>();
-  return context.json({ templates: result.results.map(toTemplate) });
+    .where(
+      or(
+        eq(auditTemplateFamilies.scope, "global"),
+        eq(auditTemplateFamilies.organizationId, organizationId),
+      ),
+    )
+    .orderBy(desc(auditTemplateFamilies.updatedAt));
+  return context.json({ templates: templates.map(toTemplate) });
 });
 
 audits.post("/templates", async (context) => {
@@ -175,44 +216,29 @@ audits.post("/templates", async (context) => {
           context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
         )
       : null;
-  const results = await context.env.DB.batch([
-    context.env.DB.prepare(
-      `INSERT INTO audit_template_families
-       (id, scope, organization_id, current_version, created_by, created_at,
-        updated_at)
-       SELECT ?, ?, ?, 1, ?, ?, ?
-       WHERE ? IS NULL OR (
-         SELECT COUNT(*) FROM audit_template_families
-         WHERE scope = 'organization' AND organization_id = ?
-       ) < ?`,
-    ).bind(
-      id,
-      scope,
-      scope === "organization" ? organizationId : null,
-      userId,
-      now,
-      now,
-      templateLimit,
+  const db = getDb(context.env.DB);
+  const results = await db.batch([
+    insertLimitedTemplateFamily(
+      db,
+      {
+        id,
+        organizationId: scope === "organization" ? organizationId : null,
+        scope,
+        userId,
+        now,
+      },
       organizationId,
       templateLimit,
     ),
-    context.env.DB.prepare(
-      `INSERT INTO audit_template_versions
-       (id, template_id, version, name, description, definition, status,
-        created_by, created_at)
-       SELECT ?, ?, 1, ?, '', ?, 'draft', ?, ?
-       WHERE EXISTS (
-         SELECT 1 FROM audit_template_families WHERE id = ?
-       )`,
-    ).bind(
-      versionId,
-      id,
-      body.name.trim(),
-      JSON.stringify(definition),
-      userId,
+    insertFirstTemplateVersion(db, {
+      definition: JSON.stringify(definition),
+      description: "",
+      id: versionId,
+      name: body.name.trim(),
       now,
-      id,
-    ),
+      templateId: id,
+      userId,
+    }),
   ]);
   if (Number(results[0]?.meta.changes) !== 1) {
     return context.json(
@@ -282,19 +308,19 @@ audits.get("/templates/:id/versions", async (context) => {
     context.req.param("id"),
   );
   if (!template) return context.json({ error: "Template not found." }, 404);
-  const result = await context.env.DB.prepare(
-    `SELECT version.version, version.created_at,
-            version.created_by AS created_by_id,
-            creator.name AS created_by_name,
-            creator.email AS created_by_email
-     FROM audit_template_versions AS version
-     JOIN user AS creator ON creator.id = version.created_by
-     WHERE version.template_id = ?
-     ORDER BY version.version DESC`,
-  )
-    .bind(template.id)
-    .all<TemplateVersionRow>();
-  return context.json({ versions: result.results.map(toTemplateVersion) });
+  const versions = await getDb(context.env.DB)
+    .select({
+      version: auditTemplateVersions.version,
+      created_at: auditTemplateVersions.createdAt,
+      created_by_id: auditTemplateVersions.createdBy,
+      created_by_name: user.name,
+      created_by_email: user.email,
+    })
+    .from(auditTemplateVersions)
+    .innerJoin(user, eq(user.id, auditTemplateVersions.createdBy))
+    .where(eq(auditTemplateVersions.templateId, template.id))
+    .orderBy(desc(auditTemplateVersions.version));
+  return context.json({ versions: versions.map(toTemplateVersion) });
 });
 
 audits.get("/templates/:id/versions/:version", async (context) => {
@@ -388,26 +414,23 @@ audits.post("/templates/:id/runs", async (context) => {
   if (!template) return context.json({ error: "Template not found." }, 404);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  await context.env.DB.prepare(
-    `INSERT INTO audits
-     (id, organization_id, template_id, template_family_id,
-      template_version_id, template_version, template_name, definition,
-      responses, status, started_by, created_at, updated_at)
-     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, '{}', 'in_progress', ?, ?, ?)`,
-  )
-    .bind(
+  await getDb(context.env.DB)
+    .insert(auditRuns)
+    .values({
       id,
-      context.get("organizationId"),
-      template.id,
-      template.version_id,
-      template.version,
-      template.name,
-      template.definition,
-      context.get("authSession").user.id,
-      now,
-      now,
-    )
-    .run();
+      organizationId: context.get("organizationId"),
+      templateId: null,
+      templateFamilyId: template.id,
+      templateVersionId: template.version_id,
+      templateVersion: template.version,
+      templateName: template.name,
+      definition: template.definition,
+      responses: "{}",
+      status: "in_progress",
+      startedBy: context.get("authSession").user.id,
+      createdAt: now,
+      updatedAt: now,
+    });
   return context.json({ auditId: id }, 201);
 });
 
@@ -418,33 +441,30 @@ audits.get("/runs", async (context) => {
   if (cursorValue !== undefined && !cursor) {
     return context.json({ error: "Invalid audit cursor." }, 400);
   }
-  const result = await context.env.DB.prepare(
-    `SELECT audit.id, audit.template_id, audit.template_family_id,
-            audit.template_version, audit.template_name, audit.definition,
-            audit.responses, audit.status, audit.completed_at,
-            audit.created_at, audit.updated_at, COUNT(issue.id) AS issue_count
-     FROM audits AS audit
-     LEFT JOIN audit_issues AS issue ON issue.audit_id = audit.id
-     WHERE audit.organization_id = ?
-       AND (? IS NULL OR audit.created_at < ? OR
-            (audit.created_at = ? AND audit.id < ?))
-     GROUP BY audit.id
-     ORDER BY audit.created_at DESC, audit.id DESC
-     LIMIT ?`,
-  )
-    .bind(
-      context.get("organizationId"),
-      cursor?.createdAt ?? null,
-      cursor?.createdAt ?? null,
-      cursor?.createdAt ?? null,
-      cursor?.id ?? null,
-      auditRunPageSize + 1,
+  const results = await getDb(context.env.DB)
+    .select({ ...auditColumns, issue_count: count(auditIssues.id) })
+    .from(auditRuns)
+    .leftJoin(auditIssues, eq(auditIssues.auditId, auditRuns.id))
+    .where(
+      and(
+        eq(auditRuns.organizationId, context.get("organizationId")),
+        cursor &&
+          or(
+            lt(auditRuns.createdAt, cursor.createdAt),
+            and(
+              eq(auditRuns.createdAt, cursor.createdAt),
+              lt(auditRuns.id, cursor.id),
+            ),
+          ),
+      ),
     )
-    .all<AuditSummaryRow>();
-  const page = result.results.slice(0, auditRunPageSize);
+    .groupBy(auditRuns.id)
+    .orderBy(desc(auditRuns.createdAt), desc(auditRuns.id))
+    .limit(auditRunPageSize + 1);
+  const page = results.slice(0, auditRunPageSize);
   const last = page.at(-1);
   const nextCursor =
-    result.results.length > auditRunPageSize && last
+    results.length > auditRunPageSize && last
       ? encodeAuditCursor({ createdAt: last.created_at, id: last.id })
       : null;
   return context.json({
@@ -496,19 +516,20 @@ audits.patch("/runs/:id", async (context) => {
     return context.json({ error: "Complete every required item first." }, 400);
   }
   const now = new Date().toISOString();
-  const updated = await context.env.DB.prepare(
-    `UPDATE audits SET responses = ?, status = ?, completed_at = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(
-      JSON.stringify(responses),
+  const updated = await getDb(context.env.DB)
+    .update(auditRuns)
+    .set({
+      responses: JSON.stringify(responses),
       status,
-      status === "completed" ? now : null,
-      now,
-      audit.id,
-      organizationId,
-    )
-    .run();
+      completedAt: status === "completed" ? now : null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(auditRuns.id, audit.id),
+        eq(auditRuns.organizationId, organizationId),
+      ),
+    );
   if (Number(updated.meta.changes) !== 1) {
     return context.json({ error: "Audit not found." }, 404);
   }
@@ -534,26 +555,22 @@ audits.post("/runs/:id/issues", async (context) => {
     return context.json({ error: "Invalid issue details." }, 400);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  await context.env.DB.prepare(
-    `INSERT INTO audit_issues
-     (id, organization_id, audit_id, item_id, title, description, priority,
-      status, assigned_to, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
-  )
-    .bind(
+  await getDb(context.env.DB)
+    .insert(auditIssues)
+    .values({
       id,
       organizationId,
-      audit.id,
-      issueInput.itemId,
-      issueInput.title,
-      issueInput.description,
-      issueInput.priority,
-      issueInput.assignedTo,
-      context.get("authSession").user.id,
-      now,
-      now,
-    )
-    .run();
+      auditId: audit.id,
+      itemId: issueInput.itemId,
+      title: issueInput.title,
+      description: issueInput.description,
+      priority: issueInput.priority,
+      status: "open",
+      assignedTo: issueInput.assignedTo,
+      createdBy: context.get("authSession").user.id,
+      createdAt: now,
+      updatedAt: now,
+    });
   return context.json({ issueId: id }, 201);
 });
 
@@ -562,12 +579,20 @@ audits.patch("/issues/:id", async (context) => {
   if (!isRecord(body))
     return context.json({ error: "Invalid issue update." }, 400);
   const organizationId = context.get("organizationId");
-  const issue = await context.env.DB.prepare(
-    `SELECT id, status, assigned_to
-     FROM audit_issues WHERE id = ? AND organization_id = ?`,
-  )
-    .bind(context.req.param("id"), organizationId)
-    .first<{ assigned_to: string | null; id: string; status: string }>();
+  const issue = await getDb(context.env.DB)
+    .select({
+      id: auditIssues.id,
+      status: auditIssues.status,
+      assignedTo: auditIssues.assignedTo,
+    })
+    .from(auditIssues)
+    .where(
+      and(
+        eq(auditIssues.id, context.req.param("id")),
+        eq(auditIssues.organizationId, organizationId),
+      ),
+    )
+    .get();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
   const changesStatus = body.status !== undefined;
   const changesAssignee = body.assignedTo !== undefined;
@@ -586,7 +611,7 @@ audits.patch("/issues/:id", async (context) => {
   }
   const assignedTo = changesAssignee
     ? parseAssignee(body.assignedTo)
-    : issue.assigned_to;
+    : issue.assignedTo;
   if (changesAssignee && assignedTo === undefined) {
     return context.json({ error: "Issue assignee is invalid." }, 400);
   }
@@ -595,56 +620,11 @@ audits.patch("/issues/:id", async (context) => {
       ? body.status
       : issue.status;
   const now = new Date().toISOString();
-  const result = changesStatus
-    ? changesAssignee
-      ? await context.env.DB.prepare(
-          `UPDATE audit_issues
-           SET status = ?, assigned_to = ?, updated_at = ?
-           WHERE id = ? AND organization_id = ?
-             AND (
-               ? IS NULL OR EXISTS (
-                 SELECT 1 FROM member
-                 WHERE organizationId = ? AND userId = ?
-               )
-             )`,
-        )
-          .bind(
-            status,
-            assignedTo,
-            now,
-            issue.id,
-            organizationId,
-            assignedTo,
-            organizationId,
-            assignedTo,
-          )
-          .run()
-      : await context.env.DB.prepare(
-          `UPDATE audit_issues SET status = ?, updated_at = ?
-           WHERE id = ? AND organization_id = ?`,
-        )
-          .bind(status, now, issue.id, organizationId)
-          .run()
-    : await context.env.DB.prepare(
-        `UPDATE audit_issues SET assigned_to = ?, updated_at = ?
-         WHERE id = ? AND organization_id = ?
-           AND (
-             ? IS NULL OR EXISTS (
-               SELECT 1 FROM member
-               WHERE organizationId = ? AND userId = ?
-             )
-           )`,
-      )
-        .bind(
-          assignedTo,
-          now,
-          issue.id,
-          organizationId,
-          assignedTo,
-          organizationId,
-          assignedTo,
-        )
-        .run();
+  const result = await updateIssue(context.env.DB, organizationId, issue.id, {
+    assignedTo: changesAssignee ? assignedTo : undefined,
+    status: changesStatus ? status : undefined,
+    updatedAt: now,
+  });
   if (result.meta.changes > 0) {
     return context.json({ assignedTo, status, updatedAt: now });
   }
@@ -660,6 +640,43 @@ audits.patch("/issues/:id", async (context) => {
 
 audits.route("/issues", auditIssueImages);
 
+/** Updates an issue; a new assignee must still be a member at commit. */
+async function updateIssue(
+  database: D1Database,
+  organizationId: string,
+  id: string,
+  changes: {
+    assignedTo: string | null | undefined;
+    status: string | undefined;
+    updatedAt: string;
+  },
+) {
+  const db = getDb(database);
+  const assignee = changes.assignedTo;
+  return db
+    .update(auditIssues)
+    .set(changes)
+    .where(
+      and(
+        eq(auditIssues.id, id),
+        eq(auditIssues.organizationId, organizationId),
+        assignee == null
+          ? undefined
+          : exists(
+              db
+                .select({ one: sql`1` })
+                .from(member)
+                .where(
+                  and(
+                    eq(member.organizationId, organizationId),
+                    eq(member.userId, assignee),
+                  ),
+                ),
+            ),
+      ),
+    );
+}
+
 async function copyGlobalTemplate(
   database: D1Database,
   organizationId: string,
@@ -670,53 +687,83 @@ async function copyGlobalTemplate(
 ) {
   const id = crypto.randomUUID();
   const versionId = crypto.randomUUID();
-  const results = await database.batch([
-    database
-      .prepare(
-        `INSERT INTO audit_template_families
-         (id, scope, organization_id, current_version, created_by, created_at,
-          updated_at)
-         SELECT ?, 'organization', ?, 1, ?, ?, ?
-         WHERE ? IS NULL OR (
-           SELECT COUNT(*) FROM audit_template_families
-           WHERE scope = 'organization' AND organization_id = ?
-         ) < ?`,
-      )
-      .bind(
-        id,
-        organizationId,
-        userId,
-        now,
-        now,
-        templateLimit,
-        organizationId,
-        templateLimit,
-      ),
-    database
-      .prepare(
-        `INSERT INTO audit_template_versions
-         (id, template_id, version, name, description, definition, status,
-          created_by, created_at)
-         SELECT ?, ?, 1, ?, ?, ?, 'draft', ?, ?
-         WHERE EXISTS (
-           SELECT 1 FROM audit_template_families WHERE id = ?
-         )`,
-      )
-      .bind(
-        versionId,
-        id,
-        input.name,
-        input.description,
-        JSON.stringify(input.definition),
-        userId,
-        now,
-        id,
-      ),
+  const db = getDb(database);
+  const results = await db.batch([
+    insertLimitedTemplateFamily(
+      db,
+      { id, organizationId, scope: "organization", userId, now },
+      organizationId,
+      templateLimit,
+    ),
+    insertFirstTemplateVersion(db, {
+      definition: JSON.stringify(input.definition),
+      description: input.description,
+      id: versionId,
+      name: input.name,
+      now,
+      templateId: id,
+      userId,
+    }),
   ]);
   if (Number(results[0]?.meta.changes) !== 1) return null;
   const saved = await findTemplate(database, organizationId, id);
   if (!saved) throw new Error("Copied template could not be loaded.");
   return saved;
+}
+
+/** Inserts a template family only while the organization is under its limit. */
+function insertLimitedTemplateFamily(
+  db: Db,
+  family: {
+    id: string;
+    organizationId: string | null;
+    scope: string;
+    userId: string;
+    now: string;
+  },
+  limitOrganizationId: string,
+  templateLimit: number | null,
+) {
+  const organizationTemplates = db
+    .select({ count: count() })
+    .from(auditTemplateFamilies)
+    .where(
+      and(
+        eq(auditTemplateFamilies.scope, "organization"),
+        eq(auditTemplateFamilies.organizationId, limitOrganizationId),
+      ),
+    );
+  return db.insert(auditTemplateFamilies).select(
+    sql`select ${family.id}, ${family.scope}, ${family.organizationId}, 1,
+                 ${family.userId}, ${family.now}, ${family.now}
+          where ${templateLimit} is null
+             or ${organizationTemplates} < ${templateLimit}`,
+  );
+}
+
+/** Inserts version one only when its family row was inserted. */
+function insertFirstTemplateVersion(
+  db: Db,
+  version: {
+    definition: string;
+    description: string;
+    id: string;
+    name: string;
+    now: string;
+    templateId: string;
+    userId: string;
+  },
+) {
+  const family = db
+    .select({ one: sql`1` })
+    .from(auditTemplateFamilies)
+    .where(eq(auditTemplateFamilies.id, version.templateId));
+  return db.insert(auditTemplateVersions).select(
+    sql`select ${version.id}, ${version.templateId}, 1, ${version.name},
+                 ${version.description}, ${version.definition}, 'draft',
+                 ${version.userId}, ${version.now}
+          where ${exists(family)}`,
+  );
 }
 
 async function addTemplateVersion(
@@ -727,32 +774,28 @@ async function addTemplateVersion(
   now: string,
 ) {
   const version = current.current_version + 1;
-  await database.batch([
-    database
-      .prepare(
-        `UPDATE audit_template_families
-         SET current_version = ?, updated_at = ?
-         WHERE id = ? AND current_version = ?`,
-      )
-      .bind(version, now, current.id, current.current_version),
-    database
-      .prepare(
-        `INSERT INTO audit_template_versions
-         (id, template_id, version, name, description, definition, status,
-          created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        crypto.randomUUID(),
-        current.id,
-        version,
-        input.name,
-        input.description,
-        JSON.stringify(input.definition),
-        current.status,
-        userId,
-        now,
+  const db = getDb(database);
+  await db.batch([
+    db
+      .update(auditTemplateFamilies)
+      .set({ currentVersion: version, updatedAt: now })
+      .where(
+        and(
+          eq(auditTemplateFamilies.id, current.id),
+          eq(auditTemplateFamilies.currentVersion, current.current_version),
+        ),
       ),
+    db.insert(auditTemplateVersions).values({
+      id: crypto.randomUUID(),
+      templateId: current.id,
+      version,
+      name: input.name,
+      description: input.description,
+      definition: JSON.stringify(input.definition),
+      status: current.status,
+      createdBy: userId,
+      createdAt: now,
+    }),
   ]);
 }
 
@@ -761,47 +804,59 @@ async function ensureStarterTemplates(database: D1Database) {
     { id: "nfpa70e_global", ...nfpa70eStarter },
     residentialCoreStarter,
   ];
-  const seeded = await database
-    .prepare(
-      `SELECT COUNT(*) AS count
-       FROM audit_template_families AS family
-       JOIN audit_template_versions AS version
-         ON version.template_id = family.id AND version.version = 1
-       WHERE family.id IN (?, ?)`,
+  const db = getDb(database);
+  const seeded = await db
+    .select({ count: count() })
+    .from(auditTemplateFamilies)
+    .innerJoin(
+      auditTemplateVersions,
+      and(
+        eq(auditTemplateVersions.templateId, auditTemplateFamilies.id),
+        eq(auditTemplateVersions.version, 1),
+      ),
     )
-    .bind(...starters.map(({ id }) => id))
-    .first<{ count: number }>();
+    .where(
+      inArray(
+        auditTemplateFamilies.id,
+        starters.map(({ id }) => id),
+      ),
+    )
+    .get();
   if (Number(seeded?.count) === starters.length) return;
 
   const now = new Date().toISOString();
-  await database.batch(
-    starters.flatMap((starter) => [
-      database
-        .prepare(
-          `INSERT OR IGNORE INTO audit_template_families
-           (id, scope, organization_id, current_version, created_by,
-            created_at, updated_at)
-           VALUES (?, 'global', NULL, 1, ?, ?, ?)`,
-        )
-        .bind(starter.id, auditLibraryActor.id, now, now),
-      database
-        .prepare(
-          `INSERT OR IGNORE INTO audit_template_versions
-           (id, template_id, version, name, description, definition, status,
-            created_by, created_at)
-           VALUES (?, ?, 1, ?, ?, ?, 'published', ?, ?)`,
-        )
-        .bind(
-          `${starter.id}:v1`,
-          starter.id,
-          starter.name,
-          starter.description,
-          JSON.stringify(starter.definition),
-          auditLibraryActor.id,
-          now,
-        ),
-    ]),
-  );
+  const [first, ...rest] = starters.flatMap((starter) => [
+    // The original INSERT OR IGNORE cannot join a Drizzle D1 batch. These
+    // constant rows satisfy every NOT NULL and CHECK constraint, so ON
+    // CONFLICT DO NOTHING skips exactly the rows OR IGNORE skipped.
+    db
+      .insert(auditTemplateFamilies)
+      .values({
+        id: starter.id,
+        scope: "global",
+        organizationId: null,
+        currentVersion: 1,
+        createdBy: auditLibraryActor.id,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing(),
+    db
+      .insert(auditTemplateVersions)
+      .values({
+        id: `${starter.id}:v1`,
+        templateId: starter.id,
+        version: 1,
+        name: starter.name,
+        description: starter.description,
+        definition: JSON.stringify(starter.definition),
+        status: "published",
+        createdBy: auditLibraryActor.id,
+        createdAt: now,
+      })
+      .onConflictDoNothing(),
+  ]);
+  if (first) await db.batch([first, ...rest]);
 }
 
 async function findTemplate(
@@ -811,21 +866,22 @@ async function findTemplate(
   version?: number,
 ) {
   await ensureStarterTemplates(database);
-  const versionJoin = version
-    ? "version.version = ?"
-    : "version.version = family.current_version";
-  const statement = database.prepare(
-    `SELECT ${templateColumns}
-     FROM audit_template_families AS family
-     JOIN audit_template_versions AS version
-       ON version.template_id = family.id AND ${versionJoin}
-     JOIN user AS creator ON creator.id = version.created_by
-     WHERE family.id = ?
-       AND (family.scope = 'global' OR family.organization_id = ?)`,
-  );
-  return version
-    ? statement.bind(version, id, organizationId).first<TemplateRow>()
-    : statement.bind(id, organizationId).first<TemplateRow>();
+  return selectTemplates(
+    database,
+    version
+      ? eq(auditTemplateVersions.version, version)
+      : eq(auditTemplateVersions.version, auditTemplateFamilies.currentVersion),
+  )
+    .where(
+      and(
+        eq(auditTemplateFamilies.id, id),
+        or(
+          eq(auditTemplateFamilies.scope, "global"),
+          eq(auditTemplateFamilies.organizationId, organizationId),
+        ),
+      ),
+    )
+    .get();
 }
 
 function parseTemplateScope(value: unknown) {
@@ -872,15 +928,13 @@ async function findAudit(
   organizationId: string,
   id: string,
 ) {
-  return database
-    .prepare(
-      `SELECT id, template_id, template_family_id, template_version,
-              template_name, definition, responses, status, completed_at,
-              created_at, updated_at
-       FROM audits WHERE id = ? AND organization_id = ?`,
+  return getDb(database)
+    .select(auditColumns)
+    .from(auditRuns)
+    .where(
+      and(eq(auditRuns.id, id), eq(auditRuns.organizationId, organizationId)),
     )
-    .bind(id, organizationId)
-    .first<AuditRow>();
+    .get();
 }
 
 async function findIssues(
@@ -888,32 +942,38 @@ async function findIssues(
   organizationId: string,
   auditId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT issue.id, issue.item_id, issue.title, issue.description,
-              issue.priority, issue.status, issue.assigned_to, issue.created_at,
-              issue.updated_at, assignee.name AS assignee_name,
-              assignee.email AS assignee_email
-       FROM audit_issues AS issue
-       LEFT JOIN user AS assignee ON assignee.id = issue.assigned_to
-       WHERE issue.audit_id = ? AND issue.organization_id = ?
-       ORDER BY issue.created_at DESC`,
+  return getDb(database)
+    .select({
+      id: auditIssues.id,
+      item_id: auditIssues.itemId,
+      title: auditIssues.title,
+      description: auditIssues.description,
+      priority: auditIssues.priority,
+      status: auditIssues.status,
+      assigned_to: auditIssues.assignedTo,
+      created_at: auditIssues.createdAt,
+      updated_at: auditIssues.updatedAt,
+      assignee_name: user.name,
+      assignee_email: user.email,
+    })
+    .from(auditIssues)
+    .leftJoin(user, eq(user.id, auditIssues.assignedTo))
+    .where(
+      and(
+        eq(auditIssues.auditId, auditId),
+        eq(auditIssues.organizationId, organizationId),
+      ),
     )
-    .bind(auditId, organizationId)
-    .all<IssueRow>();
-  return result.results;
+    .orderBy(desc(auditIssues.createdAt));
 }
 
 async function findMembers(database: D1Database, organizationId: string) {
-  const result = await database
-    .prepare(
-      `SELECT user.id, user.name, user.email
-       FROM member JOIN user ON user.id = member.userId
-       WHERE member.organizationId = ? ORDER BY user.name ASC`,
-    )
-    .bind(organizationId)
-    .all<MemberRow>();
-  return result.results;
+  return getDb(database)
+    .select({ id: user.id, name: user.name, email: user.email })
+    .from(member)
+    .innerJoin(user, eq(user.id, member.userId))
+    .where(eq(member.organizationId, organizationId))
+    .orderBy(asc(user.name));
 }
 
 async function parseIssueInput(
@@ -953,10 +1013,16 @@ async function isMember(
   userId: string,
 ) {
   return Boolean(
-    await database
-      .prepare(`SELECT id FROM member WHERE organizationId = ? AND userId = ?`)
-      .bind(organizationId, userId)
-      .first(),
+    await getDb(database)
+      .select({ id: member.id })
+      .from(member)
+      .where(
+        and(
+          eq(member.organizationId, organizationId),
+          eq(member.userId, userId),
+        ),
+      )
+      .get(),
   );
 }
 

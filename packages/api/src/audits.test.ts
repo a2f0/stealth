@@ -11,6 +11,7 @@ import { audits } from "./audits";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import { purgeDeletedObjects } from "./deletedObjectCleanup";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 interface TemplateResponse {
@@ -1851,6 +1852,7 @@ async function createFixture() {
   await applyMigration(database, "0030_queue_deleted_objects.sql");
   await applyMigration(database, "0032_create_billing.sql");
   await applyMigration(database, "0033_create_audit_library_actor.sql");
+  await applyMigration(database, "0035_create_library_folders.sql");
   const stored = new Map<string, Uint8Array>();
   const databaseControl = {
     activateBeforeCleanupClaim: false,
@@ -2036,124 +2038,74 @@ function toD1(
     failNextPendingUpdate: false,
   },
 ) {
-  let batchTail: Promise<void> = Promise.resolve();
-  return {
-    batch: (statements: D1PreparedStatement[]) => {
-      const execution = batchTail.then(() => {
-        database.exec("BEGIN");
-        try {
-          const results = statements.map((statement) =>
-            (
-              statement as D1PreparedStatement & {
-                runSync: () => D1Result;
-              }
-            ).runSync(),
-          );
-          database.exec("COMMIT");
-          return results;
-        } catch (cause) {
-          database.exec("ROLLBACK");
-          throw cause;
-        }
-      });
-      batchTail = execution.then(
-        () => undefined,
-        () => undefined,
-      );
-      return execution;
+  return createTestD1(database, {
+    afterExecute: (query) => {
+      if (control.commitThenThrowImageActivation && isImageActivation(query)) {
+        control.commitThenThrowImageActivation = false;
+        throw new Error("D1 activation response was lost after commit");
+      }
     },
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const runSync = () => {
-        if (
-          control.deleteAuditBeforeRunUpdate &&
-          query.includes("UPDATE audits SET responses")
-        ) {
-          control.deleteAuditBeforeRunUpdate = false;
-          const auditId = values.at(-2);
-          const organizationId = values.at(-1);
-          if (
-            typeof auditId !== "string" ||
-            typeof organizationId !== "string"
-          ) {
-            throw new Error("Expected an audit and organization id.");
-          }
-          database
-            .query("DELETE FROM audits WHERE id = ? AND organization_id = ?")
-            .run(auditId, organizationId);
+    beforeExecute: (query, values) => {
+      if (
+        control.deleteAuditBeforeRunUpdate &&
+        query.startsWith('update "audits" set "responses" = ?')
+      ) {
+        control.deleteAuditBeforeRunUpdate = false;
+        const auditId = values.at(-2);
+        const organizationId = values.at(-1);
+        if (typeof auditId !== "string" || typeof organizationId !== "string") {
+          throw new Error("Expected an audit and organization id.");
         }
-        if (
-          control.deleteAssigneeBeforeIssueUpdate &&
-          query.includes("UPDATE audit_issues") &&
-          query.includes("SELECT 1 FROM member")
-        ) {
-          control.deleteAssigneeBeforeIssueUpdate = false;
-          const organizationId = values.at(-2);
-          const userId = values.at(-1);
-          fixtureMemberDeletion(database, organizationId, userId);
+        database
+          .query("DELETE FROM audits WHERE id = ? AND organization_id = ?")
+          .run(auditId, organizationId);
+      }
+      if (
+        control.deleteAssigneeBeforeIssueUpdate &&
+        query.startsWith('update "audit_issues"') &&
+        query.includes('from "member"')
+      ) {
+        control.deleteAssigneeBeforeIssueUpdate = false;
+        const organizationId = values.at(-2);
+        const userId = values.at(-1);
+        fixtureMemberDeletion(database, organizationId, userId);
+      }
+      if (control.failNextImageActivation && isImageActivation(query)) {
+        control.failNextImageActivation = false;
+        throw new Error("Transient D1 image activation failure");
+      }
+      if (
+        control.failNextPendingUpdate &&
+        query.startsWith('update "objects" set "deletion_pending" = ?')
+      ) {
+        control.failNextPendingUpdate = false;
+        throw new Error("Transient D1 update failure");
+      }
+      if (
+        control.activateBeforeCleanupClaim &&
+        query.startsWith('update "objects" set "cleanup_token" = ?')
+      ) {
+        control.activateBeforeCleanupClaim = false;
+        const objectId = values[4];
+        if (typeof objectId !== "string") {
+          throw new Error("Cleanup claim object id missing");
         }
-        if (
-          control.failNextImageActivation &&
-          query.includes("SET size = ?, deletion_pending = 0")
-        ) {
-          control.failNextImageActivation = false;
-          throw new Error("Transient D1 image activation failure");
-        }
-        if (
-          control.commitThenThrowImageActivation &&
-          query.includes("SET size = ?, deletion_pending = 0")
-        ) {
-          control.commitThenThrowImageActivation = false;
-          database.query(query).run(...values);
-          throw new Error("D1 activation response was lost after commit");
-        }
-        if (
-          control.failNextPendingUpdate &&
-          query.includes("SET deletion_pending = 1")
-        ) {
-          control.failNextPendingUpdate = false;
-          throw new Error("Transient D1 update failure");
-        }
-        const result = database.query(query).run(...values);
-        return { meta: { changes: result.changes }, success: true };
-      };
-      const statement = {
-        all: async () => ({
-          results: database.query(query).all(...values),
-          success: true,
-        }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        first: async () => {
-          if (
-            control.activateBeforeCleanupClaim &&
-            query.includes("SET cleanup_token = ?")
-          ) {
-            control.activateBeforeCleanupClaim = false;
-            const objectId = values[2];
-            if (typeof objectId !== "string") {
-              throw new Error("Cleanup claim object id missing");
-            }
-            database
-              .query(
-                `UPDATE objects
-                 SET deletion_pending = 0, cleanup_token = NULL,
-                     cleanup_claimed_at = NULL, upload_token = NULL,
-                     upload_lease_expires_at = NULL
-                 WHERE id = ?`,
-              )
-              .run(objectId);
-          }
-          return database.query(query).get(...values);
-        },
-        run: async () => runSync(),
-        runSync,
-      };
-      return statement;
+        database
+          .query(
+            `UPDATE objects
+             SET deletion_pending = 0, cleanup_token = NULL,
+                 cleanup_claimed_at = NULL, upload_token = NULL,
+                 upload_lease_expires_at = NULL
+             WHERE id = ?`,
+          )
+          .run(objectId);
+      }
     },
-  } as unknown as D1Database;
+  });
+}
+
+function isImageActivation(query: string) {
+  return query.startsWith('update "objects" set "size" = ?');
 }
 
 function fixtureMemberDeletion(

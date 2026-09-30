@@ -1,4 +1,7 @@
+import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
+import { getDb } from "./db";
 import { auditIssueImageUploadGraceMilliseconds } from "./objectLifecycle";
+import { deletedObjectCleanup } from "./schema";
 import type { Bindings } from "./types";
 
 const cleanupBatchSize = 25;
@@ -33,33 +36,39 @@ async function purgeDeletedObject(
   object: DeletedObjectCleanup,
   abandonedClaimCutoff: string,
 ) {
+  const db = getDb(environment.DB);
   const cleanupToken = crypto.randomUUID();
-  const claimed = await environment.DB.prepare(
-    `UPDATE deleted_object_cleanup
-     SET cleanup_token = ?, cleanup_claimed_at = ?
-     WHERE id = ?
-       AND (
-         cleanup_token IS NULL OR datetime(cleanup_claimed_at) <= datetime(?)
-       )
-     RETURNING object_key`,
-  )
-    .bind(
-      cleanupToken,
-      new Date().toISOString(),
-      object.id,
-      abandonedClaimCutoff,
+  const claimed = await db
+    .update(deletedObjectCleanup)
+    .set({ cleanupToken, cleanupClaimedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(deletedObjectCleanup.id, object.id),
+        or(
+          isNull(deletedObjectCleanup.cleanupToken),
+          claimedBefore(abandonedClaimCutoff),
+        ),
+      ),
     )
-    .first<{ object_key: string }>();
+    .returning({ objectKey: deletedObjectCleanup.objectKey })
+    .get();
   if (!claimed) return false;
 
-  await environment.STORAGE.delete(claimed.object_key);
-  const deleted = await environment.DB.prepare(
-    `DELETE FROM deleted_object_cleanup
-     WHERE id = ? AND cleanup_token = ?`,
-  )
-    .bind(object.id, cleanupToken)
+  await environment.STORAGE.delete(claimed.objectKey);
+  const deleted = await db
+    .delete(deletedObjectCleanup)
+    .where(
+      and(
+        eq(deletedObjectCleanup.id, object.id),
+        eq(deletedObjectCleanup.cleanupToken, cleanupToken),
+      ),
+    )
     .run();
   return Number(deleted.meta.changes) === 1;
+}
+
+function claimedBefore(cutoff: string) {
+  return sql`datetime(${deletedObjectCleanup.cleanupClaimedAt}) <= datetime(${cutoff})`;
 }
 
 /** Delete R2 bytes whose D1 object rows were removed by a cascade. */
@@ -67,25 +76,23 @@ export async function purgeDeletedObjects(
   environment: Pick<Bindings, "DB" | "STORAGE">,
   cutoffs = defaultCleanupCutoffs(),
 ) {
-  const result = await environment.DB.prepare(
-    `SELECT id FROM deleted_object_cleanup
-     WHERE datetime(deleted_at) <= datetime(?)
-       AND (
-         cleanup_token IS NULL
-         OR datetime(cleanup_claimed_at) <= datetime(?)
-       )
-     ORDER BY deleted_at ASC, id ASC
-     LIMIT ?`,
-  )
-    .bind(
-      cutoffs.deletedBefore,
-      cutoffs.abandonedClaimedBefore,
-      cleanupBatchSize,
+  const objects: DeletedObjectCleanup[] = await getDb(environment.DB)
+    .select({ id: deletedObjectCleanup.id })
+    .from(deletedObjectCleanup)
+    .where(
+      and(
+        sql`datetime(${deletedObjectCleanup.deletedAt}) <= datetime(${cutoffs.deletedBefore})`,
+        or(
+          isNull(deletedObjectCleanup.cleanupToken),
+          claimedBefore(cutoffs.abandonedClaimedBefore),
+        ),
+      ),
     )
-    .all<DeletedObjectCleanup>();
+    .orderBy(asc(deletedObjectCleanup.deletedAt), asc(deletedObjectCleanup.id))
+    .limit(cleanupBatchSize);
   let firstFailure: unknown;
   let purged = 0;
-  for (const object of result.results) {
+  for (const object of objects) {
     try {
       if (
         await purgeDeletedObject(

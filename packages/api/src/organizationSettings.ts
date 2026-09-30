@@ -1,29 +1,19 @@
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import {
   cancelOrganizationSubscription,
   recoverCheckoutAfterFailedDeletion,
 } from "./billing";
+import { getDb } from "./db";
 import { markOrganizationForDeletion } from "./organizationDeletion";
 import {
   canManageOrganization,
   isOrganizationOwner,
   listOrganizationMembers,
 } from "./organizationMembers";
+import { invitation, member, organization } from "./schema";
 import type { Bindings } from "./types";
-
-interface InvitationRow {
-  email: string;
-  expiresAt: string;
-  id: string;
-  role: string;
-  status: string;
-}
-
-interface OrganizationRow {
-  id: string;
-  name: string;
-}
 
 type OrganizationSettingsEnv = {
   Bindings: Bindings;
@@ -34,16 +24,13 @@ const organizationSettings = new Hono<OrganizationSettingsEnv>();
 
 organizationSettings.get("/organizations", async (context) => {
   const userId = context.get("authSession").user.id;
-  const result = await context.env.DB.prepare(
-    `SELECT organization.id, organization.name
-     FROM organization
-     JOIN member ON member.organizationId = organization.id
-     WHERE member.userId = ? AND organization.deletedAt IS NULL
-     ORDER BY member.createdAt ASC, member.id ASC`,
-  )
-    .bind(userId)
-    .all<OrganizationRow>();
-  return context.json({ organizations: result.results });
+  const organizations = await getDb(context.env.DB)
+    .select({ id: organization.id, name: organization.name })
+    .from(organization)
+    .innerJoin(member, eq(member.organizationId, organization.id))
+    .where(and(eq(member.userId, userId), isNull(organization.deletedAt)))
+    .orderBy(asc(member.createdAt), asc(member.id));
+  return context.json({ organizations });
 });
 
 organizationSettings.get("/people", async (context) => {
@@ -80,20 +67,23 @@ organizationSettings.patch(
     }
     const organizationId = context.get("organizationId");
     const memberId = context.req.param("memberId");
-    const member = await context.env.DB.prepare(
-      `SELECT id FROM member WHERE id = ? AND organizationId = ?`,
-    )
-      .bind(memberId, organizationId)
-      .first<{ id: string }>();
-    if (!member) {
+    const db = getDb(context.env.DB);
+    const target = await db
+      .select({ id: member.id })
+      .from(member)
+      .where(
+        and(eq(member.id, memberId), eq(member.organizationId, organizationId)),
+      )
+      .get();
+    if (!target) {
       return context.json({ error: "Organization member not found." }, 404);
     }
-    await context.env.DB.prepare(
-      `UPDATE member SET twoFactorRequired = ?
-       WHERE id = ? AND organizationId = ?`,
-    )
-      .bind(body.required, memberId, organizationId)
-      .run();
+    await db
+      .update(member)
+      .set({ twoFactorRequired: body.required ? 1 : 0 })
+      .where(
+        and(eq(member.id, memberId), eq(member.organizationId, organizationId)),
+      );
     return context.json({ memberId, required: body.required });
   },
 );
@@ -163,16 +153,22 @@ async function listPendingInvitations(
   database: D1Database,
   organizationId: string,
 ) {
-  const result = await database
-    .prepare(
-      `SELECT id, email, role, status, expiresAt
-       FROM invitation
-       WHERE organizationId = ? AND status = 'pending'
-       ORDER BY createdAt DESC`,
+  return getDb(database)
+    .select({
+      id: invitation.id,
+      email: invitation.email,
+      role: invitation.role,
+      status: invitation.status,
+      expiresAt: invitation.expiresAt,
+    })
+    .from(invitation)
+    .where(
+      and(
+        eq(invitation.organizationId, organizationId),
+        eq(invitation.status, "pending"),
+      ),
     )
-    .bind(organizationId)
-    .all<InvitationRow>();
-  return result.results;
+    .orderBy(desc(invitation.createdAt));
 }
 
 function isTwoFactorRequirement(

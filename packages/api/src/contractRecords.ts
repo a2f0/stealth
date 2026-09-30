@@ -1,3 +1,5 @@
+import { and, asc, eq, type SQL, sql } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import {
   type ContractMail,
   contractUrl,
@@ -16,6 +18,15 @@ import {
   signingToken,
   signingTokenHash,
 } from "./contractTokens";
+import { getDb } from "./db";
+import {
+  contractEvents,
+  contractFields,
+  contractRecipients,
+  contracts,
+  organization,
+  user,
+} from "./schema";
 import type { Bindings } from "./types";
 
 export type ContractEnvironment = Pick<
@@ -114,75 +125,164 @@ interface ContractEvent {
   userAgent?: string | null;
 }
 
-const contractColumns = `id, organization_id, title, message, status, signing_order,
-  due_date, reminder_interval_days, document_object_key, document_filename,
-  document_size, document_sha256, document_page_count, final_object_key,
-  final_sha256, created_by, sent_by, created_at, updated_at, sent_at,
-  completed_at, voided_at, void_reason, revision`;
+const contractColumns = {
+  completed_at: contracts.completedAt,
+  created_at: contracts.createdAt,
+  created_by: contracts.createdBy,
+  document_filename: contracts.documentFilename,
+  document_object_key: contracts.documentObjectKey,
+  document_page_count: contracts.documentPageCount,
+  document_sha256: contracts.documentSha256,
+  document_size: contracts.documentSize,
+  due_date: contracts.dueDate,
+  final_object_key: contracts.finalObjectKey,
+  final_sha256: contracts.finalSha256,
+  id: contracts.id,
+  message: contracts.message,
+  organization_id: contracts.organizationId,
+  reminder_interval_days: contracts.reminderIntervalDays,
+  revision: contracts.revision,
+  sent_at: contracts.sentAt,
+  sent_by: contracts.sentBy,
+  signing_order: sql<ContractRow["signing_order"]>`${contracts.signingOrder}`,
+  status: sql<ContractRow["status"]>`${contracts.status}`,
+  title: contracts.title,
+  updated_at: contracts.updatedAt,
+  void_reason: contracts.voidReason,
+  voided_at: contracts.voidedAt,
+};
+
+export const recipientColumns = {
+  contract_id: contractRecipients.contractId,
+  created_at: contractRecipients.createdAt,
+  decline_reason: contractRecipients.declineReason,
+  declined_at: contractRecipients.declinedAt,
+  email: contractRecipients.email,
+  id: contractRecipients.id,
+  initials_image: contractRecipients.initialsImage,
+  last_reminded_at: contractRecipients.lastRemindedAt,
+  name: contractRecipients.name,
+  notified_at: contractRecipients.notifiedAt,
+  routing_order: contractRecipients.routingOrder,
+  signature_image: contractRecipients.signatureImage,
+  signed_at: contractRecipients.signedAt,
+  signed_ip: contractRecipients.signedIp,
+  signed_user_agent: contractRecipients.signedUserAgent,
+  status: sql<RecipientRow["status"]>`${contractRecipients.status}`,
+  token_hash: contractRecipients.tokenHash,
+  token_nonce: contractRecipients.tokenNonce,
+  viewed_at: contractRecipients.viewedAt,
+};
 
 export function findContract(
   database: D1Database,
   organizationId: string,
   id: string,
 ) {
-  return database
-    .prepare(
-      `SELECT ${contractColumns} FROM contracts
-       WHERE id = ? AND organization_id = ?`,
+  return getDb(database)
+    .select(contractColumns)
+    .from(contracts)
+    .where(
+      and(eq(contracts.id, id), eq(contracts.organizationId, organizationId)),
     )
-    .bind(id, organizationId)
-    .first<ContractRow>();
+    .get();
 }
 
 export function findContractById(database: D1Database, id: string) {
-  return database
-    .prepare(`SELECT ${contractColumns} FROM contracts WHERE id = ?`)
-    .bind(id)
-    .first<ContractRow>();
+  return getDb(database)
+    .select(contractColumns)
+    .from(contracts)
+    .where(eq(contracts.id, id))
+    .get();
 }
 
-export async function listRecipients(database: D1Database, contractId: string) {
-  const result = await database
-    .prepare(
-      `SELECT id, contract_id, name, email, routing_order, status, token_nonce,
-              token_hash, notified_at, last_reminded_at, viewed_at, signed_at, signed_ip,
-              signed_user_agent, signature_image, initials_image, declined_at,
-              decline_reason, created_at
-       FROM contract_recipients WHERE contract_id = ?
-       ORDER BY routing_order ASC, created_at ASC, rowid ASC`,
-    )
-    .bind(contractId)
-    .all<RecipientRow>();
-  return result.results;
+export function listRecipients(database: D1Database, contractId: string) {
+  return getDb(database)
+    .select(recipientColumns)
+    .from(contractRecipients)
+    .where(eq(contractRecipients.contractId, contractId))
+    .orderBy(
+      asc(contractRecipients.routingOrder),
+      asc(contractRecipients.createdAt),
+      asc(sql`${contractRecipients}.rowid`),
+    );
 }
 
-export async function listFields(database: D1Database, contractId: string) {
-  const result = await database
-    .prepare(
-      `SELECT id, contract_id, recipient_id, type, page, x, y, width, height,
-              required, label, value
-       FROM contract_fields WHERE contract_id = ?
-       ORDER BY page ASC, y ASC, x ASC`,
-    )
-    .bind(contractId)
-    .all<FieldRow>();
-  return result.results;
+export function listFields(database: D1Database, contractId: string) {
+  return getDb(database)
+    .select({
+      contract_id: contractFields.contractId,
+      height: contractFields.height,
+      id: contractFields.id,
+      label: contractFields.label,
+      page: contractFields.page,
+      recipient_id: contractFields.recipientId,
+      required: contractFields.required,
+      type: sql<FieldRow["type"]>`${contractFields.type}`,
+      value: contractFields.value,
+      width: contractFields.width,
+      x: contractFields.x,
+      y: contractFields.y,
+    })
+    .from(contractFields)
+    .where(eq(contractFields.contractId, contractId))
+    .orderBy(
+      asc(contractFields.page),
+      asc(contractFields.y),
+      asc(contractFields.x),
+    );
 }
 
-export async function listEvents(database: D1Database, contractId: string) {
-  const result = await database
-    .prepare(
-      `SELECT event.id, event.recipient_id, event.actor_user_id, event.type,
-              event.detail, event.ip, event.user_agent, event.created_at,
-              actor.name AS actor_name
-       FROM contract_events AS event
-       LEFT JOIN user AS actor ON actor.id = event.actor_user_id
-       WHERE event.contract_id = ?
-       ORDER BY event.created_at ASC, event.rowid ASC`,
-    )
-    .bind(contractId)
-    .all<EventRow>();
-  return result.results;
+export function listEvents(database: D1Database, contractId: string) {
+  return getDb(database)
+    .select({
+      actor_name: user.name,
+      actor_user_id: contractEvents.actorUserId,
+      created_at: contractEvents.createdAt,
+      detail: contractEvents.detail,
+      id: contractEvents.id,
+      ip: contractEvents.ip,
+      recipient_id: contractEvents.recipientId,
+      type: contractEvents.type,
+      user_agent: contractEvents.userAgent,
+    })
+    .from(contractEvents)
+    .leftJoin(user, eq(user.id, contractEvents.actorUserId))
+    .where(eq(contractEvents.contractId, contractId))
+    .orderBy(asc(contractEvents.createdAt), asc(sql`${contractEvents}.rowid`));
+}
+
+/**
+ * Selects `row` as constants from the contract while `when` holds, so an
+ * INSERT ... SELECT lands only under that condition. As Drizzle inserts every
+ * column, `row` lists each one in the table's order.
+ */
+export function rowWhen<T extends Record<string, unknown>>(
+  database: D1Database,
+  contractId: string,
+  row: T,
+  when: SQL | undefined,
+) {
+  const fields = Object.fromEntries(
+    Object.entries(row).map(([key, value]) => [key, sql`${value}`.as(key)]),
+  ) as { [Key in keyof T]: SQL.Aliased };
+  return getDb(database)
+    .select(fields)
+    .from(contracts)
+    .where(and(eq(contracts.id, contractId), when));
+}
+
+/**
+ * Runs write statements as one D1 batch. Drizzle types a batch as a tuple
+ * with a known first statement, which a leading spread cannot provide.
+ */
+export function batchWrites(
+  database: D1Database,
+  statements: BatchItem<"sqlite">[],
+): Promise<D1Result[]> {
+  return getDb(database).batch(
+    statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]],
+  );
 }
 
 /**
@@ -192,31 +292,23 @@ export async function listEvents(database: D1Database, contractId: string) {
 export function eventStatement(
   database: D1Database,
   event: ContractEvent,
-  when?: { bindings: unknown[]; sql: string },
+  when?: SQL,
 ) {
-  const values = [
-    crypto.randomUUID(),
-    event.contractId,
-    event.recipientId ?? null,
-    event.actorUserId ?? null,
-    event.type,
-    event.detail?.slice(0, 500) ?? null,
-    event.ip ?? null,
-    event.userAgent?.slice(0, 300) ?? null,
-    new Date().toISOString(),
-  ];
-  const columns = `INSERT INTO contract_events
-         (id, contract_id, recipient_id, actor_user_id, type, detail, ip,
-          user_agent, created_at)`;
+  const row = {
+    id: crypto.randomUUID(),
+    contractId: event.contractId,
+    recipientId: event.recipientId ?? null,
+    actorUserId: event.actorUserId ?? null,
+    type: event.type,
+    detail: event.detail?.slice(0, 500) ?? null,
+    ip: event.ip ?? null,
+    userAgent: event.userAgent?.slice(0, 300) ?? null,
+    createdAt: new Date().toISOString(),
+  };
+  const insert = getDb(database).insert(contractEvents);
   return when
-    ? database
-        .prepare(
-          `${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${when.sql}`,
-        )
-        .bind(...values, ...when.bindings)
-    : database
-        .prepare(`${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(...values);
+    ? insert.select(rowWhen(database, event.contractId, row, when))
+    : insert.values(row);
 }
 
 export async function recordEvent(database: D1Database, event: ContractEvent) {
@@ -228,20 +320,19 @@ export async function mailFor(
   database: D1Database,
   contract: ContractRow,
 ): Promise<ContractMail> {
-  const row = await database
-    .prepare(
-      `SELECT organization.name AS organization_name,
-              sender.name AS sender_name, sender.email AS sender_email
-       FROM organization
-       LEFT JOIN user AS sender ON sender.id = ?
-       WHERE organization.id = ?`,
+  const row = await getDb(database)
+    .select({
+      organization_name: organization.name,
+      sender_email: user.email,
+      sender_name: user.name,
+    })
+    .from(organization)
+    .leftJoin(
+      user,
+      sql`${user.id} = ${contract.sent_by ?? contract.created_by}`,
     )
-    .bind(contract.sent_by ?? contract.created_by, contract.organization_id)
-    .first<{
-      organization_name: string;
-      sender_email: string | null;
-      sender_name: string | null;
-    }>();
+    .where(eq(organization.id, contract.organization_id))
+    .get();
   return {
     contractId: contract.id,
     dueDate: contract.due_date,
@@ -272,12 +363,15 @@ async function recipientLink(
   );
   const hash = await signingTokenHash(token);
   if (hash !== recipient.token_hash) {
-    await environment.DB.prepare(
-      `UPDATE contract_recipients SET token_hash = ?
-       WHERE id = ? AND token_nonce = ?`,
-    )
-      .bind(hash, recipient.id, recipient.token_nonce)
-      .run();
+    await getDb(environment.DB)
+      .update(contractRecipients)
+      .set({ tokenHash: hash })
+      .where(
+        and(
+          eq(contractRecipients.id, recipient.id),
+          eq(contractRecipients.tokenNonce, recipient.token_nonce),
+        ),
+      );
   }
   return signingUrl(environment, token);
 }
@@ -294,6 +388,7 @@ export async function notifyRecipients(
   at = new Date(),
 ) {
   const database = environment.DB;
+  const db = getDb(database);
   const mail = await mailFor(database, contract);
   const now = at.toISOString();
   let delivered = 0;
@@ -306,25 +401,28 @@ export async function notifyRecipients(
         recipient.id,
         nonce,
       );
-      const issued = await database
-        .prepare(
-          `UPDATE contract_recipients
-           SET status = 'sent', token_nonce = ?, token_hash = ?,
-               notified_at = ?
-           WHERE id = ? AND status = 'pending'`,
-        )
-        .bind(nonce, await signingTokenHash(token), now, recipient.id)
-        .run();
+      const issued = await db
+        .update(contractRecipients)
+        .set({
+          notifiedAt: now,
+          status: "sent",
+          tokenHash: await signingTokenHash(token),
+          tokenNonce: nonce,
+        })
+        .where(
+          and(
+            eq(contractRecipients.id, recipient.id),
+            eq(contractRecipients.status, "pending"),
+          ),
+        );
       if (issued.meta.changes !== 1) continue;
       link = signingUrl(environment, token);
     } else {
       if (reminder) {
-        await database
-          .prepare(
-            `UPDATE contract_recipients SET last_reminded_at = ? WHERE id = ?`,
-          )
-          .bind(now, recipient.id)
-          .run();
+        await db
+          .update(contractRecipients)
+          .set({ lastRemindedAt: now })
+          .where(eq(contractRecipients.id, recipient.id));
       }
       link = await recipientLink(environment, recipient);
     }
@@ -424,21 +522,16 @@ async function completeContract(
     },
     httpMetadata: { contentType: "application/pdf" },
   });
-  const completed = await database
-    .prepare(
-      `UPDATE contracts
-       SET status = 'completed', completed_at = ?, final_object_key = ?,
-           final_sha256 = ?, updated_at = ?
-       WHERE id = ? AND status = 'sent'`,
-    )
-    .bind(
+  const completed = await getDb(database)
+    .update(contracts)
+    .set({
       completedAt,
-      finalKey,
-      await sha256Hex(signed),
-      completedAt,
-      contract.id,
-    )
-    .run();
+      finalObjectKey: finalKey,
+      finalSha256: await sha256Hex(signed),
+      status: "completed",
+      updatedAt: completedAt,
+    })
+    .where(and(eq(contracts.id, contract.id), eq(contracts.status, "sent")));
   if (completed.meta.changes !== 1) {
     await environment.STORAGE.delete(finalKey);
     return false;

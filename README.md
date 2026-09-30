@@ -38,6 +38,20 @@ Wrangler persists the local D1 database and R2 bucket under
 `packages/api/.wrangler/`. The client defaults to the local API. Override it by
 copying `packages/client/.env.example` to `packages/client/.env`.
 
+## Database access
+
+The API queries D1 through [Drizzle ORM](https://orm.drizzle.team/). Obtain a
+client with `getDb(env.DB)` from `packages/api/src/db.ts` and import tables
+from `packages/api/src/schema.ts`. D1 has no interactive transactions, so group
+statements that must commit together with `db.batch([...])`.
+
+The SQL files in `packages/api/migrations` remain the source of truth for the
+database structure, including constraints, indexes, and triggers; Wrangler
+applies them as before. `schema.ts` mirrors only their tables and columns, and
+`schema.test.ts` fails when the two drift, so a migration that adds or changes a
+column must update `schema.ts` in the same change. Tests run queries against Bun
+SQLite through the D1 adapter in `packages/api/src/testDatabase.ts`.
+
 ## Authentication
 
 The API uses Better Auth with D1-backed email/password accounts and cookie

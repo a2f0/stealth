@@ -1,8 +1,10 @@
+import { and, eq, exists, inArray, isNull, sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { sendDeclined } from "./contractMail";
 import { isEmbeddablePng } from "./contractPdf";
 import {
   advanceContract,
+  batchWrites,
   type ContractRow,
   decodePngDataUrl,
   eventStatement,
@@ -11,6 +13,7 @@ import {
   listFields,
   mailFor,
   type RecipientRow,
+  recipientColumns,
   recordEvent,
 } from "./contractRecords";
 import {
@@ -18,6 +21,13 @@ import {
   signingToken,
   signingTokenHash,
 } from "./contractTokens";
+import { getDb } from "./db";
+import {
+  contractFields,
+  contractRecipients,
+  contracts,
+  organization,
+} from "./schema";
 import type { Bindings } from "./types";
 
 /** Public routes a signer reaches through their emailed link; no account. */
@@ -28,13 +38,6 @@ type SigningContext = Context<SigningEnv>;
 const maxSignatureDataUrlLength = 400_000;
 const maxTextValueLength = 500;
 
-// A signature or decline only lands while the signer still has their turn
-// and the contract is out for signing; bound as [recipientId, contractId].
-const stillSignable = `EXISTS (
-    SELECT 1 FROM contract_recipients
-    WHERE id = ? AND status IN ('sent', 'viewed')
-  ) AND EXISTS (SELECT 1 FROM contracts WHERE id = ? AND status = 'sent')`;
-
 const signing = new Hono<SigningEnv>();
 
 signing.get("/:token", async (context) => {
@@ -43,12 +46,15 @@ signing.get("/:token", async (context) => {
   const { contract, recipient } = signer;
   const canSign = signable(contract, recipient);
   if (canSign && recipient.status === "sent") {
-    const viewed = await context.env.DB.prepare(
-      `UPDATE contract_recipients SET status = 'viewed', viewed_at = ?
-       WHERE id = ? AND status = 'sent'`,
-    )
-      .bind(new Date().toISOString(), recipient.id)
-      .run();
+    const viewed = await getDb(context.env.DB)
+      .update(contractRecipients)
+      .set({ status: "viewed", viewedAt: new Date().toISOString() })
+      .where(
+        and(
+          eq(contractRecipients.id, recipient.id),
+          eq(contractRecipients.status, "sent"),
+        ),
+      );
     if (viewed.meta.changes === 1) {
       await recordEvent(context.env.DB, {
         contractId: contract.id,
@@ -149,18 +155,23 @@ signing.post("/:token/sign", async (context) => {
   const now = new Date().toISOString();
   const ip = clientIp(context);
   const userAgent = context.req.header("user-agent")?.slice(0, 300) ?? null;
-  const guard = [recipient.id, contract.id];
+  const db = getDb(database);
+  const guard = stillSignable(database, recipient.id, contract.id);
   // One transaction: the values and event are written first, under the same
   // condition as the claim, so they land exactly when the signature does and
   // before anyone can see the signer as signed.
-  const results = await database.batch([
+  const results = await batchWrites(database, [
     ...[...textValues].map(([fieldId, value]) =>
-      database
-        .prepare(
-          `UPDATE contract_fields SET value = ?
-           WHERE id = ? AND recipient_id = ? AND ${stillSignable}`,
-        )
-        .bind(value || null, fieldId, recipient.id, ...guard),
+      db
+        .update(contractFields)
+        .set({ value: value || null })
+        .where(
+          and(
+            eq(contractFields.id, fieldId),
+            eq(contractFields.recipientId, recipient.id),
+            guard,
+          ),
+        ),
     ),
     eventStatement(
       database,
@@ -171,16 +182,19 @@ signing.post("/:token/sign", async (context) => {
         type: "signed",
         userAgent,
       },
-      { bindings: guard, sql: stillSignable },
+      guard,
     ),
-    database
-      .prepare(
-        `UPDATE contract_recipients
-         SET status = 'signed', signed_at = ?, signed_ip = ?,
-             signed_user_agent = ?, signature_image = ?, initials_image = ?
-         WHERE id = ? AND ${stillSignable}`,
-      )
-      .bind(now, ip, userAgent, signature, initials, recipient.id, ...guard),
+    db
+      .update(contractRecipients)
+      .set({
+        initialsImage: initials,
+        signatureImage: signature,
+        signedAt: now,
+        signedIp: ip,
+        signedUserAgent: userAgent,
+        status: "signed",
+      })
+      .where(and(eq(contractRecipients.id, recipient.id), guard)),
   ]);
   if (results.at(-1)?.meta.changes !== 1) {
     return cannotSign(context, contract, recipient);
@@ -210,10 +224,11 @@ signing.post("/:token/decline", async (context) => {
   const reason = typeof raw === "string" ? raw.trim().slice(0, 500) : "";
   const database = context.env.DB;
   const now = new Date().toISOString();
-  const guard = [recipient.id, contract.id];
+  const db = getDb(database);
+  const guard = stillSignable(database, recipient.id, contract.id);
   // One transaction, as with signing: the event, the decline, and the
   // contract's end all land together or not at all.
-  const results = await database.batch([
+  const results = await db.batch([
     eventStatement(
       database,
       {
@@ -224,25 +239,36 @@ signing.post("/:token/decline", async (context) => {
         type: "declined",
         userAgent: context.req.header("user-agent") ?? null,
       },
-      { bindings: guard, sql: stillSignable },
+      guard,
     ),
-    database
-      .prepare(
-        `UPDATE contract_recipients
-         SET status = 'declined', declined_at = ?, decline_reason = ?
-         WHERE id = ? AND ${stillSignable}`,
-      )
-      .bind(now, reason || null, recipient.id, ...guard),
-    database
-      .prepare(
-        `UPDATE contracts SET status = 'declined', updated_at = ?
-         WHERE id = ? AND status = 'sent'
-           AND EXISTS (
-             SELECT 1 FROM contract_recipients
-             WHERE contract_id = contracts.id AND status = 'declined'
-           )`,
-      )
-      .bind(now, contract.id),
+    db
+      .update(contractRecipients)
+      .set({
+        declineReason: reason || null,
+        declinedAt: now,
+        status: "declined",
+      })
+      .where(and(eq(contractRecipients.id, recipient.id), guard)),
+    db
+      .update(contracts)
+      .set({ status: "declined", updatedAt: now })
+      .where(
+        and(
+          eq(contracts.id, contract.id),
+          eq(contracts.status, "sent"),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(contractRecipients)
+              .where(
+                and(
+                  eq(contractRecipients.contractId, contracts.id),
+                  eq(contractRecipients.status, "declined"),
+                ),
+              ),
+          ),
+        ),
+      ),
   ]);
   if (results[1]?.meta.changes !== 1) {
     return cannotSign(context, contract, recipient);
@@ -301,22 +327,18 @@ function submissionInput(body: unknown, fields: FieldRow[]) {
  */
 async function findSigner(context: SigningContext, token: string) {
   if (!isSigningToken(token)) return null;
-  const recipient = await context.env.DB.prepare(
-    `SELECT recipient.id, recipient.contract_id, recipient.name,
-            recipient.email, recipient.routing_order, recipient.status,
-            recipient.token_nonce, recipient.token_hash, recipient.notified_at,
-            recipient.last_reminded_at, recipient.viewed_at,
-            recipient.signed_at, recipient.signed_ip,
-            recipient.signed_user_agent, recipient.signature_image,
-            recipient.initials_image, recipient.declined_at,
-            recipient.decline_reason, recipient.created_at
-     FROM contract_recipients AS recipient
-     JOIN contracts AS contract ON contract.id = recipient.contract_id
-     JOIN organization ON organization.id = contract.organization_id
-     WHERE recipient.token_hash = ? AND organization.deletedAt IS NULL`,
-  )
-    .bind(await signingTokenHash(token))
-    .first<RecipientRow>();
+  const recipient = await getDb(context.env.DB)
+    .select(recipientColumns)
+    .from(contractRecipients)
+    .innerJoin(contracts, eq(contracts.id, contractRecipients.contractId))
+    .innerJoin(organization, eq(organization.id, contracts.organizationId))
+    .where(
+      and(
+        eq(contractRecipients.tokenHash, await signingTokenHash(token)),
+        isNull(organization.deletedAt),
+      ),
+    )
+    .get();
   if (!recipient?.token_nonce) return null;
   // Compared as hashes so timing reveals nothing about the expected token.
   const expected = await signingToken(
@@ -330,6 +352,37 @@ async function findSigner(context: SigningContext, token: string) {
     recipient.contract_id,
   );
   return contract ? { contract, recipient } : null;
+}
+
+/**
+ * A signature or decline only lands while the signer still has their turn
+ * and the contract is out for signing.
+ */
+function stillSignable(
+  database: D1Database,
+  recipientId: string,
+  contractId: string,
+) {
+  const db = getDb(database);
+  return and(
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(contractRecipients)
+        .where(
+          and(
+            eq(contractRecipients.id, recipientId),
+            inArray(contractRecipients.status, ["sent", "viewed"]),
+          ),
+        ),
+    ),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(contracts)
+        .where(and(eq(contracts.id, contractId), eq(contracts.status, "sent"))),
+    ),
+  );
 }
 
 function signable(contract: ContractRow, recipient: RecipientRow) {

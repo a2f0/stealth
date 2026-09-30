@@ -1,9 +1,10 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import { objects } from "./objects";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 interface ObjectResponse {
@@ -162,6 +163,9 @@ async function createFixture() {
     );
   await applyMigration(database, "0006_scope_objects_to_organizations.sql");
   await applyMigration(database, "0025_classify_objects.sql");
+  await applyMigration(database, "0026_track_object_deletion.sql");
+  await applyMigration(database, "0027_claim_object_cleanup.sql");
+  await applyMigration(database, "0028_lease_audit_image_uploads.sql");
   await applyMigration(database, "0030_queue_deleted_objects.sql");
   await applyMigration(database, "0035_create_library_folders.sql");
   database
@@ -287,36 +291,12 @@ function bindingsFor(
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: toD1(database),
+    DB: createTestD1(database),
     EMAIL: {} as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.de",
     STORAGE: storageFor(stored),
   };
-}
-
-function toD1(database: Database) {
-  return {
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({
-          results: database.query(query).all(...values),
-          success: true,
-        }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        first: async () => database.query(query).get(...values),
-        run: async () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes }, success: true };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }
 
 function storageFor(stored: Map<string, Uint8Array>) {

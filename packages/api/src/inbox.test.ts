@@ -1,9 +1,10 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
 import { inbox } from "./inbox";
+import { createTestD1 } from "./testDatabase";
 import type { Bindings } from "./types";
 
 const organizationId = "org_owner-user";
@@ -303,7 +304,7 @@ async function createFixture() {
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     BETTER_AUTH_URL: "https://api.test",
     CORS_ORIGIN: "https://app.test",
-    DB: toD1(database),
+    DB: createTestD1(database),
     EMAIL: {} as SendEmail,
     IMAGES: {} as ImagesBinding,
     INBOUND_EMAIL_DOMAIN: "inbox.tearleads.de",
@@ -344,30 +345,6 @@ async function applyMigration(database: Database, filename: string) {
       new URL(`../migrations/${filename}`, import.meta.url),
     ).text(),
   );
-}
-
-function toD1(database: Database) {
-  return {
-    prepare: (query: string) => {
-      let values: SQLQueryBindings[] = [];
-      const statement = {
-        all: async () => ({
-          results: database.query(query).all(...values),
-          success: true,
-        }),
-        bind: (...nextValues: SQLQueryBindings[]) => {
-          values = nextValues;
-          return statement;
-        },
-        first: async () => database.query(query).get(...values),
-        run: async () => {
-          const result = database.query(query).run(...values);
-          return { meta: { changes: result.changes }, success: true };
-        },
-      };
-      return statement;
-    },
-  } as unknown as D1Database;
 }
 
 function createStorage(objects: Map<string, Uint8Array>) {
