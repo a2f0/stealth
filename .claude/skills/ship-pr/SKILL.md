@@ -137,7 +137,6 @@ TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
 GPG_BIN=$(resolve_bootstrap_tool gpg 2>/dev/null || true)
 PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}${GPG_BIN:+:${GPG_BIN%/*}}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
-ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 [ -n "$REPO" ] || { echo "Error: repository identity is unavailable" >&2; exit 1; }
@@ -154,25 +153,17 @@ BASE_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || {
   exit 1
 }
 
-if git cat-file -e "${BASE_HEAD}:packages/agent-tool/src/index.ts" 2>/dev/null; then
-  TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
-  trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
-  git archive "$BASE_HEAD" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
-  AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
-else
-  [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || { echo "Error: base has no agent-tool; set TEARLEADS_AGENT_TOOL_DIR to a trusted external installation" >&2; exit 1; }
-  AGENT_TOOL=$(realpath "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || { echo "Error: trusted agent-tool path is invalid" >&2; exit 1; }
-  case "$AGENT_TOOL" in
-    "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted agent-tool must be outside the feature checkout" >&2; exit 1 ;;
-  esac
-fi
+git cat-file -e "${BASE_HEAD}:packages/agent-tool/src/index.ts" 2>/dev/null || { echo "Error: base has no agent-tool; every trusted tool comes from this repository's base" >&2; exit 1; }
+TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
+trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
+git archive "$BASE_HEAD" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
+AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
 [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
 
 # `--no-verify` pushes skip the feature checkout's pre-push hook, so every push
 # first runs the hook's commit-trust check itself, taken from the trusted base:
 # each commit being pushed must be signed and free of Co-authored-by trailers.
-# During the bootstrap PR that introduces the check, the base has no copy; set
-# TEARLEADS_COMMIT_TRUST_SCRIPT to an independently trusted copy instead.
+# The check comes only from that base; a base without it cannot push.
 verify_commit_trust() {
   # Only a real commit may name the trusted base: an empty one would read the
   # feature branch's own copy from the index and check an empty range.
@@ -180,23 +171,13 @@ verify_commit_trust() {
     echo "Error: verify_commit_trust needs the trusted base commit" >&2
     return 1
   }
-  trust_dir=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-commit-trust.XXXXXX") || return 1
-  if git cat-file -e "${trust_base}:scripts/checks/checkCommitTrust.sh" 2>/dev/null; then
-    git show "${trust_base}:scripts/checks/checkCommitTrust.sh" >"$trust_dir/checkCommitTrust.sh" || { rm -rf "$trust_dir"; return 1; }
-    trust_script="$trust_dir/checkCommitTrust.sh"
-  elif [ -n "${TEARLEADS_COMMIT_TRUST_SCRIPT:-}" ]; then
-    trust_script=$("$REALPATH_BIN" "$TEARLEADS_COMMIT_TRUST_SCRIPT") || { rm -rf "$trust_dir"; return 1; }
-    # Outside every worktree of this repository, not just the current one.
-    if git worktree list --porcelain | awk -v script="$trust_script" 'sub(/^worktree /, "") && (script == $(0) || index(script, $(0) "/") == 1) { found = 1 } END { exit !found }'; then
-      echo "Error: trusted commit-trust check must be outside every checkout of this repository" >&2
-      rm -rf "$trust_dir"
-      return 1
-    fi
-  else
-    echo "Error: base has no commit-trust check; set TEARLEADS_COMMIT_TRUST_SCRIPT to a trusted copy outside the checkout" >&2
-    rm -rf "$trust_dir"
+  git cat-file -e "${trust_base}:scripts/checks/checkCommitTrust.sh" 2>/dev/null || {
+    echo "Error: base has no commit-trust check" >&2
     return 1
-  fi
+  }
+  trust_dir=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-commit-trust.XXXXXX") || return 1
+  trust_script="$trust_dir/checkCommitTrust.sh"
+  git show "${trust_base}:scripts/checks/checkCommitTrust.sh" >"$trust_script" || { rm -rf "$trust_dir"; return 1; }
   trust_status=0
   sh "$trust_script" --range "$trust_base..HEAD" || trust_status=$?
   rm -rf "$trust_dir"

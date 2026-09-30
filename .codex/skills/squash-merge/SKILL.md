@@ -44,9 +44,9 @@ it, and delete the merged branch, so a shipped PR leaves no local leftovers.
 ## Prerequisites
 
 - `git`, `gh` (authenticated), POSIX `awk`, `realpath`, and `tar` on `PATH`.
-- The `@tearleads/agent-tool` package in the PR's base commit. During the
-  package's initial bootstrap PR only, set `TEARLEADS_AGENT_TOOL_DIR` to an
-  independently trusted installation outside the repository checkout.
+- The `@tearleads/agent-tool` package in the PR's base commit. Every tool
+  these skills run comes from that base — never from an installation outside
+  this repository.
 - `node_modules` installed (`bun install`) so repository checks and hooks run.
 - An open, mergeable PR on the current branch.
 
@@ -96,7 +96,6 @@ BUN_BIN=$(resolve_bootstrap_tool bun) || exit 1
 TAR_BIN=$(resolve_bootstrap_tool tar) || exit 1
 PATH="${GIT_BIN%/*}:${GH_BIN%/*}:${BUN_BIN%/*}:${TAR_BIN%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
-ROOT_DIR=$("$REALPATH_BIN" "$(git rev-parse --show-toplevel)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 # One gh call for both values, split on the space neither a repo slug nor a
@@ -132,18 +131,11 @@ git fetch --quiet "$BASE_REPO_URL" "$BASE_BRANCH" || { echo "Error: could not fe
 TOOL_BASE_SHA=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || { echo "Error: fetched PR base is unavailable" >&2; exit 1; }
 [ "$TOOL_BASE_SHA" = "$PR_BASE_SHA" ] || { echo "Error: PR base moved while resolving the trusted agent-tool; retry" >&2; exit 1; }
 
-if git cat-file -e "${TOOL_BASE_SHA}:packages/agent-tool/src/index.ts" 2>/dev/null; then
-  TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
-  trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
-  git archive "$TOOL_BASE_SHA" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
-  AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
-else
-  [ -n "${TEARLEADS_AGENT_TOOL_DIR:-}" ] || { echo "Error: base has no agent-tool; set TEARLEADS_AGENT_TOOL_DIR to a trusted external installation" >&2; exit 1; }
-  AGENT_TOOL=$(realpath "$TEARLEADS_AGENT_TOOL_DIR/src/index.ts") || { echo "Error: trusted agent-tool path is invalid" >&2; exit 1; }
-  case "$AGENT_TOOL" in
-    "$ROOT_DIR" | "$ROOT_DIR"/*) echo "Error: trusted agent-tool must be outside the feature checkout" >&2; exit 1 ;;
-  esac
-fi
+git cat-file -e "${TOOL_BASE_SHA}:packages/agent-tool/src/index.ts" 2>/dev/null || { echo "Error: base has no agent-tool; every trusted tool comes from this repository's base" >&2; exit 1; }
+TRUSTED_AGENT_TOOL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tearleads-agent-tool.XXXXXX") || exit 1
+trap 'rm -rf "$TRUSTED_AGENT_TOOL_TMP"' EXIT
+git archive "$TOOL_BASE_SHA" packages/agent-tool | tar -x -C "$TRUSTED_AGENT_TOOL_TMP" || { echo "Error: could not materialize the base agent-tool" >&2; exit 1; }
+AGENT_TOOL="$TRUSTED_AGENT_TOOL_TMP/packages/agent-tool/src/index.ts"
 [ -f "$AGENT_TOOL" ] || { echo "Error: trusted agent-tool not found at $AGENT_TOOL" >&2; exit 1; }
 
 PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid -R "$REPO")

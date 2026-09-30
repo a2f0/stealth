@@ -300,30 +300,20 @@ describe("the skills' verify_commit_trust gate", () => {
       }
     });
 
-    test(`takes a bootstrap copy only from outside the checkout under ${shell}`, () => {
+    test(`takes the check only from the base under ${shell}`, () => {
       const repo = gateFixture(false);
       repo.commit("feat: signed work", true);
-      expect(repo.verify(shell, repo.base).stderr).toContain(
-        "base has no commit-trust check",
-      );
-
-      const inside = path.join(repo.cwd, "checkCommitTrust.sh");
-      writeFileSync(inside, "#!/bin/sh\nexit 0\n");
-      const rejected = repo.verify(shell, repo.base, {
-        TEARLEADS_COMMIT_TRUST_SCRIPT: inside,
-      });
-      expect(rejected.code).not.toBe(0);
-      expect(rejected.stderr).toContain("outside every checkout");
-
+      // A copy outside the repository is never a substitute for the base's.
       const outside = path.join(repo.root, "checkCommitTrust.sh");
       writeFileSync(
         outside,
         readFileSync(path.join(repositoryRoot, trustScript)),
       );
-      const trusted = repo.verify(shell, repo.base, {
+      const result = repo.verify(shell, repo.base, {
         TEARLEADS_COMMIT_TRUST_SCRIPT: outside,
       });
-      expect(trusted.code, trusted.stderr).toBe(0);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("base has no commit-trust check");
     });
   }
 });

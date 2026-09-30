@@ -533,7 +533,7 @@ test("cross-agent-review takes version actions only from the fetched base", () =
   expect(new Set(snippets).size).toBe(1);
 
   const [snippet = ""] = snippets;
-  const detect = (trustedTmp: string, baseHasVersions: boolean) =>
+  const detect = (baseHasVersions: boolean) =>
     spawnSync(
       "/bin/bash",
       [
@@ -546,16 +546,55 @@ test("cross-agent-review takes version actions only from the fetched base", () =
           AGENT_TOOL: "/tool/src/index.ts",
           FETCHED_BASE: "base",
           HAS_VERSIONS: baseHasVersions ? "1" : "0",
-          TRUSTED_AGENT_TOOL_TMP: trustedTmp,
         },
       },
     ).stdout.trim();
 
-  expect(detect("/materialized", true)).toBe("/tool/src/index.ts");
-  expect(detect("/materialized", false)).toBe("");
-  // An agent-tool from TEARLEADS_AGENT_TOOL_DIR (no base snapshot) never
-  // supplies the version actions, even when the base has them.
-  expect(detect("", true)).toBe("");
+  expect(detect(true)).toBe("/tool/src/index.ts");
+  expect(detect(false)).toBe("");
+});
+
+test("shipping skills take every tool from this repository", () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  for (const skillRoot of [".claude/skills", ".codex/skills"]) {
+    for (const skill of readdirSync(path.join(repositoryRoot, skillRoot))) {
+      const content = readFileSync(
+        path.join(repositoryRoot, skillRoot, skill, "SKILL.md"),
+        "utf8",
+      );
+      expect(content).not.toContain("TEARLEADS_AGENT_TOOL_DIR");
+      expect(content).not.toContain("TEARLEADS_COMMIT_TRUST_SCRIPT");
+    }
+    for (const skill of [
+      "cross-agent-review",
+      "open-pr",
+      "ship-pr",
+      "squash-merge",
+    ]) {
+      const content = readFileSync(
+        path.join(repositoryRoot, skillRoot, skill, "SKILL.md"),
+        "utf8",
+      );
+      const guard =
+        /^ *git cat-file -e "\$\{\w+\}:packages\/agent-tool\/src\/index\.ts" 2>\/dev\/null \|\| \{.*exit 1; \}$/m.exec(
+          content,
+        );
+      expect(guard).not.toBeNull();
+      // A base without the tool stops the skill, whatever the environment
+      // offers in its place.
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `git() { return 1; }\n${guard?.[0].trim()}\necho reached`],
+        {
+          encoding: "utf8",
+          env: { TEARLEADS_AGENT_TOOL_DIR: "/elsewhere/agent-tool" },
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("base has no agent-tool");
+    }
+  }
 });
 
 test("skills survive Claude Code argument substitution", () => {
