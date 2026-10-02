@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { accountSettings } from "./accountSettings";
+import { activity } from "./activity";
 import { adminJobs } from "./adminJobs";
 import { adminOrganizations } from "./adminOrganizations";
 import { audits } from "./audits";
@@ -89,6 +90,7 @@ app.get("/api", (context) =>
       adminJobs: "/api/admin/jobs",
       adminOrganizations: "/api/admin/organizations",
       accountSettings: "/api/account-settings",
+      activity: "/api/activity",
       audits: "/api/audits",
       billing: "/api/billing",
       businesses: "/api/businesses",
@@ -131,6 +133,10 @@ app.route("/api/admin/organizations", adminOrganizations);
 app.use("/api/audits", requireAuth, requireOrganization);
 app.use("/api/audits/*", requireAuth, requireOrganization);
 app.route("/api/audits", audits);
+
+app.use("/api/activity", requireAuth, requireOrganization);
+app.use("/api/activity/*", requireAuth, requireOrganization);
+app.route("/api/activity", activity);
 
 app.use("/api/businesses", requireAuth, requireOrganization);
 app.use("/api/businesses/*", requireAuth, requireOrganization);

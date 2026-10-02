@@ -544,6 +544,7 @@ function AuditRunRow({
         <span className="rowMeta">
           {run.templateVersion ? `v${run.templateVersion} · ` : ""}
           {formatDate(run.updatedAt)}
+          {` · Started by ${run.createdBy.name}`}
         </span>
       </span>
       <span className="auditRunStats">

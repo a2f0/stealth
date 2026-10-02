@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  AnswerAttribution,
   createIssueWithImages,
   FailedItemIssue,
   type FailIssueState,
@@ -50,11 +51,14 @@ function render(
 function detailWith(responses: Record<string, string>): AuditDetail {
   return {
     audit: {
+      answerActivity: {},
       completedAt: null,
       createdAt: "2026-09-29T00:00:00.000Z",
+      createdBy: { email: "sam@example.com", id: "user-1", name: "Sam" },
       definition: { sections: [], version: 1 },
       id: "audit-1",
       responses,
+      revision: 0,
       status: "in_progress",
       templateId: null,
       templateName: "Electrical walk",
@@ -266,13 +270,16 @@ describe("audit run state", () => {
       response: "fail",
       type: "answered",
     });
-    const refreshedDetail = detailWith({ a: "pass" });
+    const refreshedDetail = detailWith({ a: "na" });
+    refreshedDetail.audit.revision = 2;
     const refreshed = runStateReducer(answered, {
       detail: refreshedDetail,
       type: "issuesRefreshed",
     });
 
-    expect(refreshed.detail).toBe(refreshedDetail);
+    expect(refreshed.detail?.issues).toBe(refreshedDetail.issues);
+    expect(refreshed.detail?.audit).toBe(loaded.detail?.audit);
+    expect(refreshed.detail?.audit.revision).toBe(0);
     expect(refreshed.responses).toEqual({ a: "pass", [item.id]: "fail" });
   });
 
@@ -283,5 +290,30 @@ describe("audit run state", () => {
     );
 
     expect(state.responses).toEqual({ a: "na" });
+  });
+});
+
+describe("answer attribution", () => {
+  it("shows the last saved actor and labels older answers without inventing an actor", () => {
+    const audit = detailWith({ [item.id]: "pass" }).audit;
+    const older = renderToStaticMarkup(
+      <AnswerAttribution audit={audit} itemId={item.id} response="pass" />,
+    );
+    expect(older).toContain("Answer saved before activity tracking");
+    audit.answerActivity[item.id] = {
+      actor: { email: "sam@example.com", id: "user-1", name: "Sam" },
+      occurredAt: "2026-10-02T12:00:00.000Z",
+    };
+    const tracked = renderToStaticMarkup(
+      <AnswerAttribution audit={audit} itemId={item.id} response="pass" />,
+    );
+    expect(tracked).toContain("Updated by");
+    expect(tracked).toContain("Sam");
+    expect(tracked).toContain("sam@example.com");
+    const pending = renderToStaticMarkup(
+      <AnswerAttribution audit={audit} itemId={item.id} response="fail" />,
+    );
+    expect(pending).toContain("Unsaved answer");
+    expect(pending).not.toContain("Updated by");
   });
 });

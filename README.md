@@ -221,6 +221,26 @@ and normalizes uploads to a single non-animated frame before anything is written
 to storage.
 Audit runs snapshot their template so later template edits do not rewrite
 history.
+The workspace **Activity** page and each form and audit's Activity section show
+who created forms, started audits, changed answers, completed or reopened audits,
+raised or reassigned issues, resolved or reopened issues, and attached or removed
+images. Answer history includes the previous and new values; each question also
+shows its last saved editor. Unsaved answers are labeled, and concurrent edits
+require reloading before overwriting another person's saved work.
+
+Apply migration `0049_create_activity_events.sql` before deploying. The reusable
+`activity_events` model records an organization, root resource, subject, action,
+actor identity snapshot, timestamp, and action details. Audit database triggers
+write activity atomically with successful changes; explicit image removals use
+the same transactional batch. `GET /api/activity` lists the active organization's
+activity; `/api/audits/templates/:id/activity` and
+`/api/audits/runs/:id/activity` provide resource histories. All use cursor
+pagination. Shared global form activity is visible through its form history.
+The migration imports known creators and template versions as historical
+records. Earlier answer edits and completion actors were not stored and cannot
+be reconstructed. Activity follows its root resource's retention and is removed
+when a run, form, or organization is purged.
+
 Customizing a global template creates a new organization-scoped form instead
 of changing the shared template or its version history. Platform administrators
 use a separate management action when they intentionally publish a new global

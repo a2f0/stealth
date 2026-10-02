@@ -16,6 +16,7 @@ import {
   PageSection,
 } from "@tearleads/ui/react";
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { ActivityFeed, formatActivityTime } from "./ActivityFeed";
 import {
   AuditApiError,
   type AuditDefinition,
@@ -89,7 +90,13 @@ export function runStateReducer(state: RunState, action: RunAction): RunState {
         responses: action.detail.audit.responses,
       };
     case "issuesRefreshed":
-      return { ...state, detail: action.detail };
+      return {
+        ...state,
+        detail: {
+          ...action.detail,
+          audit: state.detail?.audit ?? action.detail.audit,
+        },
+      };
     case "answered":
       return {
         ...state,
@@ -109,6 +116,7 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
 
   const fetchRun = useCallback(
     async (type: "issuesRefreshed" | "loaded") => {
+      setError(undefined);
       try {
         dispatch({ detail: await getAuditRun(id), type });
       } catch (cause) {
@@ -130,7 +138,7 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
     setError(undefined);
     setNotice(undefined);
     try {
-      await saveAuditRun(id, responses, status);
+      await saveAuditRun(id, responses, status, detail?.audit.revision);
       await load();
       setNotice(status === "completed" ? "Audit completed." : "Draft saved.");
     } catch (cause) {
@@ -164,6 +172,16 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
       <PageBody className="runBody">
         {error && <Banner tone="danger">{error}</Banner>}
         {notice && <Banner tone="success">{notice}</Banner>}
+        <p className="runAttribution">
+          Started by {detail.audit.createdBy.name} ·{" "}
+          {detail.audit.createdBy.email} ·{" "}
+          {formatActivityTime(detail.audit.createdAt)}
+        </p>
+        {error && (
+          <Button onClick={() => void load()} size="sm">
+            Reload audit
+          </Button>
+        )}
         <RunProgress
           audit={detail.audit}
           issues={detail.issues}
@@ -172,6 +190,7 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
         <AuditQuestions
           definition={detail.audit.definition}
           issueContext={{
+            audit: detail.audit,
             auditId: id,
             issues: detail.issues,
             members: detail.members,
@@ -190,6 +209,7 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
           onChange={refreshIssues}
           responses={responses}
         />
+        <ActivityFeed refreshKey={detail} source={{ id, type: "audit_run" }} />
       </PageBody>
     </Page>
   );
@@ -229,7 +249,7 @@ function RunHeader({
             </p>
           )}
           <Button disabled={busy} onClick={() => void onSave("in_progress")}>
-            Save draft
+            {status === "completed" ? "Reopen audit" : "Save draft"}
           </Button>
           <Button
             disabled={busy}
@@ -237,7 +257,7 @@ function RunHeader({
             onClick={() => void onSave("completed")}
             variant="primary"
           >
-            Complete audit
+            {status === "completed" ? "Save completed audit" : "Complete audit"}
           </Button>
         </div>
       }
@@ -349,6 +369,7 @@ function ProgressNote({
 
 /** What a question needs to raise an issue inline when it is marked Fail. */
 interface IssueContext {
+  audit: AuditRun;
   auditId: string;
   issues: AuditIssue[];
   members: OrganizationMember[];
@@ -507,6 +528,11 @@ function AuditQuestion({
           value={response}
         />
       )}
+      <AnswerAttribution
+        audit={issueContext.audit}
+        itemId={item.id}
+        response={response}
+      />
       {issueState.step !== "closed" && response === "fail" && (
         <FailedItemIssue
           auditId={issueContext.auditId}
@@ -528,6 +554,35 @@ function AuditQuestion({
       )}
     </li>
   );
+}
+
+export function AnswerAttribution({
+  audit,
+  itemId,
+  response,
+}: {
+  audit: AuditRun;
+  itemId: string;
+  response: string;
+}) {
+  if ((audit.responses[itemId] ?? "") !== response) {
+    return <p className="runAttribution">Unsaved answer</p>;
+  }
+  const activity = audit.answerActivity[itemId];
+  if (activity) {
+    return (
+      <p className="runAttribution">
+        Updated by{" "}
+        <span title={activity.actor.email}>
+          {activity.actor.name || activity.actor.email}
+        </span>{" "}
+        · {formatActivityTime(activity.occurredAt)}
+      </p>
+    );
+  }
+  return response ? (
+    <p className="runAttribution">Answer saved before activity tracking</p>
+  ) : null;
 }
 
 /**
@@ -1057,6 +1112,10 @@ function IssueCard({
           </Badge>
         </div>
         <h3 className="runIssueTitle">{issue.title}</h3>
+        <p className="runAttribution">
+          Raised by {issue.createdBy.name} · {issue.createdBy.email} ·{" "}
+          {formatActivityTime(issue.createdAt)}
+        </p>
         {issue.description && (
           <p className="runIssueDescription">{issue.description}</p>
         )}

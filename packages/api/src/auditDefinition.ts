@@ -23,6 +23,7 @@ interface UnknownRecord {
   definition?: unknown;
   description?: unknown;
   expectedCurrentVersion?: unknown;
+  expectedRevision?: unknown;
   id?: unknown;
   itemId?: unknown;
   items?: unknown;
