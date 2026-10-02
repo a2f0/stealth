@@ -116,9 +116,9 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
 
   const fetchRun = useCallback(
     async (type: "issuesRefreshed" | "loaded") => {
-      setError(undefined);
       try {
         dispatch({ detail: await getAuditRun(id), type });
+        if (type === "loaded") setError(undefined);
       } catch (cause) {
         setError(messageFrom(cause));
       }

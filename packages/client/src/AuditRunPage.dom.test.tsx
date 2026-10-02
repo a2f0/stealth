@@ -109,6 +109,9 @@ describe("audit save conflicts, mounted", () => {
       if (String(input).endsWith("/activity")) {
         return Response.json({ events: [], nextCursor: null });
       }
+      if (init?.method === "POST") {
+        return Response.json({ issueId: "issue-1" }, { status: 201 });
+      }
       if (init?.method === "PATCH") {
         writes.push(JSON.parse(String(init.body)));
         return writes.length === 1
@@ -147,8 +150,13 @@ describe("audit save conflicts, mounted", () => {
       container.querySelector('button[aria-pressed="true"]')?.textContent,
     ).toBe("N/A");
     expect(container.textContent).toContain("Unsaved answer");
-    await click("Reload audit");
+    await click("Fail");
+    await click("Create issue");
     expect(reads).toBe(2);
+    expect(container.textContent).toContain("This audit has changed");
+    expect(container.textContent).toContain("Unsaved answer");
+    await click("Reload audit");
+    expect(reads).toBe(3);
     expect(
       container.querySelector('button[aria-pressed="true"]')?.textContent,
     ).toBe("Fail");
