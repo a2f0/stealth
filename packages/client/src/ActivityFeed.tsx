@@ -31,10 +31,12 @@ const actionLabels: Record<string, string> = {
 };
 
 export function ActivityFeed({
+  compact = false,
   onNavigate,
   refreshKey,
   source,
 }: {
+  compact?: boolean;
   onNavigate?: (pathname: string) => void;
   refreshKey?: unknown;
   source?: ActivitySource;
@@ -45,16 +47,18 @@ export function ActivityFeed({
   );
   return (
     <PageSection
+      className={compact ? "activityFeedCompact" : undefined}
       actions={
         <Button onClick={refresh} size="sm">
           Refresh activity
         </Button>
       }
-      title="Activity"
+      title={compact ? "Recent activity" : "Activity"}
     >
       {error && <Banner tone="danger">{error}</Banner>}
       {page ? (
         <ActivityList
+          compact={compact}
           events={page.events}
           onNavigate={source ? undefined : onNavigate}
         />
@@ -134,9 +138,11 @@ function useActivityPage(source: ActivitySource, refreshKey: unknown) {
 }
 
 function ActivityList({
+  compact,
   events,
   onNavigate,
 }: {
+  compact: boolean;
   events: ActivityEvent[];
   onNavigate?: ((pathname: string) => void) | undefined;
 }) {
@@ -149,12 +155,88 @@ function ActivityList({
   return (
     <Card flush>
       <ol aria-label="Activity history" className="rowList activityList">
-        {events.map((event) => (
-          <ActivityRow event={event} key={event.id} onNavigate={onNavigate} />
-        ))}
+        {events.map((event) =>
+          compact ? (
+            <CompactActivityRow
+              event={event}
+              key={event.id}
+              onNavigate={onNavigate}
+            />
+          ) : (
+            <ActivityRow event={event} key={event.id} onNavigate={onNavigate} />
+          ),
+        )}
       </ol>
     </Card>
   );
+}
+
+function CompactActivityRow({
+  event,
+  onNavigate,
+}: {
+  event: ActivityEvent;
+  onNavigate: ((pathname: string) => void) | undefined;
+}) {
+  const href = activityPath(event);
+  return (
+    <li className="row activityRow activityRowCompact">
+      <div className="activityCompactHeading">
+        <p className="activityHeading">
+          <strong title={event.actor.email}>
+            {event.actor.name || event.actor.email}
+          </strong>{" "}
+          {actionLabels[event.action] ?? event.action}
+          {onNavigate && (
+            <>
+              {" · "}
+              {href ? (
+                <Button
+                  aria-label={`Open ${event.root.type === "audit_run" ? "audit" : "form"}: ${event.root.label}`}
+                  className="activityResource"
+                  onClick={() => onNavigate(href)}
+                  size="sm"
+                  variant="link"
+                >
+                  {event.root.label}
+                </Button>
+              ) : (
+                event.root.label
+              )}
+            </>
+          )}
+          {event.historical && (
+            <span className="activityHistorical">
+              <Badge>From existing records</Badge>
+            </span>
+          )}
+        </p>
+        <time className="activityTime" dateTime={event.occurredAt}>
+          {formatActivityTime(event.occurredAt)}
+        </time>
+      </div>
+      <details className="activityDisclosure">
+        <summary>
+          <span className="activitySummary">{activitySummary(event)}</span>
+        </summary>
+        <div className="activityExpanded">
+          <p className="activityMeta">{event.actor.email}</p>
+          <ActivityDetails event={event} />
+        </div>
+      </details>
+    </li>
+  );
+}
+
+function activitySummary(event: ActivityEvent) {
+  const { details } = event;
+  if (event.action === "audit.answer_changed") {
+    return `${textValue(details.prompt)} · ${answerLabel(details.before, details.responseType)} → ${answerLabel(details.after, details.responseType)}`;
+  }
+  if (event.action.startsWith("audit.template_")) {
+    return `Version ${textValue(details.version)}`;
+  }
+  return textValue(details.title) || textValue(details.filename) || "Details";
 }
 
 function ActivityRow({

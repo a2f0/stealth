@@ -14,7 +14,7 @@ export function Activity({
         title="Activity"
       />
       <PageBody>
-        <ActivityFeed onNavigate={onNavigate} />
+        <ActivityFeed compact onNavigate={onNavigate} />
       </PageBody>
     </Page>
   );
