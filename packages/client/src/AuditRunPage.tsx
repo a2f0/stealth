@@ -569,7 +569,9 @@ export function AnswerAttribution({
   if ((audit.responses[itemId] ?? "") !== response) {
     return <p className="runAttribution">Unsaved answer</p>;
   }
-  const activity = audit.answerActivity[itemId];
+  const activity = Object.hasOwn(audit.answerActivity, itemId)
+    ? audit.answerActivity[itemId]
+    : undefined;
   if (activity) {
     return (
       <p className="runAttribution">

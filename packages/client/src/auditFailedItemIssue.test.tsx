@@ -300,6 +300,14 @@ describe("answer attribution", () => {
       <AnswerAttribution audit={audit} itemId={item.id} response="pass" />,
     );
     expect(older).toContain("Answer saved before activity tracking");
+    const inheritedId = renderToStaticMarkup(
+      <AnswerAttribution
+        audit={detailWith({ constructor: "pass" }).audit}
+        itemId="constructor"
+        response="pass"
+      />,
+    );
+    expect(inheritedId).toContain("Answer saved before activity tracking");
     audit.answerActivity[item.id] = {
       actor: { email: "sam@example.com", id: "user-1", name: "Sam" },
       occurredAt: "2026-10-02T12:00:00.000Z",
