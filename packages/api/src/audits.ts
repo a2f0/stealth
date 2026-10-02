@@ -545,9 +545,16 @@ audits.patch("/runs/:id", async (context) => {
   if (!isRecord(body))
     return context.json({ error: "Invalid audit update." }, 400);
   if (
-    body.expectedRevision !== undefined &&
-    body.expectedRevision !== audit.revision
+    typeof body.expectedRevision !== "number" ||
+    !Number.isSafeInteger(body.expectedRevision) ||
+    body.expectedRevision < 0
   ) {
+    return context.json(
+      { error: "A valid audit revision is required. Reload it before saving." },
+      400,
+    );
+  }
+  if (body.expectedRevision !== audit.revision) {
     return context.json(
       { error: "This audit has changed. Reload it before saving." },
       409,

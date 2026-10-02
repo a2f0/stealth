@@ -134,11 +134,12 @@ export function AuditRunPage({ id, onNavigate }: AuditRunPageProps) {
   useEffect(() => void load(), [load]);
 
   async function save(status: "completed" | "in_progress") {
+    if (!detail) return;
     setBusy(true);
     setError(undefined);
     setNotice(undefined);
     try {
-      await saveAuditRun(id, responses, status, detail?.audit.revision);
+      await saveAuditRun(id, responses, status, detail.audit.revision);
       await load();
       setNotice(status === "completed" ? "Audit completed." : "Draft saved.");
     } catch (cause) {

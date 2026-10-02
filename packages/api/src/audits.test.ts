@@ -228,6 +228,7 @@ describe("audits", () => {
     fixture.databaseControl.deleteAuditBeforeRunUpdate = true;
 
     const updated = await jsonRequest(fixture, "/runs/update-race", "PATCH", {
+      expectedRevision: 0,
       responses: {},
       status: "in_progress",
     });
@@ -598,7 +599,7 @@ describe("audits", () => {
       fixture,
       `/runs/${started.body.auditId}`,
       "PATCH",
-      { responses: {}, status: "completed" },
+      { expectedRevision: 0, responses: {}, status: "completed" },
     );
     expect(incomplete.response.status).toBe(400);
 
@@ -608,7 +609,11 @@ describe("audits", () => {
       fixture,
       `/runs/${started.body.auditId}`,
       "PATCH",
-      { responses: { [firstItem?.id ?? ""]: "fail" }, status: "in_progress" },
+      {
+        expectedRevision: 0,
+        responses: { [firstItem?.id ?? ""]: "fail" },
+        status: "in_progress",
+      },
     );
     expect(saved.response.status).toBe(200);
 
@@ -1499,7 +1504,7 @@ describe("audits", () => {
       fixture,
       `/runs/${started.body.auditId}`,
       "PATCH",
-      { responses: {}, status: "completed" },
+      { expectedRevision: 0, responses: {}, status: "completed" },
     );
     expect(completed.response.status).toBe(200);
   });
@@ -1951,7 +1956,11 @@ describe("audit activity", () => {
       fixture,
       `/runs/${auditId}`,
       "PATCH",
-      { responses: { check: "fail" }, status: "completed" },
+      {
+        expectedRevision: 2,
+        responses: { check: "fail" },
+        status: "completed",
+      },
       { userId: "user-2" },
     );
     const completed = await jsonRequest<ActivityRunResponse>(
@@ -1960,6 +1969,7 @@ describe("audit activity", () => {
       "GET",
     );
     await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 3,
       responses: { check: "fail" },
       status: "completed",
     });
@@ -1972,6 +1982,7 @@ describe("audit activity", () => {
       completed.body.audit.completedAt,
     );
     await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 4,
       responses: { check: "fail" },
       status: "in_progress",
     });
@@ -2123,7 +2134,31 @@ describe("audit activity", () => {
       status: "in_progress",
     });
     expect(stale.response.status).toBe(409);
+    for (const expectedRevision of [
+      undefined,
+      null,
+      "1",
+      -1,
+      1.5,
+      9007199254740992,
+    ]) {
+      const invalidRevision = await jsonRequest(
+        fixture,
+        `/runs/${auditId}`,
+        "PATCH",
+        {
+          expectedRevision,
+          responses: { check: "fail" },
+          status: "in_progress",
+        },
+      );
+      expect(invalidRevision.response.status).toBe(400);
+      expect(invalidRevision.body).toEqual({
+        error: "A valid audit revision is required. Reload it before saving.",
+      });
+    }
     const invalid = await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 1,
       responses: {},
       status: "completed",
     });
@@ -2134,6 +2169,7 @@ describe("audit activity", () => {
       "GET",
     );
     expect(detail.body.audit.responses).toEqual({ check: "pass" });
+    expect(detail.body.audit.revision).toBe(1);
     const history = await jsonRequest<ActivityResponse>(
       fixture,
       `/runs/${auditId}/activity`,
@@ -2199,11 +2235,16 @@ describe("audit activity", () => {
       fixture,
       `/runs/${auditId}`,
       "PATCH",
-      { responses: { check: "pass" }, status: "in_progress" },
+      {
+        expectedRevision: 0,
+        responses: { check: "pass" },
+        status: "in_progress",
+      },
       { userId: "user-2" },
     );
     for (let index = 0; index < 55; index += 1) {
       await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+        expectedRevision: index + 1,
         responses: { check: "pass", text: `Note ${index}` },
         status: "in_progress",
       });
@@ -2216,6 +2257,7 @@ describe("audit activity", () => {
     expect(first.body.events).toHaveLength(50);
     expect(first.body.nextCursor).toBeString();
     await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 56,
       responses: { check: "pass", text: "New while paging" },
       status: "in_progress",
     });
@@ -2259,6 +2301,7 @@ describe("audit activity", () => {
       `/runs/${auditId}`,
       {
         body: JSON.stringify({
+          expectedRevision: 0,
           responses: { check: "pass" },
           status: "in_progress",
         }),
@@ -2320,7 +2363,11 @@ describe("audit activity", () => {
       fixture,
       `/runs/${auditId}`,
       "PATCH",
-      { responses: { check: "fail" }, status: "completed" },
+      {
+        expectedRevision: 0,
+        responses: { check: "fail" },
+        status: "completed",
+      },
       { userId: "user-2" },
     );
     const updated = await jsonRequest<ActivityResponse>(

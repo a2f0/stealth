@@ -207,7 +207,7 @@ export function saveAuditRun(
   id: string,
   responses: Record<string, string>,
   status: AuditStatus,
-  expectedRevision?: number,
+  expectedRevision: number,
 ) {
   return request<{ status: AuditStatus; updatedAt: string }>(
     `/runs/${encodeURIComponent(id)}`,

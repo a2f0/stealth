@@ -236,6 +236,8 @@ the same transactional batch. `GET /api/activity` lists the active organization'
 activity; `/api/audits/templates/:id/activity` and
 `/api/audits/runs/:id/activity` provide resource histories. All use cursor
 pagination. Shared global form activity is visible through its form history.
+Saving a run requires `expectedRevision` from its latest detail response; stale
+revisions return 409, and missing or invalid revisions return 400.
 The migration imports known creators and template versions as historical
 records. Earlier answer edits and completion actors were not stored and cannot
 be reconstructed. Activity follows its root resource's retention and is removed
