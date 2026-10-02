@@ -1,4 +1,5 @@
 import { type Context, Hono } from "hono";
+import { activityStatement } from "./activity";
 import type { AuthVariables } from "./authMiddleware";
 import { maxFilenameBytes, normalizeFilename } from "./filenames";
 import { auditIssueImageUploadGraceMilliseconds } from "./objectLifecycle";
@@ -51,6 +52,7 @@ function acquireImageUploadCapacity(organizationId: string) {
 }
 
 export interface AuditIssueImageRow {
+  audit_id: string;
   content_type: string;
   created_at: string;
   deletion_pending: number;
@@ -60,6 +62,8 @@ export interface AuditIssueImageRow {
   object_id: string;
   object_key: string;
   size: number;
+  template_name: string;
+  title: string;
   uploaded_by_email: string;
   uploaded_by_id: string;
   uploaded_by_name: string;
@@ -368,7 +372,7 @@ async function persistAuditIssueImage(
     )
       .bind(normalizedSize, image.objectId, image.uploadToken, image.issueId)
       .run();
-    if (Number(activated.meta.changes) !== 1) {
+    if (Number(activated.meta.changes) === 0) {
       throw new Error("Issue image reservation could not be activated.");
     }
   } catch (cause) {
@@ -886,6 +890,31 @@ auditIssueImages.delete("/:issueId/images/:imageId", async (context) => {
   // Atomically hide the image and release its unique issue slot before R2
   // cleanup. A failed R2 delete leaves a durable object tombstone for cron.
   await context.env.DB.batch([
+    activityStatement(
+      context.env.DB,
+      {
+        action: "audit.image_removed",
+        actorId: context.get("authSession").user.id,
+        details: {
+          filename: row.filename,
+          issueId: row.issue_id,
+          title: row.title,
+        },
+        occurredAt: new Date().toISOString(),
+        organizationId,
+        root: { id: row.audit_id, label: row.template_name, type: "audit_run" },
+        subject: { id: row.id, type: "audit_issue_image" },
+      },
+      {
+        bindings: [row.id, row.object_id, organizationId],
+        sql: `EXISTS (
+        SELECT 1 FROM audit_issue_images AS image
+        JOIN objects AS object ON object.id = image.object_id
+        WHERE image.id = ? AND object.id = ? AND object.organization_id = ?
+          AND object.deletion_pending = 0
+      )`,
+      },
+    ),
     context.env.DB.prepare(
       `UPDATE objects
        SET deletion_pending = 1, cleanup_token = NULL,
@@ -945,12 +974,14 @@ async function findAuditIssueImage(
 
 const imageSelect = `
   SELECT image.id, image.issue_id, image.object_id, image.created_at,
+         issue.audit_id, issue.title, audit.template_name,
          object.deletion_pending,
          object.object_key, object.filename, object.content_type, object.size,
          uploader.id AS uploaded_by_id, uploader.name AS uploaded_by_name,
          uploader.email AS uploaded_by_email
   FROM audit_issue_images AS image
   JOIN audit_issues AS issue ON issue.id = image.issue_id
+  JOIN audits AS audit ON audit.id = issue.audit_id
   JOIN objects AS object ON object.id = image.object_id
   JOIN user AS uploader ON uploader.id = image.uploaded_by`;
 

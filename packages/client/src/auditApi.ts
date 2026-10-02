@@ -1,3 +1,4 @@
+import type { ActivityActor } from "./activityApi";
 import { apiUrl } from "./config";
 
 export type AuditResponseType = "check" | "text";
@@ -37,11 +38,7 @@ export interface AuditTemplate {
   version: number;
 }
 
-export interface AuditTemplateVersionActor {
-  email: string;
-  id: string;
-  name: string;
-}
+export type AuditTemplateVersionActor = ActivityActor;
 
 export interface AuditTemplateVersion {
   createdAt: string;
@@ -52,6 +49,7 @@ export interface AuditTemplateVersion {
 export interface AuditSummary {
   completedAt: string | null;
   createdAt: string;
+  createdBy: ActivityActor;
   id: string;
   issueCount: number;
   responseCount: number;
@@ -67,11 +65,14 @@ interface AuditRunPage {
 }
 
 export interface AuditRun {
+  answerActivity: Record<string, { actor: ActivityActor; occurredAt: string }>;
   completedAt: string | null;
   createdAt: string;
+  createdBy: ActivityActor;
   definition: AuditDefinition;
   id: string;
   responses: Record<string, string>;
+  revision: number;
   status: AuditStatus;
   templateId: string | null;
   templateName: string;
@@ -84,6 +85,7 @@ export interface AuditIssue {
   assigneeEmail: string | null;
   assigneeName: string | null;
   createdAt: string;
+  createdBy: ActivityActor;
   description: string;
   id: string;
   images: AuditIssueImage[];
@@ -205,10 +207,14 @@ export function saveAuditRun(
   id: string,
   responses: Record<string, string>,
   status: AuditStatus,
+  expectedRevision: number,
 ) {
   return request<{ status: AuditStatus; updatedAt: string }>(
     `/runs/${encodeURIComponent(id)}`,
-    { body: JSON.stringify({ responses, status }), method: "PATCH" },
+    {
+      body: JSON.stringify({ expectedRevision, responses, status }),
+      method: "PATCH",
+    },
   );
 }
 

@@ -10,6 +10,7 @@ import {
   PageHeader,
 } from "@tearleads/ui/react";
 import { useEffect, useState } from "react";
+import { ActivityFeed } from "./ActivityFeed";
 import {
   type AuditTemplate,
   type AuditTemplateItem,
@@ -188,6 +189,10 @@ function BuilderBody({
           </Button>
         </div>
       </fieldset>
+      <ActivityFeed
+        refreshKey={template.currentVersion}
+        source={{ id: template.id, type: "audit_template" }}
+      />
     </PageBody>
   );
 }

@@ -24,6 +24,7 @@ export interface WorkspaceUser {
 
 type WorkspacePage =
   | "account"
+  | "activity"
   | "audits"
   | "businesses"
   | "contracts"
@@ -236,6 +237,7 @@ function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
   const workspace: NavigationItem[] = [
     { href: "/", icon: "library", label: "Library", page: "library" },
     { href: "/audits", icon: "audits", label: "Audits", page: "audits" },
+    { href: "/activity", icon: "layers", label: "Activity", page: "activity" },
     { href: "/inbox", icon: "inbox", label: "Inbox", page: "inbox" },
   ];
   const records: NavigationItem[] = [

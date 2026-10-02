@@ -8,6 +8,8 @@ describe("api", () => {
   it("requires authentication for maintenance and account deletion routes", async () => {
     for (const [path, method] of [
       ["/api/admin/jobs", "GET"],
+      ["/api/activity", "GET"],
+      ["/api/audits/runs/private/activity", "GET"],
       ["/api/admin/jobs/purgeRequestedUsers/run", "POST"],
       ["/api/account-settings/deletion", "GET"],
       ["/api/account-settings/deletion", "POST"],

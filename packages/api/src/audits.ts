@@ -1,5 +1,11 @@
 import { Hono } from "hono";
 import {
+  type ActivityRow,
+  auditAnswerActivityStatement,
+  findActivity,
+  toAuditAnswerActivity,
+} from "./activity";
+import {
   type AuditDefinition,
   isRecord,
   parseAuditDefinition,
@@ -58,9 +64,13 @@ interface TemplateSaveInput {
 interface AuditRow {
   completed_at: string | null;
   created_at: string;
+  created_by_email: string;
+  created_by_id: string;
+  created_by_name: string;
   definition: string;
   id: string;
   responses: string;
+  revision: number;
   status: string;
   template_family_id: string | null;
   template_id: string | null;
@@ -83,6 +93,9 @@ interface IssueRow {
   assignee_email: string | null;
   assignee_name: string | null;
   created_at: string;
+  created_by_email: string;
+  created_by_id: string;
+  created_by_name: string;
   description: string;
   id: string;
   item_id: string;
@@ -323,6 +336,29 @@ audits.get("/templates/:id", async (context) => {
     : context.json({ error: "Template not found." }, 404);
 });
 
+audits.get("/templates/:id/activity", async (context) => {
+  const organizationId = context.get("organizationId");
+  const template = await findTemplate(
+    context.env.DB,
+    organizationId,
+    context.req.param("id"),
+  );
+  if (!template) return context.json({ error: "Template not found." }, 404);
+  const page = await findActivity(
+    context.env.DB,
+    organizationId,
+    context.req.query("cursor"),
+    {
+      id: template.id,
+      includeGlobal: template.scope === "global",
+      type: "audit_template",
+    },
+  );
+  return page
+    ? context.json(page)
+    : context.json({ error: "Invalid activity cursor." }, 400);
+});
+
 audits.put("/templates/:id", async (context) => {
   const current = await findTemplate(
     context.env.DB,
@@ -422,8 +458,11 @@ audits.get("/runs", async (context) => {
     `SELECT audit.id, audit.template_id, audit.template_family_id,
             audit.template_version, audit.template_name, audit.definition,
             audit.responses, audit.status, audit.completed_at,
+            audit.revision, creator.id AS created_by_id,
+            creator.name AS created_by_name, creator.email AS created_by_email,
             audit.created_at, audit.updated_at, COUNT(issue.id) AS issue_count
      FROM audits AS audit
+     JOIN user AS creator ON creator.id = audit.started_by
      LEFT JOIN audit_issues AS issue ON issue.audit_id = audit.id
      WHERE audit.organization_id = ?
        AND (? IS NULL OR audit.created_at < ? OR
@@ -455,12 +494,18 @@ audits.get("/runs", async (context) => {
 
 audits.get("/runs/:id", async (context) => {
   const organizationId = context.get("organizationId");
-  const audit = await findAudit(
-    context.env.DB,
-    organizationId,
-    context.req.param("id"),
-  );
+  const auditId = context.req.param("id");
+  const [auditRows, answerRows] = await context.env.DB.batch<
+    AuditRow | ActivityRow
+  >([
+    auditStatement(context.env.DB, organizationId, auditId),
+    auditAnswerActivityStatement(context.env.DB, organizationId, auditId),
+  ]);
+  const audit = auditRows?.results[0] as AuditRow | undefined;
   if (!audit) return context.json({ error: "Audit not found." }, 404);
+  const answerActivity = toAuditAnswerActivity(
+    (answerRows?.results ?? []) as ActivityRow[],
+  );
   const [issues, members, images] = await Promise.all([
     findIssues(context.env.DB, organizationId, audit.id),
     findMembers(context.env.DB, organizationId),
@@ -468,12 +513,34 @@ audits.get("/runs/:id", async (context) => {
   ]);
   const imagesByIssue = groupImagesByIssue(images);
   return context.json({
-    audit: toAudit(audit),
+    audit: { ...toAudit(audit), answerActivity },
     issues: issues.map((issue) =>
       toIssue(issue, imagesByIssue.get(issue.id) ?? []),
     ),
     members: members.map((member) => ({ ...member })),
   });
+});
+
+audits.get("/runs/:id/activity", async (context) => {
+  const organizationId = context.get("organizationId");
+  const audit = await findAudit(
+    context.env.DB,
+    organizationId,
+    context.req.param("id"),
+  );
+  if (!audit) return context.json({ error: "Audit not found." }, 404);
+  const page = await findActivity(
+    context.env.DB,
+    organizationId,
+    context.req.query("cursor"),
+    {
+      id: audit.id,
+      type: "audit_run",
+    },
+  );
+  return page
+    ? context.json(page)
+    : context.json({ error: "Invalid activity cursor." }, 400);
 });
 
 audits.patch("/runs/:id", async (context) => {
@@ -487,30 +554,58 @@ audits.patch("/runs/:id", async (context) => {
   const body: unknown = await context.req.json().catch(() => null);
   if (!isRecord(body))
     return context.json({ error: "Invalid audit update." }, 400);
+  if (
+    typeof body.expectedRevision !== "number" ||
+    !Number.isSafeInteger(body.expectedRevision) ||
+    body.expectedRevision < 0
+  ) {
+    return context.json(
+      { error: "A valid audit revision is required. Reload it before saving." },
+      400,
+    );
+  }
+  if (body.expectedRevision !== audit.revision) {
+    return context.json(
+      { error: "This audit has changed. Reload it before saving." },
+      409,
+    );
+  }
   const definition = storedDefinition(audit.definition);
   const responses = parseResponses(body.responses, definition);
   if (!responses)
     return context.json({ error: "Invalid audit responses." }, 400);
-  const status = body.status === "completed" ? "completed" : "in_progress";
+  const status = body.status ?? audit.status;
+  if (status !== "completed" && status !== "in_progress") {
+    return context.json({ error: "Invalid audit status." }, 400);
+  }
   if (status === "completed" && !allRequiredAnswered(definition, responses)) {
     return context.json({ error: "Complete every required item first." }, 400);
   }
   const now = new Date().toISOString();
   const updated = await context.env.DB.prepare(
-    `UPDATE audits SET responses = ?, status = ?, completed_at = ?, updated_at = ?
-     WHERE id = ? AND organization_id = ?`,
+    `UPDATE audits SET responses = ?, status = ?, completed_at = ?, updated_at = ?,
+                       activity_actor_id = ?, revision = revision + 1
+     WHERE revision = ? AND id = ? AND organization_id = ?`,
   )
     .bind(
       JSON.stringify(responses),
       status,
-      status === "completed" ? now : null,
+      status === "completed" ? (audit.completed_at ?? now) : null,
       now,
+      context.get("authSession").user.id,
+      audit.revision,
       audit.id,
       organizationId,
     )
     .run();
-  if (Number(updated.meta.changes) !== 1) {
-    return context.json({ error: "Audit not found." }, 404);
+  if (Number(updated.meta.changes) === 0) {
+    const exists = await findAudit(context.env.DB, organizationId, audit.id);
+    return exists
+      ? context.json(
+          { error: "This audit has changed. Reload it before saving." },
+          409,
+        )
+      : context.json({ error: "Audit not found." }, 404);
   }
   return context.json({ status, updatedAt: now });
 });
@@ -567,7 +662,11 @@ audits.patch("/issues/:id", async (context) => {
      FROM audit_issues WHERE id = ? AND organization_id = ?`,
   )
     .bind(context.req.param("id"), organizationId)
-    .first<{ assigned_to: string | null; id: string; status: string }>();
+    .first<{
+      assigned_to: string | null;
+      id: string;
+      status: string;
+    }>();
   if (!issue) return context.json({ error: "Issue not found." }, 404);
   const changesStatus = body.status !== undefined;
   const changesAssignee = body.assignedTo !== undefined;
@@ -595,56 +694,31 @@ audits.patch("/issues/:id", async (context) => {
       ? body.status
       : issue.status;
   const now = new Date().toISOString();
-  const result = changesStatus
-    ? changesAssignee
-      ? await context.env.DB.prepare(
-          `UPDATE audit_issues
-           SET status = ?, assigned_to = ?, updated_at = ?
-           WHERE id = ? AND organization_id = ?
-             AND (
-               ? IS NULL OR EXISTS (
-                 SELECT 1 FROM member
-                 WHERE organizationId = ? AND userId = ?
-               )
-             )`,
-        )
-          .bind(
-            status,
-            assignedTo,
-            now,
-            issue.id,
-            organizationId,
-            assignedTo,
-            organizationId,
-            assignedTo,
-          )
-          .run()
-      : await context.env.DB.prepare(
-          `UPDATE audit_issues SET status = ?, updated_at = ?
-           WHERE id = ? AND organization_id = ?`,
-        )
-          .bind(status, now, issue.id, organizationId)
-          .run()
-    : await context.env.DB.prepare(
-        `UPDATE audit_issues SET assigned_to = ?, updated_at = ?
-         WHERE id = ? AND organization_id = ?
-           AND (
-             ? IS NULL OR EXISTS (
-               SELECT 1 FROM member
-               WHERE organizationId = ? AND userId = ?
-             )
-           )`,
-      )
-        .bind(
-          assignedTo,
-          now,
-          issue.id,
-          organizationId,
-          assignedTo,
-          organizationId,
-          assignedTo,
-        )
-        .run();
+  const result = await context.env.DB.prepare(
+    `UPDATE audit_issues
+     SET status = CASE WHEN ? = 1 THEN ? ELSE status END,
+         assigned_to = CASE WHEN ? = 1 THEN ? ELSE assigned_to END,
+         updated_at = ?, activity_actor_id = ?, revision = revision + 1
+     WHERE id = ? AND organization_id = ?
+       AND (? = 0 OR ? IS NULL OR EXISTS (
+         SELECT 1 FROM member WHERE organizationId = ? AND userId = ?
+       ))`,
+  )
+    .bind(
+      changesStatus ? 1 : 0,
+      status,
+      changesAssignee ? 1 : 0,
+      assignedTo ?? null,
+      now,
+      context.get("authSession").user.id,
+      issue.id,
+      organizationId,
+      changesAssignee ? 1 : 0,
+      assignedTo ?? null,
+      organizationId,
+      assignedTo ?? null,
+    )
+    .run();
   if (result.meta.changes > 0) {
     return context.json({ assignedTo, status, updatedAt: now });
   }
@@ -872,15 +946,25 @@ async function findAudit(
   organizationId: string,
   id: string,
 ) {
+  return auditStatement(database, organizationId, id).first<AuditRow>();
+}
+
+function auditStatement(
+  database: D1Database,
+  organizationId: string,
+  id: string,
+) {
   return database
     .prepare(
-      `SELECT id, template_id, template_family_id, template_version,
-              template_name, definition, responses, status, completed_at,
-              created_at, updated_at
-       FROM audits WHERE id = ? AND organization_id = ?`,
+      `SELECT audit.id, audit.template_id, audit.template_family_id, audit.template_version,
+              audit.template_name, audit.definition, audit.responses, audit.status, audit.completed_at,
+              audit.created_at, audit.updated_at, audit.revision,
+              creator.id AS created_by_id, creator.name AS created_by_name,
+              creator.email AS created_by_email
+       FROM audits AS audit JOIN user AS creator ON creator.id = audit.started_by
+       WHERE audit.id = ? AND audit.organization_id = ?`,
     )
-    .bind(id, organizationId)
-    .first<AuditRow>();
+    .bind(id, organizationId);
 }
 
 async function findIssues(
@@ -893,8 +977,11 @@ async function findIssues(
       `SELECT issue.id, issue.item_id, issue.title, issue.description,
               issue.priority, issue.status, issue.assigned_to, issue.created_at,
               issue.updated_at, assignee.name AS assignee_name,
+              creator.id AS created_by_id, creator.name AS created_by_name,
+              creator.email AS created_by_email,
               assignee.email AS assignee_email
        FROM audit_issues AS issue
+       JOIN user AS creator ON creator.id = issue.created_by
        LEFT JOIN user AS assignee ON assignee.id = issue.assigned_to
        WHERE issue.audit_id = ? AND issue.organization_id = ?
        ORDER BY issue.created_at DESC`,
@@ -1126,9 +1213,15 @@ function toAudit(row: AuditRow) {
   return {
     completedAt: row.completed_at,
     createdAt: row.created_at,
+    createdBy: {
+      email: row.created_by_email,
+      id: row.created_by_id,
+      name: row.created_by_name,
+    },
     definition: storedDefinition(row.definition),
     id: row.id,
     responses: JSON.parse(row.responses) as Record<string, string>,
+    revision: row.revision,
     status: row.status,
     templateId: row.template_family_id ?? row.template_id,
     templateName: row.template_name,
@@ -1142,6 +1235,7 @@ function toAuditSummary(row: AuditSummaryRow) {
   return {
     completedAt: audit.completedAt,
     createdAt: audit.createdAt,
+    createdBy: audit.createdBy,
     id: audit.id,
     issueCount: row.issue_count,
     responseCount: Object.keys(audit.responses).length,
@@ -1158,6 +1252,11 @@ function toIssue(row: IssueRow, images: AuditIssueImageRow[]) {
     assigneeEmail: row.assignee_email,
     assigneeName: row.assignee_name,
     createdAt: row.created_at,
+    createdBy: {
+      email: row.created_by_email,
+      id: row.created_by_id,
+      name: row.created_by_name,
+    },
     description: row.description,
     id: row.id,
     images: images.map(toAuditIssueImage),

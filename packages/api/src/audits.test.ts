@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
+import { activity } from "./activity";
 import type { AuditDefinition } from "./auditDefinition";
 import {
   ImageUploadReadTimeoutError,
@@ -60,6 +61,30 @@ interface TestIdentity {
   organizationId?: string;
   role?: string;
   userId?: string;
+}
+
+interface ActivityResponse {
+  events: Array<{
+    action: string;
+    actor: { email: string; id: string; name: string };
+    details: Record<string, unknown>;
+    historical: boolean;
+    id: number;
+    root: { id: string; type: string };
+    subject: { id: string; type: string };
+  }>;
+  nextCursor: string | null;
+}
+
+interface ActivityRunResponse {
+  audit: {
+    answerActivity: Record<string, { actor: { id: string } }>;
+    completedAt: string | null;
+    createdBy: { id: string };
+    responses: Record<string, string>;
+    revision: number;
+  };
+  issues: Array<{ createdBy: { id: string } }>;
 }
 
 describe("audits", () => {
@@ -203,6 +228,7 @@ describe("audits", () => {
     fixture.databaseControl.deleteAuditBeforeRunUpdate = true;
 
     const updated = await jsonRequest(fixture, "/runs/update-race", "PATCH", {
+      expectedRevision: 0,
       responses: {},
       status: "in_progress",
     });
@@ -573,7 +599,7 @@ describe("audits", () => {
       fixture,
       `/runs/${started.body.auditId}`,
       "PATCH",
-      { responses: {}, status: "completed" },
+      { expectedRevision: 0, responses: {}, status: "completed" },
     );
     expect(incomplete.response.status).toBe(400);
 
@@ -583,7 +609,11 @@ describe("audits", () => {
       fixture,
       `/runs/${started.body.auditId}`,
       "PATCH",
-      { responses: { [firstItem?.id ?? ""]: "fail" }, status: "in_progress" },
+      {
+        expectedRevision: 0,
+        responses: { [firstItem?.id ?? ""]: "fail" },
+        status: "in_progress",
+      },
     );
     expect(saved.response.status).toBe(200);
 
@@ -1474,7 +1504,7 @@ describe("audits", () => {
       fixture,
       `/runs/${started.body.auditId}`,
       "PATCH",
-      { responses: {}, status: "completed" },
+      { expectedRevision: 0, responses: {}, status: "completed" },
     );
     expect(completed.response.status).toBe(200);
   });
@@ -1839,7 +1869,657 @@ describe("audits", () => {
   });
 });
 
-async function createFixture() {
+describe("audit activity", () => {
+  it("records creators, every answer change, completion, and reopening without duplicate no-op events", async () => {
+    const fixture = await createFixture();
+    const { auditId, templateId } = await createActivityAudit(fixture);
+    const templateHistory = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/templates/${templateId}/activity`,
+      "GET",
+    );
+    expect(
+      templateHistory.body.events.map(({ action, actor }) => [
+        action,
+        actor.id,
+      ]),
+    ).toEqual([
+      ["audit.template_version_saved", "user-2"],
+      ["audit.template_created", "user-1"],
+    ]);
+    await jsonRequest(
+      fixture,
+      `/runs/${auditId}`,
+      "PATCH",
+      {
+        expectedRevision: 0,
+        responses: { check: "pass", text: "Initial note" },
+        status: "in_progress",
+      },
+      { userId: "user-2" },
+    );
+    await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 1,
+      responses: { check: "fail" },
+      status: "in_progress",
+    });
+    const beforeComplete = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(beforeComplete.body.events).toHaveLength(5);
+    expect(beforeComplete.body.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "audit.answer_changed",
+          actor: expect.objectContaining({ id: "user-2" }),
+          details: {
+            prompt: "Check question",
+            responseType: "check",
+            before: null,
+            after: "pass",
+          },
+        }),
+        expect.objectContaining({
+          action: "audit.answer_changed",
+          actor: expect.objectContaining({ id: "user-1" }),
+          details: {
+            prompt: "Check question",
+            responseType: "check",
+            before: "pass",
+            after: "fail",
+          },
+        }),
+        expect.objectContaining({
+          action: "audit.answer_changed",
+          details: {
+            prompt: "Written question",
+            responseType: "text",
+            before: "Initial note",
+            after: null,
+          },
+        }),
+      ]),
+    );
+    const detail = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(detail.body.audit.createdBy.id).toBe("user-1");
+    expect(detail.body.audit.answerActivity).toMatchObject({
+      check: { actor: { id: "user-1" } },
+      text: { actor: { id: "user-1" } },
+    });
+    await jsonRequest(
+      fixture,
+      `/runs/${auditId}`,
+      "PATCH",
+      {
+        expectedRevision: 2,
+        responses: { check: "fail" },
+        status: "completed",
+      },
+      { userId: "user-2" },
+    );
+    const completed = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 3,
+      responses: { check: "fail" },
+      status: "completed",
+    });
+    const repeated = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(repeated.body.audit.completedAt).toBe(
+      completed.body.audit.completedAt,
+    );
+    await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 4,
+      responses: { check: "fail" },
+      status: "in_progress",
+    });
+    const history = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(history.body.events).toHaveLength(7);
+    expect(
+      history.body.events
+        .slice(0, 2)
+        .map(({ action, actor }) => [action, actor.id]),
+    ).toEqual([
+      ["audit.reopened", "user-1"],
+      ["audit.completed", "user-2"],
+    ]);
+    fixture.database
+      .query(
+        "UPDATE user SET name = 'Renamed person', email = 'new@example.com' WHERE id = 'user-2'",
+      )
+      .run();
+    const renamedHistory = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(
+      renamedHistory.body.events.find(
+        ({ action }) => action === "audit.completed",
+      )?.actor,
+    ).toEqual({
+      email: "second@example.com",
+      id: "user-2",
+      name: "Second Person",
+    });
+  });
+
+  it("records issue and image actions, but excludes failed uploads and unchanged issue updates", async () => {
+    const fixture = await createFixture();
+    const { auditId } = await createActivityAudit(fixture);
+    const created = await jsonRequest<IssueResponse>(
+      fixture,
+      `/runs/${auditId}/issues`,
+      "POST",
+      {
+        assignedTo: "user-1",
+        description: "Follow-up needed",
+        itemId: "check",
+        priority: "high",
+        title: "Inspect this",
+      },
+      { userId: "user-2" },
+    );
+    const issueId = created.body.issueId;
+    expect(created.response.status).toBe(201);
+    await jsonRequest(fixture, `/issues/${issueId}`, "PATCH", {
+      assignedTo: null,
+      status: "resolved",
+    });
+    await jsonRequest(fixture, `/issues/${issueId}`, "PATCH", {
+      assignedTo: null,
+      status: "resolved",
+    });
+    await jsonRequest(
+      fixture,
+      `/issues/${issueId}`,
+      "PATCH",
+      { status: "open" },
+      { userId: "user-2" },
+    );
+    const failedUpload = await fixture.app.request(
+      `/issues/${issueId}/images?filename=bad.png`,
+      imageUpload("invalid image"),
+      fixture.bindings,
+    );
+    expect(failedUpload.status).toBe(400);
+    const uploaded = await fixture.app.request(
+      `/issues/${issueId}/images?filename=evidence.png`,
+      imageUpload(pngBytes()),
+      fixture.bindings,
+    );
+    expect(uploaded.status).toBe(201);
+    const image = ((await uploaded.json()) as IssueImageResponse).image;
+    const removed = await fixture.app.request(
+      `/issues/${issueId}/images/${image.id}`,
+      { headers: { "x-test-user-id": "user-2" }, method: "DELETE" },
+      fixture.bindings,
+    );
+    expect(removed.status).toBe(204);
+    const detail = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(detail.body.issues[0]?.createdBy.id).toBe("user-2");
+    const history = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(history.body.events.map(({ action }) => action)).toEqual([
+      "audit.image_removed",
+      "audit.image_uploaded",
+      "audit.issue_reopened",
+      "audit.issue_assigned",
+      "audit.issue_resolved",
+      "audit.issue_created",
+      "audit.started",
+    ]);
+    expect(history.body.events[0]?.actor.id).toBe("user-2");
+    expect(
+      history.body.events.find(
+        ({ action }) => action === "audit.issue_assigned",
+      )?.details,
+    ).toMatchObject({
+      before: "user-1",
+      beforeName: "Example Person",
+      after: null,
+    });
+    fixture.database.query("DELETE FROM audits WHERE id = ?").run(auditId);
+    expect(
+      fixture.database
+        .query(
+          "SELECT COUNT(*) AS count FROM activity_events WHERE root_type = 'audit_run' AND root_id = ?",
+        )
+        .get(auditId),
+    ).toEqual({ count: 0 });
+  });
+
+  it("rejects stale and invalid saves without changing answers or recording activity", async () => {
+    const fixture = await createFixture();
+    const { auditId } = await createActivityAudit(fixture);
+    const first = await jsonRequest(
+      fixture,
+      `/runs/${auditId}`,
+      "PATCH",
+      {
+        expectedRevision: 0,
+        responses: { check: "pass" },
+        status: "in_progress",
+      },
+      { userId: "user-2" },
+    );
+    expect(first.response.status).toBe(200);
+    const stale = await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 0,
+      responses: { check: "fail" },
+      status: "in_progress",
+    });
+    expect(stale.response.status).toBe(409);
+    for (const expectedRevision of [
+      undefined,
+      null,
+      "1",
+      -1,
+      1.5,
+      9007199254740992,
+    ]) {
+      const invalidRevision = await jsonRequest(
+        fixture,
+        `/runs/${auditId}`,
+        "PATCH",
+        {
+          expectedRevision,
+          responses: { check: "fail" },
+          status: "in_progress",
+        },
+      );
+      expect(invalidRevision.response.status).toBe(400);
+      expect(invalidRevision.body).toEqual({
+        error: "A valid audit revision is required. Reload it before saving.",
+      });
+    }
+    const invalid = await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 1,
+      responses: {},
+      status: "completed",
+    });
+    expect(invalid.response.status).toBe(400);
+    const detail = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(detail.body.audit.responses).toEqual({ check: "pass" });
+    expect(detail.body.audit.revision).toBe(1);
+    const history = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(history.body.events).toHaveLength(2);
+  });
+
+  it("rejects a save when another writer changes the revision after the initial read", async () => {
+    const fixture = await createFixture();
+    const { auditId } = await createActivityAudit(fixture);
+    fixture.databaseControl.editAuditBeforeRunUpdate = true;
+    const rejected = await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 0,
+      responses: { check: "fail" },
+      status: "completed",
+    });
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body).toEqual({
+      error: "This audit has changed. Reload it before saving.",
+    });
+    const detail = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(detail.body.audit).toMatchObject({
+      responses: { check: "pass" },
+      revision: 1,
+      status: "in_progress",
+      answerActivity: { check: { actor: { id: "user-2" } } },
+    });
+    const history = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(history.body.events).toHaveLength(2);
+    expect(history.body.events[0]).toMatchObject({
+      action: "audit.answer_changed",
+      actor: { id: "user-2" },
+      details: { before: null, after: "pass" },
+    });
+    expect(history.body.events[1]?.action).toBe("audit.started");
+  });
+
+  it("keeps answer values and attribution in one snapshot during concurrent saves", async () => {
+    const fixture = await createFixture();
+    const { auditId } = await createActivityAudit(fixture);
+    await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 0,
+      responses: { check: "pass" },
+      status: "in_progress",
+    });
+    fixture.databaseControl.afterNextAuditRead = () => {
+      fixture.database
+        .query(
+          `UPDATE audits SET responses = '{"check":"fail"}', revision = revision + 1,
+             activity_actor_id = 'user-2', updated_at = ? WHERE id = ?`,
+        )
+        .run(new Date().toISOString(), auditId);
+    };
+    const snapshot = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(snapshot.body.audit).toMatchObject({
+      revision: 1,
+      responses: { check: "pass" },
+      answerActivity: { check: { actor: { id: "user-1" } } },
+    });
+    const latest = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(latest.body.audit).toMatchObject({
+      revision: 2,
+      responses: { check: "fail" },
+      answerActivity: { check: { actor: { id: "user-2" } } },
+    });
+  });
+
+  it("isolates organization feeds and resource history while allowing shared global form history", async () => {
+    const fixture = await createFixture();
+    const { auditId, templateId } = await createActivityAudit(fixture);
+    const other = { organizationId: "org_user-2", userId: "user-2" };
+    for (const path of [
+      `/runs/${auditId}/activity`,
+      `/templates/${templateId}/activity`,
+    ]) {
+      const denied = await jsonRequest(fixture, path, "GET", undefined, other);
+      expect(denied.response.status).toBe(404);
+    }
+    const ownFeed = await jsonRequest<ActivityResponse>(
+      fixture,
+      "/activity",
+      "GET",
+    );
+    expect(ownFeed.body.events).toHaveLength(3);
+    const otherFeed = await jsonRequest<ActivityResponse>(
+      fixture,
+      "/activity",
+      "GET",
+      undefined,
+      other,
+    );
+    expect(otherFeed.body.events).toEqual([]);
+    const global = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/templates",
+      "POST",
+      { name: "Shared form", scope: "global" },
+      { role: "admin" },
+    );
+    const globalHistory = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/templates/${global.body.template.id}/activity`,
+      "GET",
+      undefined,
+      other,
+    );
+    expect(globalHistory.body.events[0]?.action).toBe("audit.template_created");
+    const privateHistory = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/templates/${templateId}/activity`,
+      "GET",
+    );
+    expect(
+      privateHistory.body.events.every(({ root }) => root.id === templateId),
+    ).toBe(true);
+  });
+
+  it("paginates activity without duplicates and retains attribution beyond the first page", async () => {
+    const fixture = await createFixture();
+    const { auditId } = await createActivityAudit(fixture);
+    await jsonRequest(
+      fixture,
+      `/runs/${auditId}`,
+      "PATCH",
+      {
+        expectedRevision: 0,
+        responses: { check: "pass" },
+        status: "in_progress",
+      },
+      { userId: "user-2" },
+    );
+    for (let index = 0; index < 55; index += 1) {
+      await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+        expectedRevision: index + 1,
+        responses: { check: "pass", text: `Note ${index}` },
+        status: "in_progress",
+      });
+    }
+    const first = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(first.body.events).toHaveLength(50);
+    expect(first.body.nextCursor).toBeString();
+    await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 56,
+      responses: { check: "pass", text: "New while paging" },
+      status: "in_progress",
+    });
+    const second = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity?cursor=${first.body.nextCursor}`,
+      "GET",
+    );
+    expect(second.body.events).toHaveLength(7);
+    expect(second.body.nextCursor).toBeNull();
+    expect(
+      new Set([...first.body.events, ...second.body.events].map(({ id }) => id))
+        .size,
+    ).toBe(57);
+    const detail = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(detail.body.audit.answerActivity).toMatchObject({
+      check: { actor: { id: "user-2" } },
+      text: { actor: { id: "user-1" } },
+    });
+    for (const cursor of ["0", "-1", "bogus", "9007199254740992"]) {
+      const invalid = await jsonRequest(
+        fixture,
+        `/runs/${auditId}/activity?cursor=${cursor}`,
+        "GET",
+      );
+      expect(invalid.response.status).toBe(400);
+    }
+  });
+
+  it("rolls back a mutation if its activity cannot be written", async () => {
+    const fixture = await createFixture();
+    const { auditId } = await createActivityAudit(fixture);
+    fixture.database.exec(
+      "CREATE TRIGGER reject_activity BEFORE INSERT ON activity_events BEGIN SELECT RAISE(ABORT, 'activity unavailable'); END;",
+    );
+    const failed = await fixture.app.request(
+      `/runs/${auditId}`,
+      {
+        body: JSON.stringify({
+          expectedRevision: 0,
+          responses: { check: "pass" },
+          status: "in_progress",
+        }),
+        headers: { "content-type": "application/json" },
+        method: "PATCH",
+      },
+      fixture.bindings,
+    );
+    expect(failed.status).toBe(500);
+    const detail = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(detail.body.audit.responses).toEqual({});
+    expect(detail.body.audit.revision).toBe(0);
+  });
+
+  it("imports only known historical actors without inventing earlier answer or completion history", async () => {
+    const fixture = await createFixture(false);
+    const { auditId, templateId } = await createActivityAudit(fixture);
+    fixture.database
+      .query(
+        `UPDATE audits SET responses = '{"check":"pass"}', status = 'completed', completed_at = '2026-09-01T00:00:00.000Z' WHERE id = ?`,
+      )
+      .run(auditId);
+    fixture.database
+      .query(`INSERT INTO audit_issues (id, organization_id, audit_id, item_id, title, description, priority, status, created_by, created_at, updated_at)
+      VALUES ('legacy-issue', 'org_user-1', ?, 'check', 'Legacy issue', '', 'high', 'resolved', 'user-2', '2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z')`)
+      .run(auditId);
+    await applyMigration(fixture.database, "0049_create_activity_events.sql");
+    const history = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(history.body.events).toHaveLength(2);
+    expect(history.body.events.every(({ historical }) => historical)).toBe(
+      true,
+    );
+    expect(history.body.events.map(({ action }) => action).sort()).toEqual([
+      "audit.issue_created",
+      "audit.started",
+    ]);
+    const template = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/templates/${templateId}/activity`,
+      "GET",
+    );
+    expect(template.body.events).toHaveLength(2);
+    const detail = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(detail.body.audit.answerActivity).toEqual({});
+    expect(detail.body.audit.createdBy.id).toBe("user-1");
+    await jsonRequest(
+      fixture,
+      `/runs/${auditId}`,
+      "PATCH",
+      {
+        expectedRevision: 0,
+        responses: { check: "fail" },
+        status: "completed",
+      },
+      { userId: "user-2" },
+    );
+    const updated = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(updated.body.events[0]).toMatchObject({
+      action: "audit.answer_changed",
+      historical: false,
+      actor: { id: "user-2" },
+      details: { before: "pass", after: "fail" },
+    });
+  });
+});
+
+async function createActivityAudit(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+) {
+  const created = await jsonRequest<TemplateResponse>(
+    fixture,
+    "/templates",
+    "POST",
+    { name: "Activity form" },
+  );
+  const templateId = created.body.template.id;
+  const definition: AuditDefinition = {
+    version: 1,
+    sections: [
+      {
+        id: "section",
+        title: "Questions",
+        items: [
+          {
+            id: "check",
+            prompt: "Check question",
+            required: true,
+            responseType: "check",
+          },
+          {
+            id: "text",
+            prompt: "Written question",
+            required: false,
+            responseType: "text",
+          },
+        ],
+      },
+    ],
+  };
+  await jsonRequest(
+    fixture,
+    `/templates/${templateId}`,
+    "PUT",
+    { definition, name: "Activity form" },
+    { userId: "user-2" },
+  );
+  const started = await jsonRequest<RunResponse>(
+    fixture,
+    `/templates/${templateId}/runs`,
+    "POST",
+  );
+  return { auditId: started.body.auditId, templateId };
+}
+
+interface DatabaseControl {
+  activateBeforeCleanupClaim: boolean;
+  afterNextAuditRead?: () => void;
+  commitThenThrowImageActivation: boolean;
+  deleteAssigneeBeforeIssueUpdate: boolean;
+  deleteAuditBeforeRunUpdate: boolean;
+  editAuditBeforeRunUpdate: boolean;
+  failNextImageActivation: boolean;
+  failNextPendingUpdate: boolean;
+}
+
+async function createFixture(includeActivity = true) {
   const database = await createLegacyDatabase();
   await applyMigration(database, "0022_version_audit_templates.sql");
   await applyMigration(database, "0024_create_audit_issue_images.sql");
@@ -1851,11 +2531,14 @@ async function createFixture() {
   await applyMigration(database, "0030_queue_deleted_objects.sql");
   await applyMigration(database, "0032_create_billing.sql");
   await applyMigration(database, "0033_create_audit_library_actor.sql");
+  if (includeActivity)
+    await applyMigration(database, "0049_create_activity_events.sql");
   const stored = new Map<string, Uint8Array>();
-  const databaseControl = {
+  const databaseControl: DatabaseControl = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
+    editAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -1928,6 +2611,7 @@ function testApp() {
     } as unknown as AuthSession);
     await next();
   });
+  app.route("/activity", activity);
   app.route("/", audits);
   return app;
 }
@@ -1963,10 +2647,11 @@ function bindingsFor(
     beforeNextPut?: () => Promise<void>;
     failNextDelete: boolean;
   } = { failNextDelete: false },
-  databaseControl = {
+  databaseControl: DatabaseControl = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
+    editAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -2027,16 +2712,22 @@ function storageFor(
 
 function toD1(
   database: Database,
-  control = {
+  control: DatabaseControl = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
+    editAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
   },
 ) {
   let batchTail: Promise<void> = Promise.resolve();
+  const afterAuditRead = () => {
+    const callback = control.afterNextAuditRead;
+    delete control.afterNextAuditRead;
+    callback?.();
+  };
   return {
     batch: (statements: D1PreparedStatement[]) => {
       const execution = batchTail.then(() => {
@@ -2050,6 +2741,7 @@ function toD1(
             ).runSync(),
           );
           database.exec("COMMIT");
+          afterAuditRead();
           return results;
         } catch (cause) {
           database.exec("ROLLBACK");
@@ -2065,6 +2757,27 @@ function toD1(
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const runSync = () => {
+        if (
+          control.editAuditBeforeRunUpdate &&
+          query.includes("UPDATE audits SET responses")
+        ) {
+          control.editAuditBeforeRunUpdate = false;
+          const auditId = values.at(-2);
+          const organizationId = values.at(-1);
+          if (
+            typeof auditId !== "string" ||
+            typeof organizationId !== "string"
+          ) {
+            throw new Error("Expected an audit and organization id.");
+          }
+          database
+            .query(
+              `UPDATE audits SET responses = '{"check":"pass"}',
+                 revision = revision + 1, activity_actor_id = 'user-2', updated_at = ?
+               WHERE id = ? AND organization_id = ?`,
+            )
+            .run(new Date().toISOString(), auditId, organizationId);
+        }
         if (
           control.deleteAuditBeforeRunUpdate &&
           query.includes("UPDATE audits SET responses")
@@ -2114,6 +2827,13 @@ function toD1(
           control.failNextPendingUpdate = false;
           throw new Error("Transient D1 update failure");
         }
+        if (query.trimStart().startsWith("SELECT")) {
+          return {
+            meta: { changes: 0 },
+            results: database.query(query).all(...values),
+            success: true,
+          };
+        }
         const result = database.query(query).run(...values);
         return { meta: { changes: result.changes }, success: true };
       };
@@ -2146,7 +2866,9 @@ function toD1(
               )
               .run(objectId);
           }
-          return database.query(query).get(...values);
+          const result = database.query(query).get(...values);
+          if (query.includes("FROM audits AS audit")) afterAuditRead();
+          return result;
         },
         run: async () => runSync(),
         runSync,

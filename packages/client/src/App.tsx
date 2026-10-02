@@ -9,6 +9,7 @@ import {
 } from "@tearleads/ui/react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AccountSettings } from "./AccountSettings";
+import { Activity } from "./Activity";
 import { AdminJobs } from "./AdminJobs";
 import { AdminOrganizations } from "./AdminOrganizations";
 import { AdminUsers } from "./AdminUsers";
@@ -519,6 +520,7 @@ function contentForPath(
   twoFactorEnabled: boolean,
   onSecurityChanged: () => Promise<unknown>,
 ) {
+  if (pathname === "/activity") return <Activity onNavigate={navigate} />;
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return (
       <Audits
@@ -593,6 +595,7 @@ function currentLocation() {
 }
 
 function activePageFor(pathname: string) {
+  if (pathname === "/activity") return "activity" as const;
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
     return "audits" as const;
   }
