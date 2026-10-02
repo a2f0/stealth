@@ -2178,6 +2178,44 @@ describe("audit activity", () => {
     expect(history.body.events).toHaveLength(2);
   });
 
+  it("rejects a save when another writer changes the revision after the initial read", async () => {
+    const fixture = await createFixture();
+    const { auditId } = await createActivityAudit(fixture);
+    fixture.databaseControl.editAuditBeforeRunUpdate = true;
+    const rejected = await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 0,
+      responses: { check: "fail" },
+      status: "completed",
+    });
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body).toEqual({
+      error: "This audit has changed. Reload it before saving.",
+    });
+    const detail = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(detail.body.audit).toMatchObject({
+      responses: { check: "pass" },
+      revision: 1,
+      status: "in_progress",
+      answerActivity: { check: { actor: { id: "user-2" } } },
+    });
+    const history = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/runs/${auditId}/activity`,
+      "GET",
+    );
+    expect(history.body.events).toHaveLength(2);
+    expect(history.body.events[0]).toMatchObject({
+      action: "audit.answer_changed",
+      actor: { id: "user-2" },
+      details: { before: null, after: "pass" },
+    });
+    expect(history.body.events[1]?.action).toBe("audit.started");
+  });
+
   it("isolates organization feeds and resource history while allowing shared global form history", async () => {
     const fixture = await createFixture();
     const { auditId, templateId } = await createActivityAudit(fixture);
@@ -2451,6 +2489,7 @@ async function createFixture(includeActivity = true) {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
+    editAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -2563,6 +2602,7 @@ function bindingsFor(
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
+    editAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -2627,6 +2667,7 @@ function toD1(
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
+    editAuditBeforeRunUpdate: false,
     deleteAssigneeBeforeIssueUpdate: false,
     failNextImageActivation: false,
     failNextPendingUpdate: false,
@@ -2661,6 +2702,27 @@ function toD1(
     prepare: (query: string) => {
       let values: SQLQueryBindings[] = [];
       const runSync = () => {
+        if (
+          control.editAuditBeforeRunUpdate &&
+          query.includes("UPDATE audits SET responses")
+        ) {
+          control.editAuditBeforeRunUpdate = false;
+          const auditId = values.at(-2);
+          const organizationId = values.at(-1);
+          if (
+            typeof auditId !== "string" ||
+            typeof organizationId !== "string"
+          ) {
+            throw new Error("Expected an audit and organization id.");
+          }
+          database
+            .query(
+              `UPDATE audits SET responses = '{"check":"pass"}',
+                 revision = revision + 1, activity_actor_id = 'user-2', updated_at = ?
+               WHERE id = ? AND organization_id = ?`,
+            )
+            .run(new Date().toISOString(), auditId, organizationId);
+        }
         if (
           control.deleteAuditBeforeRunUpdate &&
           query.includes("UPDATE audits SET responses")
