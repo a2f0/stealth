@@ -2216,6 +2216,44 @@ describe("audit activity", () => {
     expect(history.body.events[1]?.action).toBe("audit.started");
   });
 
+  it("keeps answer values and attribution in one snapshot during concurrent saves", async () => {
+    const fixture = await createFixture();
+    const { auditId } = await createActivityAudit(fixture);
+    await jsonRequest(fixture, `/runs/${auditId}`, "PATCH", {
+      expectedRevision: 0,
+      responses: { check: "pass" },
+      status: "in_progress",
+    });
+    fixture.databaseControl.afterNextAuditRead = () => {
+      fixture.database
+        .query(
+          `UPDATE audits SET responses = '{"check":"fail"}', revision = revision + 1,
+             activity_actor_id = 'user-2', updated_at = ? WHERE id = ?`,
+        )
+        .run(new Date().toISOString(), auditId);
+    };
+    const snapshot = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(snapshot.body.audit).toMatchObject({
+      revision: 1,
+      responses: { check: "pass" },
+      answerActivity: { check: { actor: { id: "user-1" } } },
+    });
+    const latest = await jsonRequest<ActivityRunResponse>(
+      fixture,
+      `/runs/${auditId}`,
+      "GET",
+    );
+    expect(latest.body.audit).toMatchObject({
+      revision: 2,
+      responses: { check: "fail" },
+      answerActivity: { check: { actor: { id: "user-2" } } },
+    });
+  });
+
   it("isolates organization feeds and resource history while allowing shared global form history", async () => {
     const fixture = await createFixture();
     const { auditId, templateId } = await createActivityAudit(fixture);
@@ -2470,6 +2508,17 @@ async function createActivityAudit(
   return { auditId: started.body.auditId, templateId };
 }
 
+interface DatabaseControl {
+  activateBeforeCleanupClaim: boolean;
+  afterNextAuditRead?: () => void;
+  commitThenThrowImageActivation: boolean;
+  deleteAssigneeBeforeIssueUpdate: boolean;
+  deleteAuditBeforeRunUpdate: boolean;
+  editAuditBeforeRunUpdate: boolean;
+  failNextImageActivation: boolean;
+  failNextPendingUpdate: boolean;
+}
+
 async function createFixture(includeActivity = true) {
   const database = await createLegacyDatabase();
   await applyMigration(database, "0022_version_audit_templates.sql");
@@ -2485,7 +2534,7 @@ async function createFixture(includeActivity = true) {
   if (includeActivity)
     await applyMigration(database, "0049_create_activity_events.sql");
   const stored = new Map<string, Uint8Array>();
-  const databaseControl = {
+  const databaseControl: DatabaseControl = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
@@ -2598,7 +2647,7 @@ function bindingsFor(
     beforeNextPut?: () => Promise<void>;
     failNextDelete: boolean;
   } = { failNextDelete: false },
-  databaseControl = {
+  databaseControl: DatabaseControl = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
@@ -2663,7 +2712,7 @@ function storageFor(
 
 function toD1(
   database: Database,
-  control = {
+  control: DatabaseControl = {
     activateBeforeCleanupClaim: false,
     commitThenThrowImageActivation: false,
     deleteAuditBeforeRunUpdate: false,
@@ -2674,6 +2723,11 @@ function toD1(
   },
 ) {
   let batchTail: Promise<void> = Promise.resolve();
+  const afterAuditRead = () => {
+    const callback = control.afterNextAuditRead;
+    delete control.afterNextAuditRead;
+    callback?.();
+  };
   return {
     batch: (statements: D1PreparedStatement[]) => {
       const execution = batchTail.then(() => {
@@ -2687,6 +2741,7 @@ function toD1(
             ).runSync(),
           );
           database.exec("COMMIT");
+          afterAuditRead();
           return results;
         } catch (cause) {
           database.exec("ROLLBACK");
@@ -2772,6 +2827,13 @@ function toD1(
           control.failNextPendingUpdate = false;
           throw new Error("Transient D1 update failure");
         }
+        if (query.trimStart().startsWith("SELECT")) {
+          return {
+            meta: { changes: 0 },
+            results: database.query(query).all(...values),
+            success: true,
+          };
+        }
         const result = database.query(query).run(...values);
         return { meta: { changes: result.changes }, success: true };
       };
@@ -2804,7 +2866,9 @@ function toD1(
               )
               .run(objectId);
           }
-          return database.query(query).get(...values);
+          const result = database.query(query).get(...values);
+          if (query.includes("FROM audits AS audit")) afterAuditRead();
+          return result;
         },
         run: async () => runSync(),
         runSync,

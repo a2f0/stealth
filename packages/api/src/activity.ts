@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import type { Bindings } from "./types";
 
-interface ActivityRow {
+export interface ActivityRow {
   action: string;
   actor_email: string;
   actor_name: string;
@@ -81,12 +81,12 @@ export async function findActivity(
   };
 }
 
-export async function findAuditAnswerActivity(
+export function auditAnswerActivityStatement(
   database: D1Database,
   organizationId: string,
   auditId: string,
 ) {
-  const rows = await database
+  return database
     .prepare(
       `SELECT * FROM (
          SELECT activity_events.*,
@@ -96,10 +96,12 @@ export async function findAuditAnswerActivity(
            AND action = 'audit.answer_changed'
        ) WHERE latest = 1`,
     )
-    .bind(organizationId, auditId)
-    .all<ActivityRow>();
+    .bind(organizationId, auditId);
+}
+
+export function toAuditAnswerActivity(rows: ActivityRow[]) {
   return Object.fromEntries(
-    rows.results.map((row) => [
+    rows.map((row) => [
       row.subject_id,
       { actor: activityActor(row), occurredAt: row.occurred_at },
     ]),

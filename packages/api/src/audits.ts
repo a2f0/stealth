@@ -1,5 +1,10 @@
 import { Hono } from "hono";
-import { findActivity, findAuditAnswerActivity } from "./activity";
+import {
+  type ActivityRow,
+  auditAnswerActivityStatement,
+  findActivity,
+  toAuditAnswerActivity,
+} from "./activity";
 import {
   type AuditDefinition,
   isRecord,
@@ -489,17 +494,22 @@ audits.get("/runs", async (context) => {
 
 audits.get("/runs/:id", async (context) => {
   const organizationId = context.get("organizationId");
-  const audit = await findAudit(
-    context.env.DB,
-    organizationId,
-    context.req.param("id"),
-  );
+  const auditId = context.req.param("id");
+  const [auditRows, answerRows] = await context.env.DB.batch<
+    AuditRow | ActivityRow
+  >([
+    auditStatement(context.env.DB, organizationId, auditId),
+    auditAnswerActivityStatement(context.env.DB, organizationId, auditId),
+  ]);
+  const audit = auditRows?.results[0] as AuditRow | undefined;
   if (!audit) return context.json({ error: "Audit not found." }, 404);
-  const [issues, members, images, answerActivity] = await Promise.all([
+  const answerActivity = toAuditAnswerActivity(
+    (answerRows?.results ?? []) as ActivityRow[],
+  );
+  const [issues, members, images] = await Promise.all([
     findIssues(context.env.DB, organizationId, audit.id),
     findMembers(context.env.DB, organizationId),
     findAuditIssueImages(context.env.DB, organizationId, audit.id),
-    findAuditAnswerActivity(context.env.DB, organizationId, audit.id),
   ]);
   const imagesByIssue = groupImagesByIssue(images);
   return context.json({
@@ -936,6 +946,14 @@ async function findAudit(
   organizationId: string,
   id: string,
 ) {
+  return auditStatement(database, organizationId, id).first<AuditRow>();
+}
+
+function auditStatement(
+  database: D1Database,
+  organizationId: string,
+  id: string,
+) {
   return database
     .prepare(
       `SELECT audit.id, audit.template_id, audit.template_family_id, audit.template_version,
@@ -946,8 +964,7 @@ async function findAudit(
        FROM audits AS audit JOIN user AS creator ON creator.id = audit.started_by
        WHERE audit.id = ? AND audit.organization_id = ?`,
     )
-    .bind(id, organizationId)
-    .first<AuditRow>();
+    .bind(id, organizationId);
 }
 
 async function findIssues(
