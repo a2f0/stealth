@@ -43,8 +43,76 @@
   grid-column: 1 / -1;
 }
 
+.activityFeedCompact {
+  gap: var(--space-2);
+}
+
+.activityRowCompact {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-2-5) var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.activityCompactHeading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-4);
+}
+
+.activityResource {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.activityHistorical {
+  margin-left: var(--space-2);
+}
+
+.activityTime {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.activityDisclosure {
+  min-width: 0;
+  color: var(--color-text-muted);
+}
+
+.activityDisclosure > summary {
+  cursor: pointer;
+}
+
+.activitySummary {
+  display: inline-block;
+  max-width: calc(100% - var(--space-6));
+  overflow: hidden;
+  vertical-align: top;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityExpanded {
+  display: grid;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+}
+
 @media (max-width: 720px) {
   .activityRow {
     flex-direction: column;
+  }
+
+  .activityCompactHeading {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 }

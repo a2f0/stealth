@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { Activity } from "./Activity";
 import { ActivityFeed } from "./ActivityFeed";
 import type { ActivityEvent } from "./activityApi";
 
@@ -98,6 +99,42 @@ function event(id: number, after: string): ActivityEvent {
 }
 
 describe("activity feed, mounted", () => {
+  it("uses compact workspace rows with expandable full details and resource navigation", async () => {
+    const change = event(51, "First line\nSecond line");
+    change.details.before = "Previous answer ".repeat(50);
+    change.details.responseType = "text";
+    change.historical = true;
+    const navigations: string[] = [];
+    globalThis.fetch = (async (input) => {
+      expect(String(input)).toEndWith("/api/activity");
+      return Response.json({ events: [change], nextCursor: null });
+    }) as typeof fetch;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <Activity onNavigate={(pathname) => navigations.push(pathname)} />,
+      ),
+    );
+    await settle();
+    expect(container.querySelector(".activityRowCompact")).not.toBeNull();
+    expect(container.textContent).toContain("From existing records");
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      ".activityDisclosure",
+    );
+    expect(disclosure?.open).toBe(false);
+    const summary = disclosure?.querySelector("summary");
+    expect(summary?.textContent).toContain("Exits clear");
+    await act(async () => summary?.click());
+    expect(disclosure?.open).toBe(true);
+    expect(disclosure?.textContent).toContain("sam@example.com");
+    expect(disclosure?.textContent).toContain(String(change.details.before));
+    expect(disclosure?.textContent).toContain("First line\nSecond line");
+    await click("Fire safety");
+    expect(navigations).toEqual(["/audits/runs/audit-1"]);
+  });
+
   it("loads earlier events, refreshes manually, and reloads after a saved mutation", async () => {
     const requests: string[] = [];
     globalThis.fetch = (async (input, init) => {
