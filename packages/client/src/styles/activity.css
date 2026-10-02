@@ -49,6 +49,7 @@
 
 .activityRowCompact {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-0-5);
   padding: var(--space-2-5) var(--space-4);
   font-size: var(--text-sm);
