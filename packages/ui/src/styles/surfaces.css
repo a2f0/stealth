@@ -373,6 +373,27 @@ a.row:focus-visible {
   background: var(--color-surface);
 }
 
+/* Floating feedback stays outside the page's layout and clear of phone safe areas. */
+.toast {
+  position: fixed;
+  z-index: var(--z-overlay);
+  bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  width: max-content;
+  max-width: min(
+    32rem,
+    calc(
+      100vw -
+      var(--space-8) -
+      env(safe-area-inset-left, 0px) -
+      env(safe-area-inset-right, 0px)
+    )
+  );
+  transform: translateX(-50%);
+  box-shadow: var(--shadow-lg);
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 640px) {
   .banner {
     flex-wrap: wrap;
