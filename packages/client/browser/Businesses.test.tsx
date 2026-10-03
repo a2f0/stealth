@@ -136,6 +136,9 @@ async function measureBrowserLayout(
     browser,
     [
       "--headless=new",
+      // Hosted Ubuntu runners restrict Chrome's sandbox. This browser only
+      // opens the generated fixture in a disposable profile.
+      "--no-sandbox",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
