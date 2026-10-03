@@ -12,6 +12,7 @@ import {
   PageBody,
   PageHeader,
   PageSection,
+  Toast,
 } from "@tearleads/ui/react";
 import {
   type ComponentProps,
@@ -191,7 +192,7 @@ function BusinessListBody({
   return (
     <>
       {error && <Banner tone="danger">{error}</Banner>}
-      {notice && <Banner tone="success">{notice}</Banner>}
+      {notice && <Toast tone="success">{notice}</Toast>}
       {loading && !data ? (
         <LoadingState label="Loading businesses…" />
       ) : data ? (

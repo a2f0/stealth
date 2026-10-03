@@ -30,8 +30,8 @@ const baseConfig = {
       project: ["src/**/*.ts"],
     },
     "packages/client": {
-      entry: [],
-      project: ["src/**/*.{css,ts,tsx}"],
+      entry: ["browser/**/*.test.tsx"],
+      project: ["src/**/*.{css,ts,tsx}", "browser/**/*.tsx"],
     },
     "packages/ui": {
       entry: ["src/**/*.test.ts"],

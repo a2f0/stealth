@@ -40,5 +40,17 @@ jobs:
       - name: Run tests
         run: bun run test
 
+      - name: Set up Chrome for browser tests
+        uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: stable
+          install-dependencies: true
+
+      - name: Test browser layout
+        run: bun run --cwd packages/client test:browser
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+
       - name: Build applications
         run: bun run build
