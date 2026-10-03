@@ -84,6 +84,23 @@ export function contractIdForPath(pathname: string) {
   }
 }
 
+/** Reusable contract template families, separate from issued contracts. */
+export function contractTemplatePath(id?: string) {
+  return id
+    ? `/contracts/templates/${encodeURIComponent(id)}`
+    : "/contracts/templates";
+}
+
+export function contractTemplateIdForPath(pathname: string) {
+  const segment = /^\/contracts\/templates\/([^/]+)\/?$/.exec(pathname)?.[1];
+  if (!segment) return undefined;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 /** The token in a public `/sign/<token>` signing link, if the path is one. */
 export function signingTokenForPath(pathname: string) {
   return /^\/sign\/([A-Za-z0-9_-]{43})\/?$/.exec(pathname)?.[1];

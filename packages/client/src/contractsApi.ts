@@ -96,6 +96,7 @@ export interface ContractDetail {
   sentByName: string | null;
   signingOrder: "parallel" | "sequential";
   status: ContractStatus;
+  template?: { name: string; version: number } | null;
   title: string;
   updatedAt: string;
   voidReason: string | null;

@@ -4,6 +4,8 @@ import {
   businessPath,
   contractIdForPath,
   contractPath,
+  contractTemplateIdForPath,
+  contractTemplatePath,
   equipmentIdForPath,
   equipmentPath,
   inboxEmailPath,
@@ -55,6 +57,18 @@ describe("workspace paths", () => {
     expect(contractIdForPath("/contracts/a/b")).toBeUndefined();
     expect(isContractsPath("/contracts/abc")).toBe(true);
     expect(isContractsPath("/contractsx")).toBe(false);
+  });
+
+  it("round-trips contract template paths", () => {
+    expect(contractTemplatePath()).toBe("/contracts/templates");
+    expect(contractTemplateIdForPath(contractTemplatePath("template/1"))).toBe(
+      "template/1",
+    );
+    expect(contractTemplateIdForPath("/contracts/templates")).toBeUndefined();
+    expect(contractTemplateIdForPath("/contracts/templates/%E0%A4")).toBe(
+      "%E0%A4",
+    );
+    expect(isContractsPath(contractTemplatePath("t1"))).toBe(true);
   });
 
   it("recognises public signing links", () => {

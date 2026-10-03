@@ -159,7 +159,8 @@ function useAuthPageState({
         return;
       }
       if (result.nextMode) chooseMode(result.nextMode);
-      if (result.clearLocation) window.history.replaceState({}, "", "/");
+      if (result.clearLocation)
+        window.history.replaceState(window.history.state, "", "/");
       setNotice(result.notice);
     } catch (cause) {
       setError(messageFrom(cause));

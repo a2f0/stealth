@@ -150,7 +150,11 @@ function checkoutNotice(query: URLSearchParams) {
 
 function clearCheckoutQuery(query: URLSearchParams) {
   if (query.has("checkout") || query.has("session_id")) {
-    window.history.replaceState({}, "", "/organization/billing");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      "/organization/billing",
+    );
   }
 }
 
