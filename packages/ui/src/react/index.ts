@@ -3,6 +3,7 @@ export { Badge, type BadgeTone } from "./Badge";
 export { Banner } from "./Banner";
 export { Button, ButtonLink, buttonClass } from "./Button";
 export { Card } from "./Card";
+export { ContextMenu } from "./ContextMenu";
 export { cx } from "./cx";
 export { EmptyState, LoadingState } from "./EmptyState";
 export { Field } from "./Field";

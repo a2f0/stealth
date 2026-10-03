@@ -30,6 +30,7 @@ function renderState(state: BusinessListState) {
       onAddingChange={noop}
       onCreated={noop}
       onDeleted={noop}
+      onEinCopied={noop}
       onError={noop}
       onNavigate={noop}
       onUpdated={noop}
