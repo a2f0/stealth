@@ -13,6 +13,7 @@ let container: HTMLElement;
 beforeAll(async () => {
   for (const [key, value] of Object.entries({
     document: dom.document,
+    Element: dom.Element,
     HTMLElement: dom.HTMLElement,
     IS_REACT_ACT_ENVIRONMENT: true,
     Node: dom.Node,
@@ -80,18 +81,28 @@ async function mount() {
           {(props) => (
             <section {...props}>
               <a href="/record">Record</a>
+              <button type="button">
+                Control
+                <svg aria-hidden="true">
+                  <path d="M0 0h10v10" />
+                </svg>
+              </button>
               <input aria-label="Name" />
             </section>
           )}
         </ContextMenu>
-        <button type="button">Outside</button>
+        <button className="outsideControl" type="button">
+          Outside
+        </button>
       </>,
     ),
   );
   return {
     input: container.querySelector<HTMLInputElement>("input"),
     link: container.querySelector<HTMLAnchorElement>("a"),
-    outside: container.querySelector<HTMLButtonElement>("button"),
+    control: container.querySelector<HTMLButtonElement>("section button"),
+    icon: container.querySelector<SVGElement>("svg path"),
+    outside: container.querySelector<HTMLButtonElement>(".outsideControl"),
     selected,
   };
 }
@@ -101,7 +112,7 @@ const items = () => [
   ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
 ];
 
-async function contextClick(element: HTMLElement | null, x = 120, y = 180) {
+async function contextClick(element: Element | null, x = 120, y = 180) {
   const event = new dom.MouseEvent("contextmenu", {
     bubbles: true,
     cancelable: true,
@@ -125,6 +136,13 @@ async function key(element: Element | null, value: string, shiftKey = false) {
 }
 
 describe("shared context menu", () => {
+  it("restores focus to the control when opened from its SVG icon", async () => {
+    const view = await mount();
+    await contextClick(view.icon);
+    expect(menu()).not.toBeNull();
+    await key(document.activeElement, "Escape");
+    expect(document.activeElement).toBe(view.control);
+  });
   it("opens at the pointer in a portal and focuses the first action", async () => {
     const view = await mount();
     const event = await contextClick(view.link);

@@ -104,7 +104,7 @@ function useContextMenu(enabled: boolean) {
 
 function isEditable(target: EventTarget) {
   return (
-    target instanceof HTMLElement &&
+    target instanceof Element &&
     Boolean(
       target.closest(
         'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
@@ -114,12 +114,11 @@ function isEditable(target: EventTarget) {
 }
 
 function focusTarget(container: HTMLElement, target: EventTarget) {
-  const selector = 'a[href], button, [tabindex]:not([tabindex="-1"])';
+  const selector =
+    'a[href], button:not(:disabled), [tabindex]:not([tabindex="-1"]):not(:disabled)';
   const nearest =
-    target instanceof HTMLElement
-      ? target.closest<HTMLElement>(selector)
-      : null;
-  return nearest && container.contains(nearest)
+    target instanceof Element ? target.closest<HTMLElement>(selector) : null;
+  return nearest instanceof HTMLElement && container.contains(nearest)
     ? nearest
     : (container.querySelector<HTMLElement>(selector) ?? container);
 }

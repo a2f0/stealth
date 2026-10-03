@@ -10,6 +10,7 @@ import type { Business } from "./businessesApi";
 const dom = new Window({ url: "http://localhost:5173/businesses" });
 const domGlobals = {
   document: dom.document,
+  Element: dom.Element,
   HTMLElement: dom.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
   navigator: dom.navigator,
