@@ -243,6 +243,7 @@ function TemplatePage({
         ) : mapping ? (
           <ContractTemplateMapping
             key={`${id}:${template.version}:mapping`}
+            onBusyChange={setWorking}
             onCancel={() => setMapping(false)}
             onCreated={(contractId) => onNavigate(contractPath(contractId))}
             template={template}

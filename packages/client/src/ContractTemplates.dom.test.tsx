@@ -12,7 +12,7 @@ import {
 import { Contracts } from "./Contracts";
 import type { DraftInput } from "./contractsApi";
 import type { ContractTemplate } from "./contractTemplatesApi";
-import { canNavigate } from "./navigationGuard";
+import { canNavigate, guardWorkspaceChange } from "./navigationGuard";
 
 const dom = new Window({ url: "http://localhost:5173/contracts/templates/t1" });
 const domGlobals = {
@@ -102,7 +102,9 @@ interface TemplatePost {
   sourceVersion?: number;
 }
 
-function stubApi(options: { conflict?: boolean } = {}) {
+function stubApi(
+  options: { conflict?: boolean; createResponse?: Promise<Response> } = {},
+) {
   const posts: Array<{ body: TemplatePost; url: string }> = [];
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
@@ -129,7 +131,10 @@ function stubApi(options: { conflict?: boolean } = {}) {
               },
               { status: 201 },
             );
-      return Response.json({ contractId: "c1" }, { status: 201 });
+      return (
+        options.createResponse ??
+        Response.json({ contractId: "c1" }, { status: 201 })
+      );
     }
     if (url.includes("/document")) return new Response(null, { status: 404 });
     if (url.endsWith("/versions"))
@@ -303,6 +308,79 @@ describe("contract templates, mounted", () => {
     expect(container.textContent).toContain("This template changed");
     expect(field(container, "Role 1").value).toBe("Worker");
     expect(button(container, "Save version 3").disabled).toBe(false);
+  });
+
+  it("guards account, organization, and sign-out actions before changing the session", async () => {
+    stubApi();
+    const container = await mount();
+    await change(field(container, "Role 1"), "Worker");
+    const changes: string[] = [];
+    const switchAccount = guardWorkspaceChange(async (id: string) => {
+      changes.push(`account:${id}`);
+    });
+    const switchOrganization = guardWorkspaceChange(async (id: string) => {
+      changes.push(`organization:${id}`);
+    });
+    const signOut = guardWorkspaceChange(async () => {
+      changes.push("sign-out");
+    });
+    const originalConfirm = window.confirm;
+    try {
+      window.confirm = () => false;
+      await switchAccount("a2");
+      await switchOrganization("org2");
+      await signOut();
+      expect(changes).toEqual([]);
+      expect(field(container, "Role 1").value).toBe("Worker");
+      window.confirm = () => true;
+      await switchAccount("a2");
+      await switchOrganization("org2");
+      await signOut();
+      expect(changes).toEqual(["account:a2", "organization:org2", "sign-out"]);
+    } finally {
+      window.confirm = originalConfirm;
+    }
+  });
+
+  it("blocks version changes while creating and ignores a response after leaving the page", async () => {
+    let complete: ((response: Response) => void) | undefined;
+    const response = new Promise<Response>((resolve) => {
+      complete = resolve;
+    });
+    stubApi({ createResponse: response });
+    const navigations: string[] = [];
+    const container = await mount(undefined, (path) => navigations.push(path));
+    await click(button(container, "Use this version"));
+    await change(field(container, "Employee name"), "Sam Signer");
+    await change(field(container, "Employee email"), "sam@example.com");
+    await act(async () => {
+      fire(
+        container.querySelector("form"),
+        new dom.Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+    expect(field(container, "Version").disabled).toBe(true);
+    expect(button(container, "Delete template").disabled).toBe(true);
+    const root = mounted.at(-1)?.root;
+    await act(async () =>
+      root?.render(
+        <Contracts
+          onNavigate={(path) => navigations.push(path)}
+          pathname="/contracts/templates"
+        />,
+      ),
+    );
+    await act(async () => {
+      complete?.(
+        Response.json({ contractId: "late-contract" }, { status: 201 }),
+      );
+    });
+    await settle();
+    expect(container.querySelector("h1")?.textContent).toBe(
+      "Contract templates",
+    );
+    expect(navigations).toEqual([]);
   });
 });
 

@@ -30,7 +30,10 @@ import { Finance } from "./Finance";
 import { isFinancePath } from "./financePages";
 import { Inbox } from "./Inbox";
 import { Library } from "./Library";
-import { canNavigate } from "./navigationGuard";
+import {
+  guardWorkspaceChange,
+  useWorkspaceNavigation,
+} from "./navigationGuard";
 import { OrganizationInvitation } from "./OrganizationInvitation";
 import { OrganizationSettings } from "./OrganizationSettings";
 import { getWorkspaceOrganizations } from "./organizationSettingsApi";
@@ -65,33 +68,15 @@ export function App() {
   );
   const accounts = useAccountSessions(session, () => refetch());
 
-  const navigate = (nextPathname: string) => {
-    const destination = new URL(nextPathname, window.location.origin);
-    if (destination.origin !== window.location.origin) return;
-    const nextLocation = `${destination.pathname}${destination.search}${destination.hash}`;
-    const currentLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    if (nextLocation === currentLocation) return;
-    if (!canNavigate()) return;
-    window.history.pushState({}, "", nextLocation);
-    setPathname(destination.pathname);
-  };
-
-  useEffect(() => {
-    const previousLocation = `${pathname}${window.location.search}${window.location.hash}`;
-    const updatePathname = () => {
-      if (!canNavigate()) {
-        window.history.pushState({}, "", previousLocation);
-        return;
-      }
-      setPathname(window.location.pathname);
-    };
-    window.addEventListener("popstate", updatePathname);
-    return () => window.removeEventListener("popstate", updatePathname);
-  }, [pathname]);
+  const navigate = useWorkspaceNavigation(setPathname);
 
   useEffect(() => {
     if (verification.shouldClear) {
-      window.history.replaceState({}, "", window.location.pathname);
+      window.history.replaceState(
+        window.history.state,
+        "",
+        window.location.pathname,
+      );
     }
   }, [verification.shouldClear]);
 
@@ -292,21 +277,21 @@ function AuthenticatedWorkspace({
       activeSessionToken={session.session.token}
       canAccessFinance={access.can("finance")}
       contentKey={contentKey}
-      onAccountChange={accounts.switchAccount}
+      onAccountChange={guardWorkspaceChange(accounts.switchAccount)}
       onAccountSettings={() => navigate("/account")}
       onAddAccount={addAccount}
       onNavigate={navigate}
-      onOrganizationCreate={workspace.createOrganization}
-      onOrganizationChange={workspace.switchOrganization}
+      onOrganizationCreate={guardWorkspaceChange(workspace.createOrganization)}
+      onOrganizationChange={guardWorkspaceChange(workspace.switchOrganization)}
       onRefreshAccounts={accounts.refresh}
-      onSignOut={accounts.signOutActiveAccount}
+      onSignOut={guardWorkspaceChange(accounts.signOutActiveAccount)}
       organizations={workspace.organizations}
       user={session.user}
     >
       {organizationRequirement ? (
         <OrganizationTwoFactorRequired
           onSecurity={() => navigate("/account/security")}
-          onSignOut={accounts.signOutActiveAccount}
+          onSignOut={guardWorkspaceChange(accounts.signOutActiveAccount)}
           requirement={organizationRequirement}
         />
       ) : showContent ? (

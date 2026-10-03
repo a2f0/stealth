@@ -1091,7 +1091,8 @@ function hasOAuthState() {
 
 function clearOAuthState() {
   localStorage.removeItem(linkTokenStorageKey);
-  if (hasOAuthState()) window.history.replaceState({}, "", "/finance");
+  if (hasOAuthState())
+    window.history.replaceState(window.history.state, "", "/finance");
 }
 
 function syncNotice(result: {

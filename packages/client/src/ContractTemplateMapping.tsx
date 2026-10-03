@@ -1,5 +1,5 @@
 import { Banner, Button, Card, Field } from "@tearleads/ui/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { boxStyle, ContractPages } from "./ContractDocument";
 import { fieldTypeLabel, localDate, recipientTone } from "./contractFields";
 import {
@@ -12,12 +12,14 @@ export function ContractTemplateMapping({
   template,
   onCreated,
   onCancel,
+  onBusyChange,
 }: {
   template: ContractTemplate;
   onCreated: (id: string) => void;
   onCancel: () => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
-  const mapping = useRoleMapping(template, onCreated);
+  const mapping = useRoleMapping(template, onCreated, onBusyChange);
   return (
     <div className="contractEditor">
       <aside className="contractEditorPanel">
@@ -64,6 +66,7 @@ type Mapping = ReturnType<typeof useRoleMapping>;
 function useRoleMapping(
   template: ContractTemplate,
   onCreated: (id: string) => void,
+  onBusyChange: (busy: boolean) => void,
 ) {
   const [title, setTitle] = useState(template.name);
   const [dueDate, setDueDate] = useState("");
@@ -77,21 +80,32 @@ function useRoleMapping(
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const creating = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    onBusyChange(busy);
+  }, [busy, onBusyChange]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      onBusyChange(false);
+    };
+  }, [onBusyChange]);
   async function create() {
     if (creating.current) return;
     creating.current = true;
     setBusy(true);
     setError(undefined);
     try {
-      onCreated(
-        await createContractFromTemplate(template.id, {
-          dueDate: dueDate || null,
-          recipients,
-          title,
-          version: template.version,
-        }),
-      );
+      const id = await createContractFromTemplate(template.id, {
+        dueDate: dueDate || null,
+        recipients,
+        title,
+        version: template.version,
+      });
+      if (mounted.current) onCreated(id);
     } catch (cause) {
+      if (!mounted.current) return;
       setError(
         cause instanceof Error
           ? cause.message
