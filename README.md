@@ -188,6 +188,18 @@ last email, and **Send reminder** emails them immediately, at most once an
 hour. A sent contract can be voided, which invalidates its signing links;
 drafts, completed, declined, and voided contracts can be deleted.
 
+Contract templates at `/contracts/templates` keep a PDF and placed fields
+without assigning actual people. Fields belong to named signer roles such as
+Employee or Company. **Save version** appends an immutable version; you can
+select and use older versions, or edit one to create the next version. **Use
+this version** maps each role to a person's name and email, creates a draft
+with all fields already assigned, and lets you review it before sending.
+The draft owns its own PDF, recipients, and fields and records the source
+version, so changing or deleting the template does not change existing
+contracts. Deleting a template or purging its organization queues its shared
+PDF for cleanup. Migration `0050_create_contract_templates.sql` adds the
+versioned template records and contract provenance.
+
 Signers need no account. Each receives a link to `/sign/<token>` from
 `security@auth.tearleads.de`, with the sender's address as reply-to. The token
 is an HMAC-SHA256, keyed by `BETTER_AUTH_SECRET`, of the recipient ID and a

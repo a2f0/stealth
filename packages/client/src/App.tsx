@@ -30,6 +30,7 @@ import { Finance } from "./Finance";
 import { isFinancePath } from "./financePages";
 import { Inbox } from "./Inbox";
 import { Library } from "./Library";
+import { canNavigate } from "./navigationGuard";
 import { OrganizationInvitation } from "./OrganizationInvitation";
 import { OrganizationSettings } from "./OrganizationSettings";
 import { getWorkspaceOrganizations } from "./organizationSettingsApi";
@@ -70,15 +71,23 @@ export function App() {
     const nextLocation = `${destination.pathname}${destination.search}${destination.hash}`;
     const currentLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     if (nextLocation === currentLocation) return;
+    if (!canNavigate()) return;
     window.history.pushState({}, "", nextLocation);
     setPathname(destination.pathname);
   };
 
   useEffect(() => {
-    const updatePathname = () => setPathname(window.location.pathname);
+    const previousLocation = `${pathname}${window.location.search}${window.location.hash}`;
+    const updatePathname = () => {
+      if (!canNavigate()) {
+        window.history.pushState({}, "", previousLocation);
+        return;
+      }
+      setPathname(window.location.pathname);
+    };
     window.addEventListener("popstate", updatePathname);
     return () => window.removeEventListener("popstate", updatePathname);
-  }, []);
+  }, [pathname]);
 
   useEffect(() => {
     if (verification.shouldClear) {

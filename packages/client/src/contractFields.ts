@@ -193,6 +193,8 @@ export function describeContractEvent(
     (event.recipientId && recipientNames.get(event.recipientId)) || "A signer";
   const actor = event.actorName ?? "Someone";
   switch (event.type) {
+    case "created_from_template":
+      return `${actor} created it from ${event.detail ?? "a template"}`;
     case "created":
       return `${actor} uploaded the document`;
     case "sent":

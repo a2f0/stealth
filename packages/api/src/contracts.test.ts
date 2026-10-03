@@ -10,6 +10,7 @@ import {
   sendContractReminders,
 } from "./contractReminders";
 import { contracts } from "./contracts";
+import type { TemplateDefinition } from "./contractTemplateDefinition";
 import { signing } from "./signing";
 import type { Bindings } from "./types";
 
@@ -930,3 +931,339 @@ function storageFor(
     },
   } as unknown as R2Bucket;
 }
+
+interface Template {
+  currentVersion: number;
+  definition: TemplateDefinition;
+  document: { pageCount: number; sha256: string };
+  id: string;
+  name: string;
+  version: number;
+}
+
+async function uploadTemplate(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+) {
+  const form = new FormData();
+  form.set("file", new File([await samplePdf()], "Employment agreement.pdf"));
+  const response = await fixture.request("/api/contracts/templates", {
+    body: form,
+    method: "POST",
+  });
+  expect(response.status).toBe(201);
+  return ((await response.json()) as { template: Template }).template;
+}
+
+function templateVersion(template: Template) {
+  return {
+    definition: {
+      fields: draft().fields.map(({ recipientKey, ...field }) => ({
+        ...field,
+        roleKey: recipientKey,
+      })),
+      message: "Please review this agreement.",
+      reminderIntervalDays: 3,
+      roles: signers.map(({ key, routingOrder }) => ({
+        key,
+        label: key === "sam" ? "Employee" : "Company",
+        routingOrder,
+      })),
+      signingOrder: "sequential",
+    },
+    description: "An agreement with fields already placed.",
+    expectedCurrentVersion: template.currentVersion,
+    name: "Employment agreement",
+    sourceVersion: template.version,
+  };
+}
+
+function roleMapping(version: number) {
+  return {
+    recipients: signers.map(({ key, name, email }) => ({
+      email,
+      name,
+      roleKey: key,
+    })),
+    title: "Sam's employment agreement",
+    version,
+  };
+}
+
+describe("contract templates", () => {
+  it("keeps versions immutable and maps every field through a role into an independent draft", async () => {
+    const fixture = await createFixture();
+    const first = await uploadTemplate(fixture);
+    const path = `/api/contracts/templates/${first.id}`;
+    const saved = await fixture.json<{ template: Template }>(
+      "POST",
+      `${path}/versions`,
+      templateVersion(first),
+    );
+    expect(saved.status).toBe(201);
+    const second = saved.body.template;
+    expect(second.version).toBe(2);
+    expect(second.definition.roles).toEqual([
+      { key: "sam", label: "Employee", routingOrder: 1 },
+      { key: "cai", label: "Company", routingOrder: 2 },
+    ]);
+    expect(JSON.stringify(second.definition)).not.toContain("sam@example.com");
+    expect(JSON.stringify(second.definition)).not.toContain("Sam Signer");
+    const created = await fixture.json<{ contractId: string }>(
+      "POST",
+      `${path}/contracts`,
+      roleMapping(2),
+    );
+    expect(created.status).toBe(201);
+    const id = created.body.contractId;
+    const detail = await fixture.json<{
+      contract: Contract & { template: { name: string; version: number } };
+    }>("GET", `/api/contracts/${id}`);
+    expect(detail.body.contract.status).toBe("draft");
+    expect(detail.body.contract.fields).toHaveLength(5);
+    expect(detail.body.contract.template).toEqual({
+      name: "Employment agreement",
+      version: 2,
+    });
+    const employee = detail.body.contract.recipients.find(
+      (recipient) => recipient.email === "sam@example.com",
+    );
+    expect(
+      detail.body.contract.fields.filter(
+        (field) => field.recipientId === employee?.id,
+      ),
+    ).toHaveLength(3);
+    expect(detail.body.contract.events[0]?.type).toBe("created_from_template");
+    const changed = templateVersion(second);
+    changed.definition.fields = [];
+    changed.name = "New employment agreement";
+    expect(
+      (await fixture.json("POST", `${path}/versions`, changed)).status,
+    ).toBe(201);
+    expect(
+      (await fixture.json<{ template: Template }>("GET", `${path}?version=1`))
+        .body.template.definition.fields,
+    ).toEqual([]);
+    expect(
+      (await fixture.json<{ template: Template }>("GET", `${path}?version=2`))
+        .body.template,
+    ).toEqual({ ...second, currentVersion: 3 });
+    const history = await fixture.json<{
+      versions: Array<{ version: number }>;
+    }>("GET", `${path}/versions`);
+    expect(history.body.versions.map(({ version }) => version)).toEqual([
+      3, 2, 1,
+    ]);
+    const old = await fixture.json<{ contractId: string }>(
+      "POST",
+      `${path}/contracts`,
+      roleMapping(2),
+    );
+    expect(old.status).toBe(201);
+    expect(
+      (
+        await fixture.json<{ contract: Contract }>(
+          "GET",
+          `/api/contracts/${old.body.contractId}`,
+        )
+      ).body.contract.fields,
+    ).toHaveLength(5);
+    expect((await fixture.json("DELETE", path)).status).toBe(204);
+    const queue = fixture.database
+      .query("SELECT object_key FROM deleted_object_cleanup")
+      .all() as Array<{ object_key: string }>;
+    expect(queue).toHaveLength(1);
+    fixture.stored.delete(queue[0]?.object_key ?? "");
+    expect(
+      (await fixture.request(`/api/contracts/${id}/document`)).status,
+    ).toBe(200);
+    expect(
+      (
+        await fixture.json<{ contract: Contract & { template: unknown } }>(
+          "GET",
+          `/api/contracts/${id}`,
+        )
+      ).body.contract.template,
+    ).toEqual({ name: "Employment agreement", version: 2 });
+    expect(
+      (await fixture.json("POST", `/api/contracts/${id}/send`)).status,
+    ).toBe(200);
+    expect(fixture.emails).toHaveLength(1);
+    expect(fixture.emails[0]?.to.email).toBe("sam@example.com");
+  });
+
+  it("rejects stale saves and preserves the winner's version", async () => {
+    const fixture = await createFixture();
+    const template = await uploadTemplate(fixture);
+    const path = `/api/contracts/templates/${template.id}`;
+    const input = templateVersion(template);
+    expect((await fixture.json("POST", `${path}/versions`, input)).status).toBe(
+      201,
+    );
+    expect(
+      (
+        await fixture.json("POST", `${path}/versions`, {
+          ...input,
+          name: "Stale overwrite",
+        })
+      ).status,
+    ).toBe(409);
+    const current = await fixture.json<{ template: Template }>("GET", path);
+    expect(current.body.template.currentVersion).toBe(2);
+    expect(current.body.template.name).toBe("Employment agreement");
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM contract_template_versions")
+        .get(),
+    ).toEqual({ count: 2 });
+  });
+
+  it("validates roles, boxes, and complete unique mappings without saving people in templates", async () => {
+    const fixture = await createFixture();
+    const template = await uploadTemplate(fixture);
+    const path = `/api/contracts/templates/${template.id}`;
+    const input = templateVersion(template);
+    for (const definition of [
+      { ...input.definition, roles: [] },
+      {
+        ...input.definition,
+        roles: [input.definition.roles[0], input.definition.roles[0]],
+      },
+      {
+        ...input.definition,
+        fields: [{ ...input.definition.fields[0], roleKey: "missing" }],
+      },
+      {
+        ...input.definition,
+        fields: [{ ...input.definition.fields[0], page: 3 }],
+      },
+      {
+        ...input.definition,
+        fields: [{ ...input.definition.fields[0], x: 0.99 }],
+      },
+    ])
+      expect(
+        (
+          await fixture.json("POST", `${path}/versions`, {
+            ...input,
+            definition,
+          })
+        ).status,
+      ).toBe(400);
+    expect((await fixture.json("POST", `${path}/versions`, input)).status).toBe(
+      201,
+    );
+    const mapping = roleMapping(2);
+    for (const recipients of [
+      [],
+      [mapping.recipients[0]],
+      [mapping.recipients[0], mapping.recipients[0]],
+      [{ ...mapping.recipients[0], name: "" }, mapping.recipients[1]],
+      [{ ...mapping.recipients[0], email: "invalid" }, mapping.recipients[1]],
+      [
+        { ...mapping.recipients[0], email: "cai@example.com" },
+        mapping.recipients[1],
+      ],
+    ])
+      expect(
+        (
+          await fixture.json("POST", `${path}/contracts`, {
+            ...mapping,
+            recipients,
+          })
+        ).status,
+      ).toBe(400);
+    expect(
+      fixture.database.query("SELECT COUNT(*) AS count FROM contracts").get(),
+    ).toEqual({ count: 0 });
+    expect(fixture.stored.size).toBe(1);
+  });
+
+  it("scopes every template route to the active organization", async () => {
+    const fixture = await createFixture();
+    const template = await uploadTemplate(fixture);
+    const outsider = fixture.as("other-user", "org-2");
+    const path = `/api/contracts/templates/${template.id}`;
+    for (const [method, route, body] of [
+      ["GET", path, undefined],
+      ["GET", `${path}/document`, undefined],
+      ["GET", `${path}/versions`, undefined],
+      ["POST", `${path}/versions`, templateVersion(template)],
+      ["POST", `${path}/contracts`, roleMapping(1)],
+      ["DELETE", path, undefined],
+    ] as const)
+      expect((await outsider.json(method, route, body)).status).toBe(404);
+    expect(
+      (
+        await outsider.json<{ templates: unknown[] }>(
+          "GET",
+          "/api/contracts/templates",
+        )
+      ).body.templates,
+    ).toEqual([]);
+    expect((await fixture.json("GET", `${path}?version=bogus`)).status).toBe(
+      400,
+    );
+    expect(
+      (await fixture.json("GET", `${path}/document?version=bogus`)).status,
+    ).toBe(400);
+  });
+
+  it("rolls back a failed copy and handles deletion while a contract is being created", async () => {
+    const fixture = await createFixture();
+    const template = await uploadTemplate(fixture);
+    const path = `/api/contracts/templates/${template.id}`;
+    await fixture.json("POST", `${path}/versions`, templateVersion(template));
+    fixture.onQuery = (query) => {
+      if (query.includes("INSERT INTO contract_fields"))
+        throw new Error("Database unavailable");
+    };
+    expect(
+      (
+        await fixture.request(`${path}/contracts`, {
+          body: JSON.stringify(roleMapping(2)),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        })
+      ).status,
+    ).toBe(500);
+    expect(fixture.stored.size).toBe(1);
+    expect(
+      fixture.database.query("SELECT COUNT(*) AS count FROM contracts").get(),
+    ).toEqual({ count: 0 });
+    fixture.onQuery = (query) => {
+      if (!query.includes("INSERT INTO contracts")) return;
+      delete fixture.onQuery;
+      fixture.database
+        .query("DELETE FROM contract_templates WHERE id = ?")
+        .run(template.id);
+    };
+    expect(
+      (await fixture.json("POST", `${path}/contracts`, roleMapping(2))).status,
+    ).toBe(404);
+    expect(fixture.stored.size).toBe(1);
+    expect(
+      fixture.database.query("SELECT COUNT(*) AS count FROM contracts").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("queues template PDFs when an organization is purged", async () => {
+    const fixture = await createFixture();
+    const template = await uploadTemplate(fixture);
+    await fixture.json(
+      "POST",
+      `/api/contracts/templates/${template.id}/versions`,
+      templateVersion(template),
+    );
+    fixture.database.query("DELETE FROM organization WHERE id = 'org-1'").run();
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM contract_template_versions")
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      fixture.database
+        .query("SELECT COUNT(*) AS count FROM deleted_object_cleanup")
+        .get(),
+    ).toEqual({ count: 1 });
+  });
+});

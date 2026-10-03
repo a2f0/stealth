@@ -49,6 +49,8 @@ export interface ContractRow {
   sent_by: string | null;
   signing_order: "parallel" | "sequential";
   status: "completed" | "declined" | "draft" | "sent" | "voided";
+  template_name: string | null;
+  template_version: number | null;
   title: string;
   updated_at: string;
   void_reason: string | null;
@@ -118,7 +120,7 @@ const contractColumns = `id, organization_id, title, message, status, signing_or
   due_date, reminder_interval_days, document_object_key, document_filename,
   document_size, document_sha256, document_page_count, final_object_key,
   final_sha256, created_by, sent_by, created_at, updated_at, sent_at,
-  completed_at, voided_at, void_reason, revision`;
+  completed_at, voided_at, void_reason, revision, template_name, template_version`;
 
 export function findContract(
   database: D1Database,
@@ -606,6 +608,8 @@ function describeEvent(
   const who = recipient ? `${recipient.name} <${recipient.email}>` : "a signer";
   const actor = event.actor_name ?? "an organization member";
   switch (event.type) {
+    case "created_from_template":
+      return `Created by ${actor} from ${event.detail ?? "a template"}`;
     case "created":
       return `Created by ${actor}`;
     case "sent":

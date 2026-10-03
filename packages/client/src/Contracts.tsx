@@ -17,6 +17,7 @@ import {
   ContractSummary,
   formatDate,
 } from "./ContractSummary";
+import { ContractTemplates } from "./ContractTemplates";
 import {
   type ContractFilter,
   contractFilters,
@@ -33,6 +34,7 @@ import { countLabel } from "./labels";
 import {
   contractIdForPath,
   contractPath,
+  contractTemplatePath,
   handleNavigation,
 } from "./workspacePaths";
 
@@ -43,6 +45,11 @@ export function Contracts({
   onNavigate: (pathname: string) => void;
   pathname: string;
 }) {
+  if (
+    pathname === contractTemplatePath() ||
+    pathname.startsWith(`${contractTemplatePath()}/`)
+  )
+    return <ContractTemplates onNavigate={onNavigate} pathname={pathname} />;
   const contractId = contractIdForPath(pathname);
   // Keyed so each page starts fresh and ignores the other's late responses.
   return contractId ? (
@@ -100,14 +107,19 @@ function ContractListPage({
     <Page>
       <PageHeader
         actions={
-          <Button
-            busy={uploading}
-            icon="add"
-            onClick={choose}
-            variant="primary"
-          >
-            New contract
-          </Button>
+          <>
+            <Button onClick={() => onNavigate(contractTemplatePath())}>
+              Templates
+            </Button>
+            <Button
+              busy={uploading}
+              icon="add"
+              onClick={choose}
+              variant="primary"
+            >
+              New contract
+            </Button>
+          </>
         }
         description="Send documents for signature, track who has signed, and keep the signed copies."
         eyebrow="Records"
@@ -252,7 +264,11 @@ function ContractPage({
             Contracts
           </Button>
         }
-        description={contract?.document.filename}
+        description={
+          contract
+            ? `${contract.document.filename}${contract.template ? ` · From ${contract.template.name} v${contract.template.version}` : ""}`
+            : undefined
+        }
         eyebrow={contract?.status === "draft" ? "Draft contract" : "Contract"}
         title={contract?.title ?? (error ? "Contract unavailable" : "Loading…")}
       />
