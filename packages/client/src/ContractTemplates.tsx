@@ -57,7 +57,9 @@ function TemplateList({
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const uploading = useRef(false);
+  const mounted = useRef(true);
   useEffect(() => {
+    mounted.current = true;
     let active = true;
     listContractTemplates()
       .then((result) => {
@@ -68,6 +70,7 @@ function TemplateList({
       });
     return () => {
       active = false;
+      mounted.current = false;
     };
   }, []);
   async function upload(file: File) {
@@ -77,8 +80,9 @@ function TemplateList({
     setError(undefined);
     try {
       const template = await uploadContractTemplate(file);
-      onNavigate(contractTemplatePath(template.id));
+      if (mounted.current) onNavigate(contractTemplatePath(template.id));
     } catch (cause) {
+      if (!mounted.current) return;
       setError(messageFrom(cause));
       setBusy(false);
       uploading.current = false;
@@ -322,24 +326,18 @@ function useTemplatePage(id: string, onNavigate: (pathname: string) => void) {
     setTemplate(value);
     setDirty(false);
     setNotice(`Version ${value.version} saved.`);
-    setVersions((current) => [
-      {
-        createdAt: value.createdAt,
-        createdByName: value.createdByName,
-        name: value.name,
-        version: value.version,
-      },
-      ...current,
-    ]);
+    setVersions((current) => [versionSummary(value), ...current]);
   }
   async function remove() {
     if (!confirmTemplateDeletion()) return;
+    const request = generation.current;
     setDeleting(true);
     setError(undefined);
     try {
       await deleteContractTemplate(id);
-      onNavigate(contractTemplatePath());
+      if (generation.current === request) onNavigate(contractTemplatePath());
     } catch (cause) {
+      if (generation.current !== request) return;
       setError(messageFrom(cause));
       setDeleting(false);
     }
@@ -427,4 +425,13 @@ function confirmTemplateDeletion() {
   return window.confirm(
     "Delete this template and all of its versions? Contracts already created from it will stay available.",
   );
+}
+
+function versionSummary(template: ContractTemplate): TemplateVersion {
+  return {
+    createdAt: template.createdAt,
+    createdByName: template.createdByName,
+    name: template.name,
+    version: template.version,
+  };
 }

@@ -103,11 +103,23 @@ interface TemplatePost {
 }
 
 function stubApi(
-  options: { conflict?: boolean; createResponse?: Promise<Response> } = {},
+  options: {
+    conflict?: boolean;
+    createResponse?: Promise<Response>;
+    uploadResponse?: Promise<Response>;
+    deleteResponse?: Promise<Response>;
+  } = {},
 ) {
   const posts: Array<{ body: TemplatePost; url: string }> = [];
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
+    if (init?.method === "DELETE")
+      return options.deleteResponse ?? new Response(null, { status: 204 });
+    if (init?.body instanceof FormData)
+      return (
+        options.uploadResponse ??
+        Response.json({ template: template() }, { status: 201 })
+      );
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as TemplatePost;
       posts.push({ body, url });
@@ -381,6 +393,61 @@ describe("contract templates, mounted", () => {
       "Contract templates",
     );
     expect(navigations).toEqual([]);
+  });
+
+  it("ignores an upload completion after the templates list unmounts", async () => {
+    let complete: ((response: Response) => void) | undefined;
+    const uploadResponse = new Promise<Response>((resolve) => {
+      complete = resolve;
+    });
+    stubApi({ uploadResponse });
+    const navigations: string[] = [];
+    const container = await mount("/contracts/templates", (path) =>
+      navigations.push(path),
+    );
+    const input = container.querySelector(
+      "input[type=file]",
+    ) as HTMLInputElement;
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: { 0: new File(["PDF"], "agreement.pdf"), length: 1 },
+    });
+    await act(async () => {
+      fire(input, new dom.Event("change", { bubbles: true }));
+    });
+    const root = mounted.at(-1)?.root;
+    await act(async () => root?.render(<p>Other workspace</p>));
+    await act(async () => {
+      complete?.(Response.json({ template: template() }, { status: 201 }));
+    });
+    await settle();
+    expect(navigations).toEqual([]);
+    expect(container.textContent).toBe("Other workspace");
+  });
+
+  it("ignores a deletion completion after leaving the template", async () => {
+    let complete: ((response: Response) => void) | undefined;
+    const deleteResponse = new Promise<Response>((resolve) => {
+      complete = resolve;
+    });
+    stubApi({ deleteResponse });
+    const navigations: string[] = [];
+    const container = await mount(undefined, (path) => navigations.push(path));
+    const originalConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      await click(button(container, "Delete template"));
+    } finally {
+      window.confirm = originalConfirm;
+    }
+    const root = mounted.at(-1)?.root;
+    await act(async () => root?.render(<p>Other workspace</p>));
+    await act(async () => {
+      complete?.(new Response(null, { status: 204 }));
+    });
+    await settle();
+    expect(navigations).toEqual([]);
+    expect(container.textContent).toBe("Other workspace");
   });
 });
 
