@@ -18,6 +18,10 @@ const domGlobals = {
 };
 const saved = new Map<string, PropertyDescriptor | undefined>();
 const originalFetch = globalThis.fetch;
+const originalClipboard = Object.getOwnPropertyDescriptor(
+  dom.navigator,
+  "clipboard",
+);
 let createRoot: (container: Element) => Root;
 
 beforeAll(async () => {
@@ -49,6 +53,9 @@ afterEach(async () => {
     container.remove();
   }
   globalThis.fetch = originalFetch;
+  if (originalClipboard)
+    Object.defineProperty(dom.navigator, "clipboard", originalClipboard);
+  else Reflect.deleteProperty(dom.navigator, "clipboard");
 });
 
 function business(id: string, name: string): Business {
@@ -70,11 +77,12 @@ function business(id: string, name: string): Business {
 function stubApi(
   businesses: Business[],
   createResponse: (name: string) => Response,
+  canManage = true,
 ) {
   const created: string[] = [];
   globalThis.fetch = (async (_input, init) => {
     if ((init?.method ?? "GET") === "GET") {
-      return Response.json({ businesses, canManage: true });
+      return Response.json({ businesses, canManage });
     }
     const { name } = JSON.parse(String(init?.body)) as { name: string };
     created.push(name);
@@ -89,13 +97,13 @@ async function settle() {
   });
 }
 
-async function mountPage() {
+async function mountPage(onNavigate: (pathname: string) => void = () => {}) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   mounted.push({ container, root });
   await act(async () =>
-    root.render(<Businesses onNavigate={() => {}} pathname="/businesses" />),
+    root.render(<Businesses onNavigate={onNavigate} pathname="/businesses" />),
   );
   await settle();
   return page(container);
@@ -121,6 +129,8 @@ function page(container: HTMLElement) {
         'input[placeholder="Acme, Inc."]',
       ) ?? null,
     rows: () => container.querySelectorAll(".rowList > li").length,
+    row: (index = 0) =>
+      container.querySelectorAll<HTMLElement>(".rowList > li")[index],
     submitButton: () =>
       form()?.querySelector<HTMLButtonElement>('button[type="submit"]'),
     text: () => container.textContent ?? "",
@@ -217,5 +227,120 @@ describe("adding a business, mounted", () => {
     expect(view.nameField()?.value).toBe("Beta LLC");
     expect(view.text()).toContain("Name taken.");
     expect(view.rows()).toBe(1);
+  });
+});
+
+function stubClipboard(writeText: (value: string) => Promise<void>) {
+  Object.defineProperty(dom.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+}
+
+async function openContextMenu(element: HTMLElement | null | undefined) {
+  expect(element).toBeTruthy();
+  const event = new dom.MouseEvent("contextmenu", {
+    bubbles: true,
+    cancelable: true,
+    button: 2,
+    clientX: 120,
+    clientY: 180,
+  });
+  await act(async () => element?.dispatchEvent(event as never));
+  expect(event.defaultPrevented).toBe(true);
+  return document.querySelector<HTMLButtonElement>('[role="menuitem"]');
+}
+
+describe("copying a business EIN", () => {
+  it("copies the displayed EIN without navigating and announces success", async () => {
+    const copied: string[] = [];
+    const navigations: string[] = [];
+    stubClipboard(async (value) => {
+      copied.push(value);
+    });
+    stubApi([{ ...business("b1", "Acme, Inc."), ein: "123456789" }], () =>
+      Response.json({}),
+    );
+    const view = await mountPage((pathname) => navigations.push(pathname));
+    const link = view.row()?.querySelector<HTMLAnchorElement>("a") ?? null;
+    const item = await openContextMenu(link);
+    expect(item?.textContent).toBe("Copy EIN");
+    expect(document.activeElement).toBe(item);
+    await click(item);
+    expect(copied).toEqual(["12-3456789"]);
+    expect(navigations).toEqual([]);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(view.text()).toContain("EIN copied.");
+    expect(document.activeElement).toBe(link);
+    await click(link);
+    expect(navigations).toEqual(["/businesses/b1"]);
+  });
+
+  it("disables Copy EIN when a business has no EIN", async () => {
+    const copied: string[] = [];
+    stubClipboard(async (value) => {
+      copied.push(value);
+    });
+    stubApi([business("b1", "Acme, Inc.")], () => Response.json({}));
+    const view = await mountPage();
+    const item = await openContextMenu(view.row());
+    expect(item?.disabled).toBe(true);
+    await click(item);
+    expect(copied).toEqual([]);
+    expect(view.text()).not.toContain("EIN copied.");
+  });
+
+  it("offers copying to read-only members and switches to the business last clicked", async () => {
+    const copied: string[] = [];
+    stubClipboard(async (value) => {
+      copied.push(value);
+    });
+    stubApi(
+      [
+        { ...business("b1", "Acme, Inc."), ein: "123456789" },
+        { ...business("b2", "Beta LLC"), ein: "987654321" },
+      ],
+      () => Response.json({}),
+      false,
+    );
+    const view = await mountPage();
+    await openContextMenu(view.row());
+    const item = await openContextMenu(view.row(1));
+    expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
+    expect(
+      document.querySelector('[role="menu"]')?.getAttribute("aria-label"),
+    ).toBe("Actions for Beta LLC");
+    await click(item);
+    expect(copied).toEqual(["98-7654321"]);
+  });
+
+  it("reports clipboard rejection and can retry successfully", async () => {
+    stubClipboard(async () => {
+      throw new Error("Permission denied");
+    });
+    stubApi([{ ...business("b1", "Acme, Inc."), ein: "123456789" }], () =>
+      Response.json({}),
+    );
+    const view = await mountPage();
+    await click(await openContextMenu(view.row()));
+    expect(view.text()).toContain("Could not copy the EIN. Please try again.");
+    expect(view.text()).not.toContain("EIN copied.");
+    stubClipboard(async () => {});
+    await click(await openContextMenu(view.row()));
+    expect(view.text()).not.toContain("Could not copy the EIN");
+    expect(view.text()).toContain("EIN copied.");
+  });
+
+  it("reports when the Clipboard API is unavailable", async () => {
+    Object.defineProperty(dom.navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    stubApi([{ ...business("b1", "Acme, Inc."), ein: "123456789" }], () =>
+      Response.json({}),
+    );
+    const view = await mountPage();
+    await click(await openContextMenu(view.row()));
+    expect(view.text()).toContain("Could not copy the EIN. Please try again.");
   });
 });

@@ -2,6 +2,7 @@ import {
   Banner,
   Button,
   Card,
+  ContextMenu,
   cx,
   EmptyState,
   Field,
@@ -13,6 +14,7 @@ import {
   PageSection,
 } from "@tearleads/ui/react";
 import {
+  type ComponentProps,
   type FormEvent,
   type RefObject,
   useCallback,
@@ -101,6 +103,7 @@ function BusinessListPage({
       }
       onCreated={(business) => dispatch({ type: "created", business })}
       onDeleted={(id) => dispatch({ type: "deleted", id })}
+      onEinCopied={() => dispatch({ type: "einCopied" })}
       onError={(message) => dispatch({ type: "failed", message })}
       onNavigate={onNavigate}
       onUpdated={(business) => dispatch({ type: "updated", business })}
@@ -112,6 +115,7 @@ interface BusinessListViewProps extends BusinessListState {
   onAddingChange: (adding: boolean) => void;
   onCreated: (business: Business) => void;
   onDeleted: (id: string) => void;
+  onEinCopied: () => void;
   onError: (message: string) => void;
   onNavigate: (pathname: string) => void;
   onUpdated: (business: Business) => void;
@@ -178,6 +182,7 @@ function BusinessListBody({
   onAddingChange,
   onCreated,
   onDeleted,
+  onEinCopied,
   onError,
   onNavigate,
   onUpdated,
@@ -203,6 +208,7 @@ function BusinessListBody({
             businesses={data.businesses}
             canManage={data.canManage}
             onDeleted={onDeleted}
+            onEinCopied={onEinCopied}
             onError={onError}
             onNavigate={onNavigate}
             onUpdated={onUpdated}
@@ -300,6 +306,7 @@ function BusinessList({
   canManage,
   onNavigate,
   onDeleted,
+  onEinCopied,
   onError,
   onUpdated,
 }: {
@@ -307,6 +314,7 @@ function BusinessList({
   canManage: boolean;
   onNavigate: (pathname: string) => void;
   onDeleted: (id: string) => void;
+  onEinCopied: () => void;
   onError: (message: string) => void;
   onUpdated: (business: Business) => void;
 }) {
@@ -332,6 +340,7 @@ function BusinessList({
                 key={business.id}
                 onNavigate={onNavigate}
                 onDeleted={onDeleted}
+                onEinCopied={onEinCopied}
                 onError={onError}
                 onUpdated={onUpdated}
               />
@@ -348,6 +357,7 @@ function BusinessRow({
   canManage,
   onNavigate,
   onDeleted,
+  onEinCopied,
   onError,
   onUpdated,
 }: {
@@ -355,6 +365,7 @@ function BusinessRow({
   canManage: boolean;
   onNavigate: (pathname: string) => void;
   onDeleted: (id: string) => void;
+  onEinCopied: () => void;
   onError: (message: string) => void;
   onUpdated: (business: Business) => void;
 }) {
@@ -388,30 +399,76 @@ function BusinessRow({
   }
 
   return (
-    <li className="row">
-      <BusinessSummary business={business} onNavigate={onNavigate} />
-      {canManage && (
-        <div className="rowActions businessRowActions">
-          <Button
-            disabled={busy}
-            icon="edit"
-            onClick={() => setEditing(true)}
-            size="sm"
-          >
-            Edit
-          </Button>
-          <Button
-            busy={busy}
-            icon="trash"
-            onClick={() => void remove()}
-            size="sm"
-            variant="danger"
-          >
-            {busy ? "Deleting…" : "Delete"}
-          </Button>
-        </div>
+    <BusinessContextMenu
+      business={business}
+      onCopied={onEinCopied}
+      onError={onError}
+    >
+      {(targetProps) => (
+        <li className="row" {...targetProps}>
+          <BusinessSummary business={business} onNavigate={onNavigate} />
+          {canManage && (
+            <div className="rowActions businessRowActions">
+              <Button
+                disabled={busy}
+                icon="edit"
+                onClick={() => setEditing(true)}
+                size="sm"
+              >
+                Edit
+              </Button>
+              <Button
+                busy={busy}
+                icon="trash"
+                onClick={() => void remove()}
+                size="sm"
+                variant="danger"
+              >
+                {busy ? "Deleting…" : "Delete"}
+              </Button>
+            </div>
+          )}
+        </li>
       )}
-    </li>
+    </BusinessContextMenu>
+  );
+}
+
+function BusinessContextMenu({
+  business,
+  children,
+  onCopied,
+  onError,
+}: {
+  business: Business;
+  children: ComponentProps<typeof ContextMenu>["children"];
+  onCopied: () => void;
+  onError: (message: string) => void;
+}) {
+  async function copyEin() {
+    if (!business.ein) return;
+    try {
+      await navigator.clipboard.writeText(formatEin(business.ein));
+      onCopied();
+    } catch {
+      onError("Could not copy the EIN. Please try again.");
+    }
+  }
+  return (
+    <ContextMenu
+      items={[
+        {
+          disabled: !business.ein,
+          icon: "copy",
+          id: "copy-ein",
+          label: "Copy EIN",
+          onSelect: () => void copyEin(),
+        },
+      ]}
+      label={`Actions for ${business.name}`}
+    >
+      {children}
+    </ContextMenu>
   );
 }
 
