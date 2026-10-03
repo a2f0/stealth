@@ -573,6 +573,11 @@ bun run deploy    # deploy and verify production
 bun run terraform:plan # preview Cloudflare infrastructure
 ```
 
+Run client browser layout checks with `bun run --cwd packages/client test:browser`.
+This separate command requires Google Chrome or Chromium. Set `CHROME_PATH` to
+the browser executable if it is not on your `PATH`. CI installs Chrome and runs
+these checks in addition to the default test suite.
+
 ## Agent pull request flow
 
 The `.codex/skills` and `.claude/skills` directories contain the shared review,

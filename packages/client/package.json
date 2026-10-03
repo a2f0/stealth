@@ -8,7 +8,8 @@
     "check": "tsc --noEmit",
     "deploy": "bun run build && wrangler deploy",
     "dev": "vite",
-    "test": "bun test"
+    "test": "bun test src",
+    "test:browser": "bun test browser"
   },
   "dependencies": {
     "@tearleads/ui": "workspace:*",
