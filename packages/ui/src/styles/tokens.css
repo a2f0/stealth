@@ -2,8 +2,15 @@
  * Tearleads design tokens. Every color, size, and radius used by the website
  * and the client comes from here; component and page styles should not
  * introduce raw values that a token already describes.
+ *
+ * Colors and shadows are themed. Light is the default; the client sets
+ * `data-theme` on <html>, and any element can set `data-theme="light"` to keep
+ * a region light (for example, a PDF page with signatures drawn in dark ink).
  */
-:root {
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
   /* Neutrals: warm paper and ink. */
   --color-paper: #f5f4ef;
   --color-paper-muted: #eeede6;
@@ -25,6 +32,11 @@
   --color-border: #e1e0d8;
   --color-border-subtle: #ebeae3;
   --color-border-strong: #c9c8bf;
+
+  /* Emphasis: primary buttons and selected states; inverts in dark regions. */
+  --color-emphasis: #181916;
+  --color-emphasis-hover: #2c2d28;
+  --color-on-emphasis: #f4f4ec;
 
   /* Brand. */
   --color-lime: #b7ff5b;
@@ -58,6 +70,17 @@
   --focus-color: #3a6519;
   --focus-ring: 0 0 0 3px rgb(183 255 91 / 55%);
 
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235a5b53' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  --shadow-xs: 0 1px 2px rgb(24 25 22 / 5%);
+  --shadow-sm: 0 1px 2px rgb(24 25 22 / 6%), 0 2px 6px rgb(24 25 22 / 4%);
+  --shadow-md:
+    0 4px 12px -2px rgb(24 25 22 / 10%), 0 2px 4px rgb(24 25 22 / 4%);
+  --shadow-lg:
+    0 18px 40px -12px rgb(24 25 22 / 24%), 0 4px 10px rgb(24 25 22 / 6%);
+}
+
+:root {
   /* Typography. */
   --font-sans:
     "Manrope Variable", "Manrope", ui-sans-serif, system-ui, -apple-system,
@@ -119,13 +142,6 @@
   --control-height-md: 2.5rem;
   --control-height-lg: 3rem;
 
-  --shadow-xs: 0 1px 2px rgb(24 25 22 / 5%);
-  --shadow-sm: 0 1px 2px rgb(24 25 22 / 6%), 0 2px 6px rgb(24 25 22 / 4%);
-  --shadow-md:
-    0 4px 12px -2px rgb(24 25 22 / 10%), 0 2px 4px rgb(24 25 22 / 4%);
-  --shadow-lg:
-    0 18px 40px -12px rgb(24 25 22 / 24%), 0 4px 10px rgb(24 25 22 / 6%);
-
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --duration-fast: 120ms;
   --duration: 180ms;
@@ -138,4 +154,78 @@
   --page-max: 72rem;
   --page-narrow: 46rem;
   --page-gutter: clamp(1.25rem, 3.5vw, 2.5rem);
+}
+
+/*
+ * Dark theme. The website never sets it, so it stays light. Ink stays the
+ * darkest surface so the sidebar still reads as its own column, and the
+ * `--color-text-inverse*` tokens keep their values because they only sit on ink.
+ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-paper: #151613;
+  --color-paper-muted: #111210;
+  --color-surface: #1c1d1a;
+  --color-surface-sunken: #181916;
+  --color-surface-hover: #222320;
+  --color-ink: #0e0f0d;
+  --color-ink-raised: #1a1b18;
+  --color-ink-hover: #24251f;
+  --color-ink-line: #2a2b26;
+  --color-ink-line-strong: #3d3e37;
+
+  --color-text: #ecebe4;
+  --color-text-muted: #b3b4aa;
+  --color-text-subtle: #96978d;
+
+  --color-border: #2e2f2a;
+  --color-border-subtle: #262722;
+  --color-border-strong: #44453e;
+
+  --color-emphasis: #f4f4ec;
+  --color-emphasis-hover: #fdfdfb;
+  --color-on-emphasis: #151613;
+
+  --color-lime-soft: #263619;
+  --color-lime-wash: #1c2614;
+  --color-lime-border: #3f5a26;
+  --color-green: #8fbf6f;
+  --color-green-strong: #a9d98a;
+  --color-green-deep: #c2e8a0;
+
+  --color-success-bg: #1a2614;
+  --color-success-border: #34502a;
+  --color-success-fg: #a9d98a;
+  --color-warning-bg: #2b2411;
+  --color-warning-border: #5c4b1c;
+  --color-warning-fg: #edd08a;
+  --color-danger-bg: #2e1814;
+  --color-danger-border: #64302a;
+  --color-danger-fg: #f4a99a;
+  --color-danger: #e2705a;
+  --color-info-bg: #142427;
+  --color-info-border: #2c4a50;
+  --color-info-fg: #9ccdd5;
+  --color-neutral-bg: #22231f;
+  --color-neutral-border: #363731;
+  --color-neutral-fg: #c2c3b9;
+
+  --focus-color: #b7ff5b;
+  --focus-ring: 0 0 0 3px rgb(183 255 91 / 35%);
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23b3b4aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%), 0 2px 6px rgb(0 0 0 / 20%);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 40%), 0 2px 4px rgb(0 0 0 / 24%);
+  --shadow-lg: 0 18px 40px -12px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 30%);
+}
+
+/* Dark regions invert emphasis and controls in either theme. */
+.onDark {
+  --color-emphasis: #f4f4ec;
+  --color-emphasis-hover: #fdfdfb;
+  --color-on-emphasis: #181916;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a6a79d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }

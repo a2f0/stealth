@@ -365,7 +365,7 @@ function AuthenticatorSetupCard({
       title="Connect your authenticator"
     >
       <div className="totpSetup">
-        <div className="totpQrTile">
+        <div className="totpQrTile" data-theme="light">
           <QRCodeSVG
             aria-label="Authenticator setup QR code"
             level="M"

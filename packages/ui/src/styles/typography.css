@@ -60,13 +60,13 @@
   flex: none;
   border-radius: 50%;
   background: var(--color-green);
-  box-shadow: 0 0 0 4px rgb(85 123 67 / 14%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-green) 14%, transparent);
   content: "";
 }
 
 .onDark .eyebrowDot::before {
   background: var(--color-lime);
-  box-shadow: 0 0 0 4px rgb(183 255 91 / 14%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-lime) 14%, transparent);
 }
 
 .prose {
@@ -117,7 +117,11 @@
 .prose a {
   color: var(--color-green-strong);
   font-weight: 600;
-  text-decoration-color: rgb(58 101 25 / 40%);
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--color-green-strong) 40%,
+    transparent
+  );
   text-decoration-thickness: 1px;
 }
 

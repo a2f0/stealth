@@ -10,6 +10,22 @@
       content="A focused workspace for the things worth keeping."
     />
     <title>Tearleads — Workspace</title>
+    <script>
+      // Applies the saved theme before first paint; mirrors src/theme.ts.
+      (() => {
+        let preference = null;
+        try {
+          preference = localStorage.getItem("tearleads.theme");
+        } catch {
+          // Storage can be unavailable in privacy-restricted browser contexts.
+        }
+        const dark =
+          preference === "dark" ||
+          (preference !== "light" &&
+            matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

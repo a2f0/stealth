@@ -12,6 +12,7 @@ import { AccountDeletion } from "./AccountDeletion";
 import { AccountSecurity } from "./AccountSecurity";
 import { saveDefaultOrganizationPreference } from "./accountSettingsApi";
 import type { WorkspaceOrganization } from "./organizationState";
+import { ThemeSwitcher } from "./ThemeSwitcher";
 
 export function AccountSettings({
   defaultOrganizationId,
@@ -35,7 +36,7 @@ export function AccountSettings({
         description={
           security
             ? "Protect your account with a second step at sign-in."
-            : "Choose how your account opens."
+            : "Choose how your account opens and looks."
         }
         eyebrow="Account"
         tabs={
@@ -191,6 +192,12 @@ function AccountGeneral({
       </Card>
       {error && <Banner tone="danger">{error}</Banner>}
       {notice && <Banner tone="success">{notice}</Banner>}
+      <Card
+        description="Match your system, or keep Tearleads light or dark on this device."
+        title="Appearance"
+      >
+        <ThemeSwitcher className="appearanceTheme" />
+      </Card>
       <AccountDeletion />
     </>
   );

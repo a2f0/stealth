@@ -1,3 +1,8 @@
+/* Account general: the theme options keep their natural width in the card. */
+.appearanceTheme {
+  justify-self: start;
+}
+
 /* Account security: authenticator enrollment and recovery codes. */
 .totpSetup {
   display: grid;
@@ -6,7 +11,10 @@
   gap: var(--space-6);
 }
 
-/* QR codes need a light, high-contrast quiet zone to scan reliably. */
+/*
+ * QR codes need a light, high-contrast quiet zone to scan reliably, so the tile
+ * is marked data-theme="light" and stays light in the dark theme.
+ */
 .totpQrTile {
   display: grid;
   place-items: center;

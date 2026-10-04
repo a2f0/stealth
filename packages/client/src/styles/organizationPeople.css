@@ -366,7 +366,7 @@
 }
 
 .groupMemberOption:has(input:focus-visible) {
-  border-color: var(--color-ink);
+  border-color: var(--color-emphasis);
   box-shadow: var(--focus-ring);
 }
 

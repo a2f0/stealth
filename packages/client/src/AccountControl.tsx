@@ -1,6 +1,7 @@
 import { Avatar, Icon } from "@tearleads/ui/react";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { AccountSession } from "./accountSessions";
+import { ThemeSwitcher } from "./ThemeSwitcher";
 import { useMenuDismissal } from "./useMenuDismissal";
 
 interface AccountControlProps {
@@ -112,6 +113,7 @@ function AccountMenu({
   onSettings: () => void;
   onSwitchAccount: (token: string) => Promise<void>;
 }) {
+  const themeLabel = useId();
   return (
     <div className="popover accountMenu" role="menu">
       <p className="menuLabel">Accounts</p>
@@ -168,6 +170,11 @@ function AccountMenu({
       >
         <Icon name="userAdd" /> Add another account
       </button>
+      <hr className="menuSeparator" />
+      <p className="menuLabel" id={themeLabel}>
+        Theme
+      </p>
+      <ThemeSwitcher labelledBy={themeLabel} menu />
       <hr className="menuSeparator" />
       <button
         className="menuItem"
