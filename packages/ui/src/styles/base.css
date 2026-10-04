@@ -16,6 +16,11 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* A region with its own theme takes its text color from that theme. */
+[data-theme] {
+  color: var(--color-text);
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;

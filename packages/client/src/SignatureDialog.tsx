@@ -187,6 +187,7 @@ function SignaturePad({
       <canvas
         aria-label="Draw your signature"
         className="signaturePadCanvas"
+        data-theme="light"
         height={size.height}
         onPointerCancel={end}
         onPointerDown={start}

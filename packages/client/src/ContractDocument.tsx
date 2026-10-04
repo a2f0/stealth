@@ -46,6 +46,7 @@ export function ContractPages({
         <section
           aria-label={`Page ${page.number} of ${pages.length}`}
           className="contractPage"
+          data-theme="light"
           key={page.number}
           style={{ aspectRatio: `${page.width} / ${page.height}` }}
         >

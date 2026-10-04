@@ -53,11 +53,11 @@
 }
 
 .buttonPrimary {
-  --button-bg: var(--color-ink);
-  --button-bg-hover: var(--color-ink-hover);
-  --button-border: var(--color-ink);
-  --button-border-hover: var(--color-ink-hover);
-  --button-fg: var(--color-text-inverse);
+  --button-bg: var(--color-emphasis);
+  --button-bg-hover: var(--color-emphasis-hover);
+  --button-border: var(--color-emphasis);
+  --button-border-hover: var(--color-emphasis-hover);
+  --button-fg: var(--color-on-emphasis);
 }
 
 .buttonAccent {
@@ -126,14 +126,6 @@
 
 .onDark .buttonGhost:hover:not(:disabled, [aria-disabled="true"]) {
   color: var(--color-text-inverse);
-}
-
-.onDark .buttonPrimary {
-  --button-bg: var(--color-text-inverse);
-  --button-bg-hover: var(--color-surface);
-  --button-border: var(--color-text-inverse);
-  --button-border-hover: var(--color-surface);
-  --button-fg: var(--color-ink);
 }
 
 .onDark .buttonLink {
@@ -242,7 +234,7 @@
 .select {
   padding-right: var(--space-10);
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235a5b53' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: var(--select-chevron);
   background-position: right var(--space-3) center;
   background-repeat: no-repeat;
   background-size: 16px;
@@ -265,7 +257,7 @@
 .input:focus,
 .select:focus,
 .textarea:focus {
-  border-color: var(--color-ink);
+  border-color: var(--color-emphasis);
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -310,10 +302,6 @@
   background-color: var(--color-ink-raised);
 }
 
-.onDark .select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a6a79d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-}
-
 .onDark .input:hover:not(:disabled, :focus),
 .onDark .select:hover:not(:disabled, :focus) {
   border-color: var(--color-ink-line-strong);
@@ -339,7 +327,7 @@
   height: 1rem;
   flex: none;
   margin: 0.125rem 0 0;
-  accent-color: var(--color-ink);
+  accent-color: var(--color-emphasis);
   cursor: pointer;
 }
 

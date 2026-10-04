@@ -46,8 +46,22 @@ rings), `--color-lime-soft`/`--color-lime-wash` (highlight surfaces), and
 surfaces). Status tones each have `-bg`, `-border`, and `-fg` tokens:
 `success`, `warning`, `danger`, `info`, and `neutral`.
 
+`--color-emphasis`, `--color-emphasis-hover`, and `--color-on-emphasis`
+fill primary buttons and mark selected states; use them rather than
+`--color-ink` for anything that should invert in dark regions or the dark
+theme.
+
 Wrap dark regions in `.onDark` so buttons, inputs, eyebrows, and focus
 rings switch to their inverse treatment.
+
+## Themes
+
+Colors and shadows have a light and a dark theme. Light is the default; the
+client sets `data-theme="light"` or `"dark"` on `<html>` from the viewer's
+choice (System, Light, or Dark), and the website never sets it. Any element
+can set `data-theme="light"` to stay light inside the dark theme, as PDF
+pages, the signature pad, and QR codes do. Ink stays the darkest surface in
+both themes, so `.onDark` regions need no theme-specific styles.
 
 ## CSS vocabulary
 
@@ -68,9 +82,10 @@ rings switch to their inverse treatment.
   `bannerWarning`, `bannerDanger`, `bannerNeutral`
 - **States:** `emptyState`, `emptyStateCompact`, `emptyStatePlain`, `spinner`
 - **Navigation:** `tabs` + `tab` (`aria-current="page"`), `segmented`
-  (children use `aria-pressed`/`aria-current`; `data-tone="success"` or
-  `"danger"` tints a pressed answer; `segmentedFill` makes equal-width
-  options), `popover`, `menuItem`, `menuLabel`, `menuSeparator`
+  (children use `aria-pressed`/`aria-checked`/`aria-current`;
+  `data-tone="success"` or `"danger"` tints a pressed answer; `segmentedFill`
+  makes equal-width options), `popover`, `menuItem`, `menuLabel`,
+  `menuSeparator`
 - **Page:** `page`, `pageNarrow`, `pageHeader`, `pageBody`, `pageSection`,
   `sectionHeader`, `sectionTitle`, `sectionDescription`, `sectionCount`
 - **Layout:** `stack` (+ `stackXs`…`stackXl`), `cluster` (+ `clusterBetween`),

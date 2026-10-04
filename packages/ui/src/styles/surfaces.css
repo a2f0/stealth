@@ -170,8 +170,8 @@
 }
 
 .cardSelected {
-  border-color: var(--color-ink);
-  box-shadow: 0 0 0 1px var(--color-ink);
+  border-color: var(--color-emphasis);
+  box-shadow: 0 0 0 1px var(--color-emphasis);
 }
 
 .cardAccent {
@@ -568,7 +568,7 @@ a.row:focus-visible {
 .tab[aria-current="page"],
 .tab[aria-selected="true"] {
   color: var(--color-text);
-  border-bottom-color: var(--color-ink);
+  border-bottom-color: var(--color-emphasis);
 }
 
 /* Tab strips scroll horizontally, which clips rings drawn outside the tab. */
@@ -623,6 +623,7 @@ a.row:focus-visible {
 }
 
 .segmented > [aria-pressed="true"],
+.segmented > [aria-checked="true"],
 .segmented > [aria-current="page"],
 .segmented > [aria-selected="true"] {
   border-color: var(--color-border);
@@ -655,7 +656,7 @@ a.row:focus-visible {
 
 /* Menus. */
 .popover {
-  /* Popovers are light even when opened from a dark region. */
+  /* Popovers use page surfaces even when opened from a dark region. */
   --focus-color: var(--color-green-strong);
 
   min-width: 14rem;

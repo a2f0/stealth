@@ -593,7 +593,7 @@
 
 .inboxItem[aria-pressed="true"] {
   background: var(--color-surface-sunken);
-  box-shadow: inset 3px 0 0 var(--color-ink);
+  box-shadow: inset 3px 0 0 var(--color-emphasis);
 }
 
 .inboxAttachment:hover {
