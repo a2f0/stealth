@@ -16,6 +16,20 @@ export function guardWorkspaceChange<Args extends unknown[]>(
   };
 }
 
+/**
+ * Answers open dialogs with no when `identity` (the signed-in account and its
+ * active organization) changes: a question asked for one workspace must never
+ * be answered for another.
+ */
+export function useDismissDialogsOnChange(identity: string) {
+  const previous = useRef(identity);
+  useEffect(() => {
+    if (previous.current === identity) return;
+    previous.current = identity;
+    dismissDialogs();
+  }, [identity]);
+}
+
 export function useWorkspaceNavigation(
   onNavigated: (pathname: string) => void,
 ) {

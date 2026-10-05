@@ -8,7 +8,10 @@ import {
 import { Window } from "happy-dom";
 import { act, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
-import { useWorkspaceNavigation } from "./navigationGuard";
+import {
+  useDismissDialogsOnChange,
+  useWorkspaceNavigation,
+} from "./navigationGuard";
 
 const dom = new Window({ url: "http://localhost:5173" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -301,6 +304,42 @@ describe("dismissDialogs", () => {
     });
     await act(async () => dom.dispatchEvent(back as never));
     expect(pages).toEqual(["/"]);
+    expect(await answer).toBe(false);
+    expect(openDialog()).toBeNull();
+  });
+});
+
+describe("useDismissDialogsOnChange", () => {
+  function Workspace({ identity }: { identity: string }) {
+    useDismissDialogsOnChange(identity);
+    return null;
+  }
+  const render = (identity: string) =>
+    act(async () =>
+      root?.render(
+        <>
+          <button type="button">Opener</button>
+          <Workspace identity={identity} />
+          <DialogHost />
+        </>,
+      ),
+    );
+
+  it("answers no when the account or organization changes underneath", async () => {
+    await mount(<Workspace identity="user-1:org-1" />);
+    const { answer } = await open(() =>
+      confirmDialog({
+        confirmLabel: "Delete organization",
+        title: "Delete Northwind?",
+        tone: "danger",
+        typeToConfirm: "Northwind",
+      }),
+    );
+    await render("user-1:org-1");
+    expect(openDialog()).toBeTruthy();
+
+    // Another tab switched the active organization.
+    await render("user-1:org-2");
     expect(await answer).toBe(false);
     expect(openDialog()).toBeNull();
   });
