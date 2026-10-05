@@ -2,6 +2,7 @@
   "name": "@tearleads/api",
   "version": "0.1.4",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",

@@ -1,6 +1,7 @@
 {
   "name": "tearleads",
   "private": true,
+  "license": "UNLICENSED",
   "packageManager": "bun@1.3.11",
   "scripts": {
     "auth:set-role": "bash scripts/setUserRole.sh",
