@@ -9,9 +9,11 @@ import { Window } from "happy-dom";
 import { act, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import {
+  addNavigationGuard,
   useDismissDialogsOnChange,
   useWorkspaceNavigation,
 } from "./navigationGuard";
+import { confirmDiscardChanges } from "./unsavedChanges";
 
 const dom = new Window({ url: "http://localhost:5173" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -319,6 +321,29 @@ describe("dismissDialogs", () => {
     expect(pages).toEqual(["/"]);
     expect(await answer).toBe(false);
     expect(openDialog()).toBeNull();
+  });
+});
+
+describe("guarded Back with a question open", () => {
+  it("answers the open question no, then asks about unsaved changes", async () => {
+    function Workspace() {
+      useWorkspaceNavigation(() => {});
+      return null;
+    }
+    await mount(<Workspace />);
+    const removeGuard = addNavigationGuard(confirmDiscardChanges);
+    try {
+      const { answer } = await open(() => confirmDialog(deletion));
+      const back = new dom.PopStateEvent("popstate", {
+        state: { workspacePosition: -1 },
+      });
+      await act(async () => dom.dispatchEvent(back as never));
+      expect(await answer).toBe(false);
+      expect(openDialog()?.textContent).toContain("Discard unsaved changes?");
+      await click(choice("Keep editing"));
+    } finally {
+      removeGuard();
+    }
   });
 });
 

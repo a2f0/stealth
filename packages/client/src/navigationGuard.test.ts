@@ -133,6 +133,56 @@ describe("workspace navigation", () => {
     navigation.dispose();
   });
 
+  /** A guard whose answers the test gives one question at a time. */
+  function askedGuard() {
+    const answers: ((allowed: boolean) => void)[] = [];
+    removals.push(
+      addNavigationGuard(
+        () => new Promise<boolean>((resolve) => answers.push(resolve)),
+      ),
+    );
+    return (allowed: boolean) => answers.shift()?.(allowed);
+  }
+
+  async function onTemplate() {
+    const browser = fakeBrowser();
+    const pages: string[] = [];
+    const navigation = createWorkspaceNavigation(browser, (path) =>
+      pages.push(path),
+    );
+    navigation.navigate("/activity");
+    navigation.navigate("/contracts/templates/t1");
+    const answer = askedGuard();
+    // Back while unsaved work makes the guard ask...
+    browser.history.go(-1);
+    await settle();
+    // ...and a deletion finishing meanwhile redirects to the list.
+    navigation.navigate("/contracts/templates");
+    return { answer, browser, navigation, pages };
+  }
+
+  it("follows a redirect made while the guard asked, once the person stays", async () => {
+    const { answer, browser, navigation, pages } = await onTemplate();
+    answer(false);
+    await settle();
+    // The redirect is a navigation too, so the still-dirty page asks again.
+    answer(true);
+    await settle();
+    expect(browser.location.pathname).toBe("/contracts/templates");
+    expect(pages.at(-1)).toBe("/contracts/templates");
+    navigation.dispose();
+  });
+
+  it("drops that redirect when the person leaves with Back instead", async () => {
+    const { answer, browser, navigation, pages } = await onTemplate();
+    answer(true);
+    await settle();
+    await settle();
+    expect(browser.location.pathname).toBe("/activity");
+    expect(pages.at(-1)).toBe("/activity");
+    navigation.dispose();
+  });
+
   it("stays put when the guard declines a link", async () => {
     const browser = fakeBrowser();
     const pages: string[] = [];

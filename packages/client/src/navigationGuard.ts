@@ -37,11 +37,7 @@ export function useWorkspaceNavigation(
     typeof createWorkspaceNavigation
   > | null>(null);
   useEffect(() => {
-    const navigation = createWorkspaceNavigation(window, (pathname) => {
-      // A question the previous page asked has no page left to act on.
-      dismissDialogs();
-      onNavigated(pathname);
-    });
+    const navigation = createWorkspaceNavigation(window, onNavigated);
     controller.current = navigation;
     return () => {
       controller.current = null;
@@ -59,101 +55,161 @@ export function createWorkspaceNavigation(
   browser: Window,
   onNavigated: (pathname: string) => void,
 ) {
-  const { history, location } = browser;
-  let position = historyPosition(history.state) ?? 0;
-  let restoring = false;
-  let asking = false;
-  // While an allowed move replays: how many entries back it lands.
-  let approved: number | undefined;
-  let afterRestore: (() => void) | undefined;
-  // How far the restore in progress has had to come back so far.
-  let restored = { steps: 0 };
-  history.replaceState({ ...history.state, [positionKey]: position }, "");
-  // Untagged entries precede the first entry owned by the workspace.
-  const step = (next: number | undefined) => {
-    const delta = next === undefined ? 1 : position - next;
-    restored.steps += delta;
-    history.go(delta);
-  };
-  const restore = (next: number | undefined) => {
-    restoring = true;
-    restored = { steps: 0 };
-    step(next);
-    return restored;
-  };
-  const arrive = (next: number | undefined, distance = 1) => {
-    position = next ?? position - distance;
-    if (next === undefined)
-      history.replaceState({ ...history.state, [positionKey]: position }, "");
-    onNavigated(location.pathname);
-  };
-  /** Runs `action` once the guards allow it and any restore has landed. */
-  const askThen = (action: () => void) => {
-    asking = true;
-    void canNavigate().then((allowed) => {
-      asking = false;
-      if (!allowed) return;
-      if (restoring) afterRestore = action;
-      else action();
-    });
-  };
-  const pop = (event: PopStateEvent) => {
-    const next = historyPosition(event.state);
-    if (restoring) {
-      if (next !== position) {
-        step(next);
-        return;
-      }
-      restoring = false;
-      const resume = afterRestore;
-      afterRestore = undefined;
-      resume?.();
-      return;
-    }
-    if (next === position) return;
-    if (approved !== undefined || !navigationGuarded()) {
-      const distance = approved;
-      approved = undefined;
-      arrive(next, distance);
-      return;
-    }
-    const move = restore(next);
-    // A second Back or Forward while the guards ask is simply undone.
-    if (asking) return;
-    // Replay exactly as far as the restore had to come back.
-    askThen(() => {
-      approved = move.steps;
-      history.go(-move.steps);
-    });
-  };
+  const workspace = new WorkspaceHistory(browser, onNavigated);
+  const pop = (event: PopStateEvent) =>
+    workspace.pop(historyPosition(event.state));
   browser.addEventListener("popstate", pop);
   return {
     dispose: () => browser.removeEventListener("popstate", pop),
-    navigate: (pathname: string) => {
-      if (restoring || asking) return;
-      const destination = new URL(pathname, location.origin);
-      const origin = location.href;
-      if (destination.origin !== location.origin || destination.href === origin)
-        return;
-      const go = () => {
-        position += 1;
-        history.pushState(
-          { [positionKey]: position },
-          "",
-          `${destination.pathname}${destination.search}${destination.hash}`,
-        );
-        onNavigated(destination.pathname);
-      };
-      if (!navigationGuarded()) {
-        go();
+    navigate: (pathname: string) => workspace.navigate(pathname),
+  };
+}
+
+class WorkspaceHistory {
+  /** While an allowed move replays: how many entries back it lands. */
+  #approved: number | undefined;
+  #afterRestore: (() => void) | undefined;
+  #asking = false;
+  readonly #browser: Window;
+  /** A navigation the app asked for while the guards were busy. */
+  #deferred: string | undefined;
+  readonly #onNavigated: (pathname: string) => void;
+  #position: number;
+  /** How far the restore in progress has had to come back so far. */
+  #restored = { steps: 0 };
+  #restoring = false;
+
+  constructor(browser: Window, onNavigated: (pathname: string) => void) {
+    this.#browser = browser;
+    this.#onNavigated = onNavigated;
+    const { history } = browser;
+    this.#position = historyPosition(history.state) ?? 0;
+    history.replaceState(
+      { ...history.state, [positionKey]: this.#position },
+      "",
+    );
+  }
+
+  pop(next: number | undefined) {
+    if (this.#restoring) {
+      this.#continueRestore(next);
+      return;
+    }
+    if (next === this.#position) return;
+    if (this.#approved !== undefined || !navigationGuarded()) {
+      const distance = this.#approved;
+      this.#approved = undefined;
+      this.#arrive(next, distance);
+      return;
+    }
+    const move = this.#restore(next);
+    // A second Back or Forward while the guards ask is simply undone.
+    if (this.#asking) return;
+    // Leaving answers whatever the page was asking with no.
+    dismissDialogs();
+    // Replay exactly as far as the restore had to come back.
+    this.#askThen(() => {
+      this.#approved = move.steps;
+      this.#browser.history.go(-move.steps);
+    });
+  }
+
+  navigate(pathname: string) {
+    // The app moved on while the guards were busy; follow once they finish.
+    if (this.#restoring || this.#asking) {
+      this.#deferred = pathname;
+      return;
+    }
+    const { location } = this.#browser;
+    const destination = new URL(pathname, location.origin);
+    const origin = location.href;
+    if (destination.origin !== location.origin || destination.href === origin)
+      return;
+    if (!navigationGuarded()) {
+      this.#push(destination);
+      return;
+    }
+    // Never push over a location that changed while the guards asked.
+    this.#askThen(() => {
+      if (location.href === origin) this.#push(destination);
+    });
+  }
+
+  /** Runs `action` once the guards allow it and any restore has landed. */
+  #askThen(action: () => void) {
+    this.#asking = true;
+    void canNavigate().then((allowed) => {
+      this.#asking = false;
+      if (!allowed) {
+        this.#followDeferred();
         return;
       }
-      // Never push over a location that changed while the guards asked.
-      askThen(() => {
-        if (location.href === origin) go();
-      });
-    },
-  };
+      // The person chose to leave, so what the app queued meanwhile is moot.
+      this.#deferred = undefined;
+      if (this.#restoring) this.#afterRestore = action;
+      else action();
+    });
+  }
+
+  #followDeferred() {
+    const pathname = this.#deferred;
+    if (pathname === undefined || this.#restoring || this.#asking) return;
+    this.#deferred = undefined;
+    this.navigate(pathname);
+  }
+
+  // Untagged entries precede the first entry owned by the workspace.
+  #step(next: number | undefined) {
+    const delta = next === undefined ? 1 : this.#position - next;
+    this.#restored.steps += delta;
+    this.#browser.history.go(delta);
+  }
+
+  #restore(next: number | undefined) {
+    this.#restoring = true;
+    this.#restored = { steps: 0 };
+    this.#step(next);
+    return this.#restored;
+  }
+
+  #continueRestore(next: number | undefined) {
+    if (next !== this.#position) {
+      this.#step(next);
+      return;
+    }
+    this.#restoring = false;
+    const resume = this.#afterRestore;
+    this.#afterRestore = undefined;
+    if (resume) resume();
+    else this.#followDeferred();
+  }
+
+  #arrive(next: number | undefined, distance = 1) {
+    const { history, location } = this.#browser;
+    this.#position = next ?? this.#position - distance;
+    if (next === undefined)
+      history.replaceState(
+        { ...history.state, [positionKey]: this.#position },
+        "",
+      );
+    this.#show(location.pathname);
+  }
+
+  #push(destination: URL) {
+    this.#position += 1;
+    this.#browser.history.pushState(
+      { [positionKey]: this.#position },
+      "",
+      `${destination.pathname}${destination.search}${destination.hash}`,
+    );
+    this.#show(destination.pathname);
+  }
+
+  #show(pathname: string) {
+    // A question the previous page asked has no page left to act on.
+    dismissDialogs();
+    this.#onNavigated(pathname);
+  }
 }
 
 function historyPosition(state: unknown) {
