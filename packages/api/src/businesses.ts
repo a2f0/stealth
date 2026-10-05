@@ -6,6 +6,7 @@ import type { Bindings } from "./types";
 interface BusinessRow {
   city: string | null;
   created_at: string;
+  duns: string | null;
   ein: string | null;
   id: string;
   incorporation_date: string | null;
@@ -23,14 +24,14 @@ type BusinessEnv = {
 type BusinessContext = Context<BusinessEnv>;
 
 const invalidBusinessMessage =
-  "Business details are invalid. Use a valid name, EIN, incorporation date, street address, city, two-letter state, and ZIP code.";
+  "Business details are invalid. Use a valid name, EIN, DUNS number, incorporation date, street address, city, two-letter state, and ZIP code.";
 
 export const businesses = new Hono<BusinessEnv>();
 
 businesses.get("/", async (context) => {
   const result = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address, city, state,
-            zip, created_at, updated_at
+    `SELECT id, name, ein, duns, incorporation_date, street_address, city,
+            state, zip, created_at, updated_at
      FROM businesses
      WHERE organization_id = ?
      ORDER BY created_at DESC, id DESC`,
@@ -45,8 +46,8 @@ businesses.get("/", async (context) => {
 
 businesses.get("/:id", async (context) => {
   const business = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address, city, state,
-            zip, created_at, updated_at
+    `SELECT id, name, ein, duns, incorporation_date, street_address, city,
+            state, zip, created_at, updated_at
      FROM businesses
      WHERE id = ? AND organization_id = ?`,
   )
@@ -68,15 +69,16 @@ businesses.post("/", async (context) => {
   const timestamp = new Date().toISOString();
   const result = await context.env.DB.prepare(
     `INSERT OR IGNORE INTO businesses
-       (id, organization_id, name, ein, incorporation_date, street_address,
-        city, state, zip, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, organization_id, name, ein, duns, incorporation_date,
+        street_address, city, state, zip, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       context.get("organizationId"),
       input.name,
       input.ein ?? null,
+      input.duns ?? null,
       input.incorporationDate ?? null,
       input.streetAddress ?? null,
       input.city ?? null,
@@ -88,16 +90,17 @@ businesses.post("/", async (context) => {
     )
     .run();
   if (result.meta.changes !== 1) {
-    return context.json(
-      { error: "A business with that EIN already exists." },
-      409,
-    );
+    return duplicateIdentifier(context, id, {
+      duns: input.duns ?? null,
+      ein: input.ein ?? null,
+    });
   }
   return context.json(
     {
       business: businessResponse({
         city: input.city ?? null,
         created_at: timestamp,
+        duns: input.duns ?? null,
         ein: input.ein ?? null,
         id,
         incorporation_date: input.incorporationDate ?? null,
@@ -122,8 +125,8 @@ businesses.patch("/:id", async (context) => {
 
   const id = context.req.param("id");
   const existing = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address, city, state,
-            zip, created_at, updated_at
+    `SELECT id, name, ein, duns, incorporation_date, street_address, city,
+            state, zip, created_at, updated_at
      FROM businesses
      WHERE id = ? AND organization_id = ?`,
   )
@@ -133,6 +136,7 @@ businesses.patch("/:id", async (context) => {
 
   const timestamp = new Date().toISOString();
   const city = input.city === undefined ? existing.city : input.city;
+  const duns = input.duns === undefined ? existing.duns : input.duns;
   const ein = input.ein === undefined ? existing.ein : input.ein;
   const incorporationDate =
     input.incorporationDate === undefined
@@ -146,13 +150,14 @@ businesses.patch("/:id", async (context) => {
   const zip = input.zip === undefined ? existing.zip : input.zip;
   const result = await context.env.DB.prepare(
     `UPDATE OR IGNORE businesses
-     SET name = ?, ein = ?, incorporation_date = ?, street_address = ?,
-         city = ?, state = ?, zip = ?, updated_at = ?
+     SET name = ?, ein = ?, duns = ?, incorporation_date = ?,
+         street_address = ?, city = ?, state = ?, zip = ?, updated_at = ?
      WHERE id = ? AND organization_id = ?`,
   )
     .bind(
       input.name,
       ein,
+      duns,
       incorporationDate,
       streetAddress,
       city,
@@ -164,14 +169,11 @@ businesses.patch("/:id", async (context) => {
     )
     .run();
   if (result.meta.changes !== 1) {
-    return context.json(
-      { error: "A business with that EIN already exists." },
-      409,
-    );
+    return duplicateIdentifier(context, id, { duns, ein });
   }
   const updated = await context.env.DB.prepare(
-    `SELECT id, name, ein, incorporation_date, street_address, city, state,
-            zip, created_at, updated_at
+    `SELECT id, name, ein, duns, incorporation_date, street_address, city,
+            state, zip, created_at, updated_at
      FROM businesses
      WHERE id = ? AND organization_id = ?`,
   )
@@ -201,6 +203,7 @@ function businessInput(body: unknown) {
   if (!body || typeof body !== "object") return null;
   const {
     city: cityValue,
+    duns,
     ein,
     incorporationDate: incorporationDateValue,
     name,
@@ -209,6 +212,7 @@ function businessInput(body: unknown) {
     zip: zipValue,
   } = body as {
     city?: unknown;
+    duns?: unknown;
     ein?: unknown;
     incorporationDate?: unknown;
     name?: unknown;
@@ -222,6 +226,7 @@ function businessInput(body: unknown) {
     return null;
   }
   const normalizedEin = optionalString(ein, normalizeEin);
+  const normalizedDuns = optionalString(duns, normalizeDuns);
   const city = optionalString(cityValue, (value) =>
     value.length <= 100 ? value : null,
   );
@@ -237,6 +242,7 @@ function businessInput(body: unknown) {
   if (
     !city.valid ||
     !normalizedEin.valid ||
+    !normalizedDuns.valid ||
     !incorporationDate.valid ||
     !streetAddress.valid ||
     !state.valid ||
@@ -246,6 +252,7 @@ function businessInput(body: unknown) {
   }
   return {
     city: city.value,
+    duns: normalizedDuns.value,
     ein: normalizedEin.value,
     incorporationDate: incorporationDate.value,
     name: normalizedName,
@@ -274,6 +281,13 @@ export function normalizeEin(value: string) {
   return trimmed.replace("-", "");
 }
 
+/** A D-U-N-S number: nine digits, bare or grouped as 12-345-6789. */
+export function normalizeDuns(value: string) {
+  const trimmed = value.trim();
+  if (!/^(?:\d{9}|\d{2}-\d{3}-\d{4})$/.test(trimmed)) return null;
+  return trimmed.replaceAll("-", "");
+}
+
 export function normalizeBusinessDate(value: string) {
   const trimmed = value.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return null;
@@ -298,6 +312,7 @@ function businessResponse(row: BusinessRow) {
   return {
     city: row.city,
     createdAt: row.created_at,
+    duns: row.duns,
     ein: row.ein,
     id: row.id,
     incorporationDate: row.incorporation_date,
@@ -307,6 +322,33 @@ function businessResponse(row: BusinessRow) {
     updatedAt: row.updated_at,
     zip: row.zip,
   };
+}
+
+/**
+ * A write was ignored because another business in the organization already
+ * holds one of its identifiers; name the DUNS number only when it alone
+ * collides.
+ */
+async function duplicateIdentifier(
+  context: BusinessContext,
+  id: string,
+  { duns, ein }: { duns: string | null; ein: string | null },
+) {
+  const holders = await context.env.DB.prepare(
+    `SELECT ein, duns
+     FROM businesses
+     WHERE organization_id = ? AND id <> ? AND (ein = ? OR duns = ?)`,
+  )
+    .bind(context.get("organizationId"), id, ein, duns)
+    .all<Pick<BusinessRow, "duns" | "ein">>();
+  const held = (field: "duns" | "ein", value: string | null) =>
+    value !== null && holders.results.some((holder) => holder[field] === value);
+  const identifier =
+    held("duns", duns) && !held("ein", ein) ? "DUNS number" : "EIN";
+  return context.json(
+    { error: `A business with that ${identifier} already exists.` },
+    409,
+  );
 }
 
 function canManage(context: BusinessContext) {

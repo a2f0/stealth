@@ -12,6 +12,7 @@ import {
 const acme: Business = {
   city: null,
   createdAt: "2026-09-01T00:00:00.000Z",
+  duns: null,
   ein: null,
   id: "business-1",
   incorporationDate: null,
@@ -28,9 +29,9 @@ function renderState(state: BusinessListState) {
     <BusinessListView
       {...state}
       onAddingChange={noop}
+      onCopied={noop}
       onCreated={noop}
       onDeleted={noop}
-      onEinCopied={noop}
       onError={noop}
       onNavigate={noop}
       onUpdated={noop}

@@ -40,6 +40,7 @@ describe("businesses API", () => {
     try {
       const business = {
         city: "New York",
+        duns: "12-345-6789",
         ein: null,
         incorporationDate: "2026-08-22",
         name: "Acme",

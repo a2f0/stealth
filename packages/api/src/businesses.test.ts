@@ -6,6 +6,7 @@ import type { AuthVariables } from "./authMiddleware";
 import {
   businesses,
   normalizeBusinessDate,
+  normalizeDuns,
   normalizeEin,
   normalizeState,
   normalizeZip,
@@ -14,6 +15,7 @@ import type { Bindings } from "./types";
 
 interface BusinessMutationBody {
   city?: string | null;
+  duns?: string | null;
   ein?: string | null;
   incorporationDate?: string | null;
   name: string;
@@ -25,6 +27,7 @@ interface BusinessMutationBody {
 interface BusinessListResponse {
   businesses: Array<{
     city: string | null;
+    duns: string | null;
     ein: string | null;
     id: string;
     incorporationDate: string | null;
@@ -40,6 +43,7 @@ interface BusinessResponse {
   business: {
     city: string | null;
     createdAt: string;
+    duns: string | null;
     ein: string | null;
     id: string;
     incorporationDate: string | null;
@@ -58,6 +62,17 @@ describe("business EINs", () => {
     expect(normalizeEin("12 3456789")).toBeNull();
     expect(normalizeEin("12345678")).toBeNull();
     expect(normalizeEin("12-345678a")).toBeNull();
+  });
+});
+
+describe("business DUNS numbers", () => {
+  it("normalizes only nine-digit DUNS numbers, bare or fully grouped", () => {
+    expect(normalizeDuns("12-345-6789")).toBe("123456789");
+    expect(normalizeDuns(" 123456789 ")).toBe("123456789");
+    expect(normalizeDuns("12-3456789")).toBeNull();
+    expect(normalizeDuns("12 345 6789")).toBeNull();
+    expect(normalizeDuns("12345678")).toBeNull();
+    expect(normalizeDuns("12-345-678a")).toBeNull();
   });
 });
 
@@ -97,6 +112,7 @@ describe("organization businesses", () => {
     expect(second.status).toBe(201);
     expect(((await first.json()) as BusinessResponse).business).toMatchObject({
       city: null,
+      duns: null,
       ein: null,
       incorporationDate: null,
       state: null,
@@ -180,10 +196,82 @@ describe("organization businesses", () => {
     });
   });
 
+  it("stores DUNS numbers and prevents duplicates within an organization", async () => {
+    const fixture = await createFixture();
+    const created = await create(fixture.ownerApp, fixture.bindings, {
+      duns: " 12-345-6789 ",
+      ein: "12-3456789",
+      name: "Acme",
+    });
+    expect(created.status).toBe(201);
+    const acme = ((await created.json()) as BusinessResponse).business;
+    expect(acme.duns).toBe("123456789");
+
+    const blank = await create(fixture.ownerApp, fixture.bindings, {
+      duns: "",
+      name: "Beta",
+    });
+    expect(blank.status).toBe(201);
+    const beta = ((await blank.json()) as BusinessResponse).business;
+    expect(beta.duns).toBeNull();
+
+    const duplicateDuns = {
+      error: "A business with that DUNS number already exists.",
+    };
+    const duplicateEin = { error: "A business with that EIN already exists." };
+    for (const [body, error] of [
+      [{ duns: "123456789", ein: "98-7654321", name: "Copy" }, duplicateDuns],
+      [{ duns: "123456789", name: "Copy" }, duplicateDuns],
+      [{ duns: "123456789", ein: "123456789", name: "Copy" }, duplicateEin],
+    ] as const) {
+      const duplicate = await create(fixture.ownerApp, fixture.bindings, body);
+      expect(duplicate.status).toBe(409);
+      expect((await duplicate.json()) as unknown).toEqual(error);
+    }
+    const duplicateUpdate = await update(
+      fixture.ownerApp,
+      fixture.bindings,
+      beta.id,
+      { duns: "12-345-6789", name: "Beta" },
+    );
+    expect(duplicateUpdate.status).toBe(409);
+    expect((await duplicateUpdate.json()) as unknown).toEqual(duplicateDuns);
+
+    const otherOrganization = await create(
+      fixture.otherOwnerApp,
+      fixture.bindings,
+      { duns: "123456789", name: "Acme" },
+    );
+    expect(otherOrganization.status).toBe(201);
+
+    const unchanged = await update(
+      fixture.ownerApp,
+      fixture.bindings,
+      acme.id,
+      { name: "Acme Holdings" },
+    );
+    expect(((await unchanged.json()) as BusinessResponse).business.duns).toBe(
+      "123456789",
+    );
+    const cleared = await update(fixture.ownerApp, fixture.bindings, acme.id, {
+      duns: null,
+      name: "Acme Holdings",
+    });
+    expect(
+      ((await cleared.json()) as BusinessResponse).business.duns,
+    ).toBeNull();
+    const reused = await update(fixture.ownerApp, fixture.bindings, beta.id, {
+      duns: "123456789",
+      name: "Beta",
+    });
+    expect(reused.status).toBe(200);
+  });
+
   it("lets managers edit optional business details", async () => {
     const fixture = await createFixture();
     const created = await create(fixture.ownerApp, fixture.bindings, {
       city: "New York",
+      duns: "12-345-6789",
       ein: "12-3456789",
       incorporationDate: "2020-01-15",
       name: "Acme",
@@ -204,6 +292,7 @@ describe("organization businesses", () => {
       {
         city: "New York",
         createdAt: business.createdAt,
+        duns: "123456789",
         ein: "987654321",
         id: business.id,
         incorporationDate: "2020-01-15",
@@ -220,6 +309,7 @@ describe("organization businesses", () => {
       business.id,
       {
         city: null,
+        duns: null,
         ein: null,
         incorporationDate: null,
         name: "Acme Holdings",
@@ -235,13 +325,14 @@ describe("organization businesses", () => {
     expect(
       fixture.database
         .query(
-          `SELECT name, ein, incorporation_date, street_address, city, state,
-                  zip
+          `SELECT name, ein, duns, incorporation_date, street_address, city,
+                  state, zip
            FROM businesses WHERE id = ?`,
         )
         .get(business.id),
     ).toEqual({
       city: null,
+      duns: null,
       ein: null,
       incorporation_date: null,
       name: "Acme Holdings",
@@ -282,6 +373,12 @@ describe("organization businesses", () => {
       name: "Acme",
     });
     expect(invalidEin.status).toBe(400);
+
+    const invalidDuns = await create(fixture.ownerApp, fixture.bindings, {
+      duns: "12-3456789",
+      name: "Acme",
+    });
+    expect(invalidDuns.status).toBe(400);
 
     const longName = await create(fixture.ownerApp, fixture.bindings, {
       ein: "123456789",
@@ -432,17 +529,19 @@ describe("organization businesses", () => {
     await applyMigration(database, "0017_make_business_ein_optional.sql");
     await applyMigration(database, "0018_add_business_details.sql");
     await applyMigration(database, "0019_add_business_city_state_zip.sql");
+    await applyMigration(database, "0051_add_business_duns.sql");
 
     expect(
       database
         .query(
-          `SELECT name, ein, incorporation_date, street_address, city, state,
-                  zip
+          `SELECT name, ein, duns, incorporation_date, street_address, city,
+                  state, zip
            FROM businesses WHERE id = ?`,
         )
         .get("legacy-business"),
     ).toEqual({
       city: null,
+      duns: null,
       ein: "123456789",
       incorporation_date: null,
       name: "Legacy Business",
@@ -471,6 +570,7 @@ async function createFixture() {
   await applyMigration(database, "0017_make_business_ein_optional.sql");
   await applyMigration(database, "0018_add_business_details.sql");
   await applyMigration(database, "0019_add_business_city_state_zip.sql");
+  await applyMigration(database, "0051_add_business_duns.sql");
   const bindings = bindingsFor(database);
   return {
     bindings,

@@ -4,6 +4,15 @@ export function formatEin(ein: string) {
   return /^\d{9}$/.test(ein) ? `${ein.slice(0, 2)}-${ein.slice(2)}` : ein;
 }
 
+export function formatDuns(duns: string) {
+  return /^\d{9}$/.test(duns)
+    ? `${duns.slice(0, 2)}-${duns.slice(2, 5)}-${duns.slice(5)}`
+    : duns;
+}
+
+/** The identifiers a business row offers to copy, as the notice names them. */
+export type BusinessIdentifier = "DUNS number" | "EIN";
+
 export function formatBusinessDate(value: string) {
   const date = new Date(`${value}T00:00:00.000Z`);
   return Number.isNaN(date.valueOf())
@@ -41,7 +50,7 @@ export type BusinessListEvent =
   | { type: "created"; business: Business }
   | { type: "updated"; business: Business }
   | { type: "deleted"; id: string }
-  | { type: "einCopied" }
+  | { type: "copied"; identifier: BusinessIdentifier }
   | { type: "failed"; message: string };
 
 export const initialBusinessListState: BusinessListState = {
@@ -113,7 +122,11 @@ export function businessListReducer(
       );
     case "failed":
       return { ...state, error: event.message, notice: undefined };
-    case "einCopied":
-      return { ...state, error: undefined, notice: "EIN copied." };
+    case "copied":
+      return {
+        ...state,
+        error: undefined,
+        notice: `${event.identifier} copied.`,
+      };
   }
 }
