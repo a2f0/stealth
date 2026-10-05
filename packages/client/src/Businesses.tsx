@@ -34,10 +34,12 @@ import {
   updateBusiness,
 } from "./businessesApi";
 import {
+  type BusinessIdentifier,
   type BusinessListState,
   businessListReducer,
   formatBusinessAddress,
   formatBusinessDate,
+  formatDuns,
   formatEin,
   initialBusinessListState,
 } from "./businessState";
@@ -50,6 +52,7 @@ import {
 
 interface BusinessFormState {
   city: string;
+  duns: string;
   ein: string;
   incorporationDate: string;
   name: string;
@@ -102,9 +105,9 @@ function BusinessListPage({
       onAddingChange={(adding) =>
         dispatch({ type: adding ? "addOpened" : "addCancelled" })
       }
+      onCopied={(identifier) => dispatch({ type: "copied", identifier })}
       onCreated={(business) => dispatch({ type: "created", business })}
       onDeleted={(id) => dispatch({ type: "deleted", id })}
-      onEinCopied={() => dispatch({ type: "einCopied" })}
       onError={(message) => dispatch({ type: "failed", message })}
       onNavigate={onNavigate}
       onUpdated={(business) => dispatch({ type: "updated", business })}
@@ -114,9 +117,9 @@ function BusinessListPage({
 
 interface BusinessListViewProps extends BusinessListState {
   onAddingChange: (adding: boolean) => void;
+  onCopied: (identifier: BusinessIdentifier) => void;
   onCreated: (business: Business) => void;
   onDeleted: (id: string) => void;
-  onEinCopied: () => void;
   onError: (message: string) => void;
   onNavigate: (pathname: string) => void;
   onUpdated: (business: Business) => void;
@@ -181,9 +184,9 @@ function BusinessListBody({
   loading,
   notice,
   onAddingChange,
+  onCopied,
   onCreated,
   onDeleted,
-  onEinCopied,
   onError,
   onNavigate,
   onUpdated,
@@ -208,8 +211,8 @@ function BusinessListBody({
           <BusinessList
             businesses={data.businesses}
             canManage={data.canManage}
+            onCopied={onCopied}
             onDeleted={onDeleted}
-            onEinCopied={onEinCopied}
             onError={onError}
             onNavigate={onNavigate}
             onUpdated={onUpdated}
@@ -306,16 +309,16 @@ function BusinessList({
   businesses,
   canManage,
   onNavigate,
+  onCopied,
   onDeleted,
-  onEinCopied,
   onError,
   onUpdated,
 }: {
   businesses: Business[];
   canManage: boolean;
   onNavigate: (pathname: string) => void;
+  onCopied: (identifier: BusinessIdentifier) => void;
   onDeleted: (id: string) => void;
-  onEinCopied: () => void;
   onError: (message: string) => void;
   onUpdated: (business: Business) => void;
 }) {
@@ -340,8 +343,8 @@ function BusinessList({
                 canManage={canManage}
                 key={business.id}
                 onNavigate={onNavigate}
+                onCopied={onCopied}
                 onDeleted={onDeleted}
-                onEinCopied={onEinCopied}
                 onError={onError}
                 onUpdated={onUpdated}
               />
@@ -357,16 +360,16 @@ function BusinessRow({
   business,
   canManage,
   onNavigate,
+  onCopied,
   onDeleted,
-  onEinCopied,
   onError,
   onUpdated,
 }: {
   business: Business;
   canManage: boolean;
   onNavigate: (pathname: string) => void;
+  onCopied: (identifier: BusinessIdentifier) => void;
   onDeleted: (id: string) => void;
-  onEinCopied: () => void;
   onError: (message: string) => void;
   onUpdated: (business: Business) => void;
 }) {
@@ -402,7 +405,7 @@ function BusinessRow({
   return (
     <BusinessContextMenu
       business={business}
-      onCopied={onEinCopied}
+      onCopied={onCopied}
       onError={onError}
     >
       {(targetProps) => (
@@ -443,28 +446,39 @@ function BusinessContextMenu({
 }: {
   business: Business;
   children: ComponentProps<typeof ContextMenu>["children"];
-  onCopied: () => void;
+  onCopied: (identifier: BusinessIdentifier) => void;
   onError: (message: string) => void;
 }) {
-  async function copyEin() {
-    if (!business.ein) return;
+  async function copy(identifier: BusinessIdentifier, value: string) {
     try {
-      await navigator.clipboard.writeText(formatEin(business.ein));
-      onCopied();
+      await navigator.clipboard.writeText(value);
+      onCopied(identifier);
     } catch {
-      onError("Could not copy the EIN. Please try again.");
+      onError(`Could not copy the ${identifier}. Please try again.`);
     }
   }
+  const copyItem = (
+    id: string,
+    identifier: BusinessIdentifier,
+    value: string | null,
+  ) => ({
+    disabled: !value,
+    icon: "copy" as const,
+    id,
+    label: `Copy ${identifier}`,
+    onSelect: () => {
+      if (value) void copy(identifier, value);
+    },
+  });
   return (
     <ContextMenu
       items={[
-        {
-          disabled: !business.ein,
-          icon: "copy",
-          id: "copy-ein",
-          label: "Copy EIN",
-          onSelect: () => void copyEin(),
-        },
+        copyItem("copy-ein", "EIN", business.ein && formatEin(business.ein)),
+        copyItem(
+          "copy-duns",
+          "DUNS number",
+          business.duns && formatDuns(business.duns),
+        ),
       ]}
       label={`Actions for ${business.name}`}
     >
@@ -483,6 +497,7 @@ function BusinessSummary({
   const facts = [
     business.ein ? `EIN ${formatEin(business.ein)}` : "EIN not provided",
   ];
+  if (business.duns) facts.push(`DUNS ${formatDuns(business.duns)}`);
   if (business.incorporationDate) {
     facts.push(
       `Incorporated ${formatBusinessDate(business.incorporationDate)}`,
@@ -558,6 +573,12 @@ function BusinessDetailPage({
                   <dt>EIN</dt>
                   <dd>
                     {business.ein ? formatEin(business.ein) : "Not provided"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>DUNS number</dt>
+                  <dd>
+                    {business.duns ? formatDuns(business.duns) : "Not provided"}
                   </dd>
                 </div>
                 <div>
@@ -690,6 +711,19 @@ function BusinessFields({
             value={form.ein}
           />
         </Field>
+        <Field className="businessFieldHalf" label="DUNS number" optional>
+          <input
+            className={input}
+            disabled={disabled}
+            inputMode="numeric"
+            maxLength={11}
+            onChange={(event) => set("duns", event.target.value)}
+            pattern="[0-9]{9}|[0-9]{2}-[0-9]{3}-[0-9]{4}"
+            placeholder="12-345-6789"
+            type="text"
+            value={form.duns}
+          />
+        </Field>
         <Field
           className="businessFieldHalf"
           label="Incorporation date"
@@ -786,6 +820,7 @@ function BusinessAddressFields({
 function businessForm(business: Business): BusinessFormState {
   return {
     city: business.city ?? "",
+    duns: business.duns ? formatDuns(business.duns) : "",
     ein: business.ein ? formatEin(business.ein) : "",
     incorporationDate: business.incorporationDate ?? "",
     name: business.name,
@@ -798,6 +833,7 @@ function businessForm(business: Business): BusinessFormState {
 function emptyBusinessForm(): BusinessFormState {
   return {
     city: "",
+    duns: "",
     ein: "",
     incorporationDate: "",
     name: "",
@@ -810,6 +846,7 @@ function emptyBusinessForm(): BusinessFormState {
 function businessInput(form: BusinessFormState): BusinessInput {
   return {
     city: form.city.trim() || null,
+    duns: form.duns.trim() || null,
     ein: form.ein.trim() || null,
     incorporationDate: form.incorporationDate || null,
     name: form.name.trim(),

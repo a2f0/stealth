@@ -6,6 +6,7 @@ import {
   businessListReducer,
   formatBusinessAddress,
   formatBusinessDate,
+  formatDuns,
   formatEin,
   initialBusinessListState,
 } from "./businessState";
@@ -14,6 +15,7 @@ function business(id: string, name: string): Business {
   return {
     city: null,
     createdAt: "2026-09-01T00:00:00.000Z",
+    duns: null,
     ein: null,
     id,
     incorporationDate: null,
@@ -42,6 +44,17 @@ describe("formatEin", () => {
 
   it("leaves unexpected values visible", () => {
     expect(formatEin("1234")).toBe("1234");
+  });
+});
+
+describe("formatDuns", () => {
+  it("groups a normalized DUNS number for display", () => {
+    expect(formatDuns("123456789")).toBe("12-345-6789");
+    expect(formatDuns("012345678")).toBe("01-234-5678");
+  });
+
+  it("leaves unexpected values visible", () => {
+    expect(formatDuns("1234")).toBe("1234");
   });
 });
 
@@ -143,5 +156,15 @@ describe("businessListReducer", () => {
     const deleted = run([{ type: "deleted", id: acme.id }], updated);
     expect(deleted.data?.businesses).toEqual([]);
     expect(deleted.notice).toBe("Business deleted.");
+  });
+
+  it("names the copied identifier and clears a stale error", () => {
+    const failed = run([{ type: "failed", message: "Offline." }], loaded);
+    expect(
+      run([{ type: "copied", identifier: "DUNS number" }], failed),
+    ).toMatchObject({ error: undefined, notice: "DUNS number copied." });
+    expect(run([{ type: "copied", identifier: "EIN" }], failed).notice).toBe(
+      "EIN copied.",
+    );
   });
 });

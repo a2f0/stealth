@@ -16,6 +16,7 @@ import {
 const acme: Business = {
   city: null,
   createdAt: "2026-09-01T00:00:00.000Z",
+  duns: null,
   ein: null,
   id: "business-1",
   incorporationDate: null,
@@ -32,9 +33,9 @@ function renderState(state: BusinessListState) {
     <BusinessListView
       {...state}
       onAddingChange={noop}
+      onCopied={noop}
       onCreated={noop}
       onDeleted={noop}
-      onEinCopied={noop}
       onError={noop}
       onNavigate={noop}
       onUpdated={noop}
@@ -59,7 +60,9 @@ it("business notification layout stays at the bottom without moving content", as
     data: { businesses: [{ ...acme, ein: "123456789" }], canManage: true },
   });
   const before = renderState(state);
-  const after = renderState(businessListReducer(state, { type: "einCopied" }));
+  const after = renderState(
+    businessListReducer(state, { type: "copied", identifier: "EIN" }),
+  );
   const styleRoot = fileURLToPath(
     new URL("../../ui/src/styles/", import.meta.url),
   );

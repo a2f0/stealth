@@ -3,6 +3,7 @@ import { apiUrl } from "./config";
 export interface Business {
   city: string | null;
   createdAt: string;
+  duns: string | null;
   ein: string | null;
   id: string;
   incorporationDate: string | null;
@@ -15,6 +16,7 @@ export interface Business {
 
 export interface BusinessInput {
   city?: string | null;
+  duns?: string | null;
   ein?: string | null;
   incorporationDate?: string | null;
   name: string;

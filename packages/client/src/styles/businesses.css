@@ -1,9 +1,7 @@
 /* Businesses: create form, business rows, and inline editing. */
 
-/* One grid for the create form and the inline editor: name, EIN, and
- * incorporation date on the first line; the address on the second. It sizes
- * to its own width, which the sidebar and card padding decide, not the
- * viewport's. */
+/* One grid for the create form and the inline editor. It sizes to its own
+ * width, which the sidebar and card padding decide, not the viewport's. */
 .businessFieldsFrame {
   container-type: inline-size;
 }
@@ -12,12 +10,6 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-4);
-}
-
-@container (min-width: 60rem) {
-  .businessFields {
-    grid-template-columns: repeat(8, minmax(0, 1fr));
-  }
 }
 
 .businessFieldWide {
@@ -30,6 +22,18 @@
 
 .businessFieldQuarter {
   grid-column: span 1;
+}
+
+/* Wide: name, EIN, DUNS number, and incorporation date on the first line; the
+ * address on the second, its fields lined up with the ones above. */
+@container (min-width: 60rem) {
+  .businessFields {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+  }
+
+  .businessFieldQuarter {
+    grid-column: span 2;
+  }
 }
 
 .businessSummary {

@@ -63,6 +63,7 @@ function business(id: string, name: string): Business {
   return {
     city: null,
     createdAt: "2026-09-01T00:00:00.000Z",
+    duns: null,
     ein: null,
     id,
     incorporationDate: null,
@@ -343,5 +344,74 @@ describe("copying a business EIN", () => {
     const view = await mountPage();
     await click(await openContextMenu(view.row()));
     expect(view.text()).toContain("Could not copy the EIN. Please try again.");
+  });
+});
+
+describe("a business DUNS number", () => {
+  it("is sent with a new business and shown on its row", async () => {
+    stubApi([], (name) =>
+      Response.json({
+        business: { ...business("b1", name), duns: "123456789" },
+      }),
+    );
+    const served = globalThis.fetch;
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (input, init) => {
+      if (init?.method === "POST") posted.push(JSON.parse(String(init.body)));
+      return served(input, init);
+    }) as typeof fetch;
+    const view = await mountPage();
+    await typeName(view.nameField(), "Acme, Inc.");
+    await typeName(
+      view
+        .form()
+        ?.querySelector<HTMLInputElement>('input[placeholder="12-345-6789"]'),
+      "12-345-6789",
+    );
+    await click(view.submitButton());
+
+    expect(posted).toEqual([
+      expect.objectContaining({ duns: "12-345-6789", name: "Acme, Inc." }),
+    ]);
+    expect(view.row()?.textContent).toContain(
+      "EIN not provided · DUNS 12-345-6789",
+    );
+  });
+
+  it("is copied grouped from the menu, after a disabled Copy EIN", async () => {
+    const copied: string[] = [];
+    stubClipboard(async (value) => {
+      copied.push(value);
+    });
+    stubApi([{ ...business("b1", "Acme, Inc."), duns: "123456789" }], () =>
+      Response.json({}),
+    );
+    const view = await mountPage();
+    await openContextMenu(view.row());
+    const [copyEin, copyDuns] =
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+    expect(copyEin?.disabled).toBe(true);
+    expect(copyDuns?.textContent).toBe("Copy DUNS number");
+    expect(document.activeElement).toBe(copyDuns ?? null);
+    await click(copyDuns);
+    expect(copied).toEqual(["12-345-6789"]);
+    expect(view.text()).toContain("DUNS number copied.");
+  });
+
+  it("names the DUNS number when copying fails", async () => {
+    stubClipboard(async () => {
+      throw new Error("Permission denied");
+    });
+    stubApi([{ ...business("b1", "Acme, Inc."), duns: "123456789" }], () =>
+      Response.json({}),
+    );
+    const view = await mountPage();
+    await openContextMenu(view.row());
+    await click(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1],
+    );
+    expect(view.text()).toContain(
+      "Could not copy the DUNS number. Please try again.",
+    );
   });
 });
