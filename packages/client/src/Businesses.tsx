@@ -37,6 +37,7 @@ import {
   type BusinessIdentifier,
   type BusinessListState,
   businessListReducer,
+  copiedNotice,
   formatBusinessAddress,
   formatBusinessDate,
   formatDuns,
@@ -449,42 +450,64 @@ function BusinessContextMenu({
   onCopied: (identifier: BusinessIdentifier) => void;
   onError: (message: string) => void;
 }) {
-  async function copy(identifier: BusinessIdentifier, value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      onCopied(identifier);
-    } catch {
-      onError(`Could not copy the ${identifier}. Please try again.`);
-    }
-  }
-  const copyItem = (
-    id: string,
-    identifier: BusinessIdentifier,
-    value: string | null,
-  ) => ({
-    disabled: !value,
-    icon: "copy" as const,
-    id,
-    label: `Copy ${identifier}`,
-    onSelect: () => {
-      if (value) void copy(identifier, value);
-    },
-  });
   return (
     <ContextMenu
-      items={[
-        copyItem("copy-ein", "EIN", business.ein && formatEin(business.ein)),
-        copyItem(
-          "copy-duns",
-          "DUNS number",
-          business.duns && formatDuns(business.duns),
-        ),
-      ]}
+      items={businessIdentifiers(business).map(({ id, identifier, value }) => ({
+        disabled: !value,
+        icon: "copy",
+        id: `copy-${id}`,
+        label: `Copy ${identifier}`,
+        onSelect: () => {
+          if (value) {
+            void copyIdentifier(identifier, value, { onCopied, onError });
+          }
+        },
+      }))}
       label={`Actions for ${business.name}`}
     >
       {children}
     </ContextMenu>
   );
+}
+
+/** A business's copyable identifiers, formatted as they are displayed. */
+function businessIdentifiers(business: Business) {
+  return [
+    {
+      id: "ein",
+      identifier: "EIN",
+      value: business.ein ? formatEin(business.ein) : null,
+    },
+    {
+      id: "duns",
+      identifier: "DUNS number",
+      value: business.duns ? formatDuns(business.duns) : null,
+    },
+  ] satisfies {
+    id: string;
+    identifier: BusinessIdentifier;
+    value: string | null;
+  }[];
+}
+
+/** Copies an identifier from the row menu or the detail page alike. */
+async function copyIdentifier(
+  identifier: BusinessIdentifier,
+  value: string,
+  {
+    onCopied,
+    onError,
+  }: {
+    onCopied: (identifier: BusinessIdentifier) => void;
+    onError: (message: string) => void;
+  },
+) {
+  try {
+    await navigator.clipboard.writeText(value);
+    onCopied(identifier);
+  } catch {
+    onError(`Could not copy the ${identifier}. Please try again.`);
+  }
 }
 
 function BusinessSummary({
@@ -533,6 +556,17 @@ function BusinessDetailPage({
 }) {
   const [business, setBusiness] = useState<Business>();
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+  const copyOutcome = {
+    onCopied: (identifier: BusinessIdentifier) => {
+      setError(undefined);
+      setNotice(copiedNotice(identifier));
+    },
+    onError: (message: string) => {
+      setNotice(undefined);
+      setError(message);
+    },
+  };
   useEffect(() => {
     let active = true;
     getBusiness(id)
@@ -560,6 +594,7 @@ function BusinessDetailPage({
       />
       <PageBody>
         {error && <Banner tone="danger">{error}</Banner>}
+        {notice && <Toast tone="success">{notice}</Toast>}
         {!business && !error && <LoadingState label="Loading business…" />}
         {business && (
           <PageSection title="Details">
@@ -569,18 +604,32 @@ function BusinessDetailPage({
                   <dt>Name</dt>
                   <dd>{business.name}</dd>
                 </div>
-                <div>
-                  <dt>EIN</dt>
-                  <dd>
-                    {business.ein ? formatEin(business.ein) : "Not provided"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>DUNS number</dt>
-                  <dd>
-                    {business.duns ? formatDuns(business.duns) : "Not provided"}
-                  </dd>
-                </div>
+                {businessIdentifiers(business).map(
+                  ({ id, identifier, value }) => (
+                    <div key={id}>
+                      <dt>{identifier}</dt>
+                      <dd className="businessDetailValue">
+                        {value ?? "Not provided"}
+                        {value && (
+                          <Button
+                            aria-label={`Copy ${identifier}`}
+                            icon="copy"
+                            iconOnly
+                            onClick={() =>
+                              void copyIdentifier(
+                                identifier,
+                                value,
+                                copyOutcome,
+                              )
+                            }
+                            size="sm"
+                            variant="ghost"
+                          />
+                        )}
+                      </dd>
+                    </div>
+                  ),
+                )}
                 <div>
                   <dt>Incorporation date</dt>
                   <dd>

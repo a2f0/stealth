@@ -10,8 +10,12 @@ export function formatDuns(duns: string) {
     : duns;
 }
 
-/** The identifiers a business row offers to copy, as the notice names them. */
+/** The identifiers a business offers to copy, as the notice names them. */
 export type BusinessIdentifier = "DUNS number" | "EIN";
+
+export function copiedNotice(identifier: BusinessIdentifier) {
+  return `${identifier} copied.`;
+}
 
 export function formatBusinessDate(value: string) {
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -126,7 +130,7 @@ export function businessListReducer(
       return {
         ...state,
         error: undefined,
-        notice: `${event.identifier} copied.`,
+        notice: copiedNotice(event.identifier),
       };
   }
 }

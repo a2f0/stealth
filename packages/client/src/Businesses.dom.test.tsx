@@ -99,13 +99,16 @@ async function settle() {
   });
 }
 
-async function mountPage(onNavigate: (pathname: string) => void = () => {}) {
+async function mountPage(
+  onNavigate: (pathname: string) => void = () => {},
+  pathname = "/businesses",
+) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   mounted.push({ container, root });
   await act(async () =>
-    root.render(<Businesses onNavigate={onNavigate} pathname="/businesses" />),
+    root.render(<Businesses onNavigate={onNavigate} pathname={pathname} />),
   );
   await settle();
   return page(container);
@@ -126,6 +129,10 @@ function page(container: HTMLElement) {
       button(container.querySelector(".pageActions"), "Add business"),
     cancelButton: () => button(form(), "Cancel"),
     form,
+    labelled: (label: string) =>
+      container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${label}"]`,
+      ),
     nameField: () =>
       form()?.querySelector<HTMLInputElement>(
         'input[placeholder="Acme, Inc."]',
@@ -413,5 +420,61 @@ describe("a business DUNS number", () => {
     expect(view.text()).toContain(
       "Could not copy the DUNS number. Please try again.",
     );
+  });
+});
+
+describe("copying identifiers on the business detail page", () => {
+  async function mountDetail(detail: Business) {
+    globalThis.fetch = (async (_input) =>
+      Response.json({ business: detail })) as typeof fetch;
+    return mountPage(undefined, `/businesses/${detail.id}`);
+  }
+
+  it("copies the displayed EIN and DUNS number and announces each", async () => {
+    const copied: string[] = [];
+    stubClipboard(async (value) => {
+      copied.push(value);
+    });
+    const view = await mountDetail({
+      ...business("b1", "Acme, Inc."),
+      duns: "123456789",
+      ein: "123456789",
+    });
+    await click(view.labelled("Copy EIN"));
+    expect(copied).toEqual(["12-3456789"]);
+    expect(view.text()).toContain("EIN copied.");
+
+    await click(view.labelled("Copy DUNS number"));
+    expect(copied).toEqual(["12-3456789", "12-345-6789"]);
+    expect(view.text()).toContain("DUNS number copied.");
+    expect(view.text()).not.toContain("EIN copied.");
+  });
+
+  it("offers no copy button for an identifier that is not provided", async () => {
+    const view = await mountDetail({
+      ...business("b1", "Acme, Inc."),
+      duns: "123456789",
+    });
+    expect(view.text()).toContain("EINNot provided");
+    expect(view.labelled("Copy EIN")).toBeNull();
+    expect(view.labelled("Copy DUNS number")).toBeTruthy();
+  });
+
+  it("reports a clipboard failure and clears it on a successful retry", async () => {
+    stubClipboard(async () => {
+      throw new Error("Permission denied");
+    });
+    const view = await mountDetail({
+      ...business("b1", "Acme, Inc."),
+      ein: "123456789",
+    });
+    await click(view.labelled("Copy EIN"));
+    expect(view.text()).toContain("Could not copy the EIN. Please try again.");
+    expect(view.text()).toContain("12-3456789");
+
+    stubClipboard(async () => {});
+    await click(view.labelled("Copy EIN"));
+    expect(view.text()).not.toContain("Could not copy the EIN");
+    expect(view.text()).toContain("EIN copied.");
   });
 });
