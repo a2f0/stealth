@@ -8,12 +8,14 @@ import {
  * Just enough of a browser for the workspace's history handling. Like a real
  * one, `history.go` moves later and then fires popstate.
  */
-function fakeBrowser() {
+function fakeBrowser(earlier: string[] = []) {
   const origin = "https://app.test";
+  // Earlier entries were not created by the workspace, so they carry no state.
   const entries: { path: string; state: unknown }[] = [
+    ...earlier.map((path) => ({ path, state: null })),
     { path: "/", state: null },
   ];
-  let index = 0;
+  let index = entries.length - 1;
   const listeners = new Set<(event: PopStateEvent) => void>();
   const current = () => entries[index] as { path: string; state: unknown };
   const browser = {
@@ -102,6 +104,32 @@ describe("workspace navigation", () => {
     expect(browser.location.pathname).toBe("/library");
     expect(pages).toEqual(["/activity", "/contracts/templates/t1", "/library"]);
     expect(browser.history.length).toBe(4);
+    navigation.dispose();
+  });
+
+  it("replays a guarded multi-entry Back onto the entry chosen", async () => {
+    const browser = fakeBrowser(["/welcome"]);
+    const pages: string[] = [];
+    const navigation = createWorkspaceNavigation(browser, (path) =>
+      pages.push(path),
+    );
+    navigation.navigate("/activity");
+    navigation.navigate("/contracts/templates/t1");
+    removals.push(addNavigationGuard(async () => true));
+
+    // Back three entries at once, past the workspace's first entry.
+    browser.history.go(-3);
+    await settle();
+    await settle();
+    expect(browser.location.pathname).toBe("/welcome");
+    expect(pages.at(-1)).toBe("/welcome");
+
+    // The workspace knows where it is: Forward lands on its first entry.
+    browser.history.go(1);
+    await settle();
+    await settle();
+    expect(browser.location.pathname).toBe("/");
+    expect(pages.at(-1)).toBe("/");
     navigation.dispose();
   });
 

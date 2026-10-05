@@ -63,25 +63,45 @@ export function createWorkspaceNavigation(
   let position = historyPosition(history.state) ?? 0;
   let restoring = false;
   let asking = false;
-  let approved = false;
+  // While an allowed move replays: how many entries back it lands.
+  let approved: number | undefined;
   let afterRestore: (() => void) | undefined;
+  // How far the restore in progress has had to come back so far.
+  let restored = { steps: 0 };
   history.replaceState({ ...history.state, [positionKey]: position }, "");
   // Untagged entries precede the first entry owned by the workspace.
+  const step = (next: number | undefined) => {
+    const delta = next === undefined ? 1 : position - next;
+    restored.steps += delta;
+    history.go(delta);
+  };
   const restore = (next: number | undefined) => {
     restoring = true;
-    history.go(next === undefined ? 1 : position - next);
+    restored = { steps: 0 };
+    step(next);
+    return restored;
   };
-  const arrive = (next: number | undefined) => {
-    position = next ?? position - 1;
+  const arrive = (next: number | undefined, distance = 1) => {
+    position = next ?? position - distance;
     if (next === undefined)
       history.replaceState({ ...history.state, [positionKey]: position }, "");
     onNavigated(location.pathname);
+  };
+  /** Runs `action` once the guards allow it and any restore has landed. */
+  const askThen = (action: () => void) => {
+    asking = true;
+    void canNavigate().then((allowed) => {
+      asking = false;
+      if (!allowed) return;
+      if (restoring) afterRestore = action;
+      else action();
+    });
   };
   const pop = (event: PopStateEvent) => {
     const next = historyPosition(event.state);
     if (restoring) {
       if (next !== position) {
-        history.go(next === undefined ? 1 : position - next);
+        step(next);
         return;
       }
       restoring = false;
@@ -91,25 +111,19 @@ export function createWorkspaceNavigation(
       return;
     }
     if (next === position) return;
-    if (approved || !navigationGuarded()) {
-      approved = false;
-      arrive(next);
+    if (approved !== undefined || !navigationGuarded()) {
+      const distance = approved;
+      approved = undefined;
+      arrive(next, distance);
       return;
     }
-    restore(next);
+    const move = restore(next);
     // A second Back or Forward while the guards ask is simply undone.
     if (asking) return;
-    asking = true;
-    const replay = next === undefined ? -1 : next - position;
-    void canNavigate().then((allowed) => {
-      asking = false;
-      if (!allowed) return;
-      const go = () => {
-        approved = true;
-        history.go(replay);
-      };
-      if (restoring) afterRestore = go;
-      else go();
+    // Replay exactly as far as the restore had to come back.
+    askThen(() => {
+      approved = move.steps;
+      history.go(-move.steps);
     });
   };
   browser.addEventListener("popstate", pop);
@@ -134,16 +148,9 @@ export function createWorkspaceNavigation(
         go();
         return;
       }
-      asking = true;
-      void canNavigate().then((allowed) => {
-        asking = false;
-        if (!allowed) return;
-        // Never push over a location that changed while the guards asked.
-        const proceed = () => {
-          if (location.href === origin) go();
-        };
-        if (restoring) afterRestore = proceed;
-        else proceed();
+      // Never push over a location that changed while the guards asked.
+      askThen(() => {
+        if (location.href === origin) go();
       });
     },
   };

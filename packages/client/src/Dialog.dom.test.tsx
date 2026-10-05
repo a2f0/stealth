@@ -263,6 +263,19 @@ describe("promptDialog", () => {
   });
 });
 
+describe("DialogHost", () => {
+  it("answers no when it unmounts, so a later host shows nothing stale", async () => {
+    await mount();
+    const { answer } = await open(() => confirmDialog(deletion));
+    await act(async () => root?.unmount());
+    root = undefined;
+    expect(await answer).toBe(false);
+
+    await mount();
+    expect(openDialog()).toBeNull();
+  });
+});
+
 describe("dismissDialogs", () => {
   it("answers the open and queued questions with no", async () => {
     await mount();

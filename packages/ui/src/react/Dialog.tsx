@@ -98,6 +98,8 @@ export function dismissDialogs() {
  * time and in order. Mount it once, at the root of the app.
  */
 export function DialogHost() {
+  // Questions leave with their host; a later host must not revive them.
+  useEffect(() => dismissDialogs, []);
   const current = useSyncExternalStore(
     subscribe,
     () => requests[0],
