@@ -2,6 +2,7 @@ import {
   Banner,
   Button,
   Card,
+  confirmDialog,
   EmptyState,
   Field,
   Icon,
@@ -25,6 +26,7 @@ import {
   type TemplateVersion,
   uploadContractTemplate,
 } from "./contractTemplatesApi";
+import { confirmDiscardChanges } from "./unsavedChanges";
 import {
   contractPath,
   contractTemplateIdForPath,
@@ -302,10 +304,9 @@ function useTemplatePage(id: string, onNavigate: (pathname: string) => void) {
       generation.current += 1;
     };
   }, [id]);
-  const discard = () =>
-    !dirty || window.confirm("Discard your unsaved template changes?");
+  const discard = async () => !dirty || (await confirmDiscardChanges());
   async function selectVersion(version: number) {
-    if (!discard()) return;
+    if (!(await discard())) return;
     const request = ++generation.current;
     setLoading(true);
     setError(undefined);
@@ -329,7 +330,7 @@ function useTemplatePage(id: string, onNavigate: (pathname: string) => void) {
     setVersions((current) => [versionSummary(value), ...current]);
   }
   async function remove() {
-    if (!confirmTemplateDeletion()) return;
+    if (!(await confirmTemplateDeletion())) return;
     const request = generation.current;
     setDeleting(true);
     setError(undefined);
@@ -398,8 +399,8 @@ function TemplateActions({ page }: { page: TemplatePageState }) {
       </Field>
       <Button
         disabled={loading || deleting || mapping || working}
-        onClick={() => {
-          if (discard()) {
+        onClick={async () => {
+          if (await discard()) {
             setDirty(false);
             setMapping(true);
           }
@@ -422,9 +423,12 @@ function TemplateActions({ page }: { page: TemplatePageState }) {
 }
 
 function confirmTemplateDeletion() {
-  return window.confirm(
-    "Delete this template and all of its versions? Contracts already created from it will stay available.",
-  );
+  return confirmDialog({
+    confirmLabel: "Delete template",
+    message: "Contracts already created from it will stay available.",
+    title: "Delete this template and all of its versions?",
+    tone: "danger",
+  });
 }
 
 function versionSummary(template: ContractTemplate): TemplateVersion {

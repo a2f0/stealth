@@ -1,4 +1,10 @@
-import { Banner, Button, Card, Field } from "@tearleads/ui/react";
+import {
+  Banner,
+  Button,
+  Card,
+  confirmDialog,
+  Field,
+} from "@tearleads/ui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ContractPages } from "./ContractDocument";
 import {
@@ -16,7 +22,8 @@ import {
   saveTemplateVersion,
   type TemplateDefinition,
 } from "./contractTemplatesApi";
-import { useUnsavedChanges } from "./navigationGuard";
+import { countLabel } from "./labels";
+import { useUnsavedChanges } from "./unsavedChanges";
 
 export function ContractTemplateEditor({
   template,
@@ -135,12 +142,11 @@ function useTemplateEditor(
       setBusy(false);
     }
   }
-  function removeRole(key: string) {
+  async function removeRole(key: string) {
     const count = draft.fields.filter(
       (field) => field.recipientKey === key,
     ).length;
-    if (count && !window.confirm(`Remove this role and its ${count} fields?`))
-      return;
+    if (count && !(await confirmRoleRemoval(count))) return;
     update((current) => ({
       ...current,
       recipients: current.recipients.filter((role) => role.key !== key),
@@ -374,7 +380,11 @@ function TemplateRoleRow({
           />
         </Field>
       )}
-      <Button onClick={() => removeRole(role.key)} size="sm" variant="ghost">
+      <Button
+        onClick={() => void removeRole(role.key)}
+        size="sm"
+        variant="ghost"
+      >
         Remove {role.name || "role"}
       </Button>
     </div>
@@ -402,4 +412,13 @@ function draftFrom(template: ContractTemplate): DraftInput {
     signingOrder: template.definition.signingOrder,
     title: template.name,
   };
+}
+
+function confirmRoleRemoval(fieldCount: number) {
+  return confirmDialog({
+    confirmLabel: "Remove role",
+    message: `Its ${countLabel(fieldCount, "field")} will be removed too.`,
+    title: "Remove this role?",
+    tone: "danger",
+  });
 }

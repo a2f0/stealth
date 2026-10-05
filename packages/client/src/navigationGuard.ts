@@ -1,14 +1,17 @@
 import { useEffect, useRef } from "react";
 
-const navigationEvent = "workspace:navigate";
 const positionKey = "workspacePosition";
+
+type NavigationGuard = () => boolean | Promise<boolean>;
+const guards = new Set<NavigationGuard>();
+let pendingCheck: Promise<boolean> | undefined;
 
 /** Guards session changes before their API calls can replace the workspace. */
 export function guardWorkspaceChange<Args extends unknown[]>(
   action: (...args: Args) => Promise<void>,
 ) {
   return async (...args: Args) => {
-    if (canNavigate()) await action(...args);
+    if (await canNavigate()) await action(...args);
   };
 }
 
@@ -29,7 +32,10 @@ export function useWorkspaceNavigation(
   return (pathname: string) => controller.current?.navigate(pathname);
 }
 
-/** Canceled Back/Forward returns to its history position without adding entries. */
+/**
+ * Guarded Back/Forward first returns to its history position, then replays
+ * the move once the guards allow it, so a canceled move adds no entries.
+ */
 export function createWorkspaceNavigation(
   browser: Window,
   onNavigated: (pathname: string) => void,
@@ -37,45 +43,84 @@ export function createWorkspaceNavigation(
   const { history, location } = browser;
   let position = historyPosition(history.state) ?? 0;
   let restoring = false;
+  let asking = false;
+  let approved = false;
+  let afterRestore: (() => void) | undefined;
   history.replaceState({ ...history.state, [positionKey]: position }, "");
-  const pop = (event: PopStateEvent) => {
-    const next = historyPosition(event.state);
-    if (restoring) {
-      if (next === position) restoring = false;
-      else history.go(next === undefined ? 1 : position - next);
-      return;
-    }
-    if (next === position) return;
-    if (!canNavigate()) {
-      restoring = true;
-      // Untagged entries precede the first entry owned by the workspace.
-      history.go(next === undefined ? 1 : position - next);
-      return;
-    }
+  // Untagged entries precede the first entry owned by the workspace.
+  const restore = (next: number | undefined) => {
+    restoring = true;
+    history.go(next === undefined ? 1 : position - next);
+  };
+  const arrive = (next: number | undefined) => {
     position = next ?? position - 1;
     if (next === undefined)
       history.replaceState({ ...history.state, [positionKey]: position }, "");
     onNavigated(location.pathname);
   };
+  const pop = (event: PopStateEvent) => {
+    const next = historyPosition(event.state);
+    if (restoring) {
+      if (next !== position) {
+        history.go(next === undefined ? 1 : position - next);
+        return;
+      }
+      restoring = false;
+      const resume = afterRestore;
+      afterRestore = undefined;
+      resume?.();
+      return;
+    }
+    if (next === position) return;
+    if (approved || !navigationGuarded()) {
+      approved = false;
+      arrive(next);
+      return;
+    }
+    restore(next);
+    // A second Back or Forward while the guards ask is simply undone.
+    if (asking) return;
+    asking = true;
+    const replay = next === undefined ? -1 : next - position;
+    void canNavigate().then((allowed) => {
+      asking = false;
+      if (!allowed) return;
+      const go = () => {
+        approved = true;
+        history.go(replay);
+      };
+      if (restoring) afterRestore = go;
+      else go();
+    });
+  };
   browser.addEventListener("popstate", pop);
   return {
     dispose: () => browser.removeEventListener("popstate", pop),
     navigate: (pathname: string) => {
-      if (restoring) return;
+      if (restoring || asking) return;
       const destination = new URL(pathname, location.origin);
-      if (
-        destination.origin !== location.origin ||
-        destination.href === location.href ||
-        !canNavigate()
-      )
+      const origin = location.href;
+      if (destination.origin !== location.origin || destination.href === origin)
         return;
-      position += 1;
-      history.pushState(
-        { [positionKey]: position },
-        "",
-        `${destination.pathname}${destination.search}${destination.hash}`,
-      );
-      onNavigated(destination.pathname);
+      const go = () => {
+        position += 1;
+        history.pushState(
+          { [positionKey]: position },
+          "",
+          `${destination.pathname}${destination.search}${destination.hash}`,
+        );
+        onNavigated(destination.pathname);
+      };
+      if (!navigationGuarded()) {
+        go();
+        return;
+      }
+      asking = true;
+      void canNavigate().then((allowed) => {
+        asking = false;
+        // Never push over a location that changed while the guards asked.
+        if (allowed && !restoring && location.href === origin) go();
+      });
     },
   };
 }
@@ -88,29 +133,37 @@ function historyPosition(state: unknown) {
     : undefined;
 }
 
-/** Allows an editor with explicit saves to protect its unsaved work. */
-export function canNavigate() {
-  return window.dispatchEvent(
-    new window.Event(navigationEvent, { cancelable: true }),
-  );
+/** Lets an editor with explicit saves stop navigation away from its work. */
+export function addNavigationGuard(guard: NavigationGuard) {
+  guards.add(guard);
+  return () => {
+    guards.delete(guard);
+  };
 }
 
-export function useUnsavedChanges(dirty: boolean) {
-  useEffect(() => {
-    if (!dirty) return;
-    const leave = (event: Event) => {
-      if (!window.confirm("Discard your unsaved template changes?"))
-        event.preventDefault();
+function navigationGuarded() {
+  return guards.size > 0;
+}
+
+/**
+ * Asks each guard in turn whether the workspace may navigate. Overlapping
+ * requests share one answer, so they never stack a second dialog.
+ */
+export function canNavigate() {
+  if (!pendingCheck) {
+    const check = askGuards();
+    const settle = () => {
+      if (pendingCheck === check) pendingCheck = undefined;
     };
-    const close = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener(navigationEvent, leave);
-    window.addEventListener("beforeunload", close);
-    return () => {
-      window.removeEventListener(navigationEvent, leave);
-      window.removeEventListener("beforeunload", close);
-    };
-  }, [dirty]);
+    pendingCheck = check;
+    check.then(settle, settle);
+  }
+  return pendingCheck;
+}
+
+async function askGuards() {
+  for (const guard of [...guards]) {
+    if (!(await guard())) return false;
+  }
+  return true;
 }

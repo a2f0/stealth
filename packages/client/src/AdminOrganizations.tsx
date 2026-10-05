@@ -2,6 +2,7 @@ import {
   Badge,
   Banner,
   Button,
+  confirmDialog,
   EmptyState,
   LoadingState,
   Page,
@@ -99,10 +100,7 @@ function useAdminOrganizationLifecycle(
   const [notice, setNotice] = useState<string>();
 
   const markForDeletion = async (organization: AdminOrganization) => {
-    const confirmation = window.prompt(
-      `Type ${organization.name} to mark this organization for deletion. It will become unavailable immediately and its data can be permanently purged after 30 days.`,
-    );
-    if (confirmation !== organization.name) return;
+    if (!(await confirmMarkForDeletion(organization))) return;
 
     setAction({ organizationId: organization.id, type: "delete" });
     setError(undefined);
@@ -131,13 +129,7 @@ function useAdminOrganizationLifecycle(
   };
 
   const restore = async (organization: AdminOrganization) => {
-    if (
-      !window.confirm(
-        `Restore ${organization.name}? Existing members who do not have another default organization will regain access.`,
-      )
-    ) {
-      return;
-    }
+    if (!(await confirmRestore(organization))) return;
 
     setAction({ organizationId: organization.id, type: "restore" });
     setError(undefined);
@@ -382,4 +374,24 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error
     ? cause.message
     : "Could not load organizations.";
+}
+
+function confirmMarkForDeletion(organization: AdminOrganization) {
+  return confirmDialog({
+    confirmLabel: "Mark for deletion",
+    message:
+      "It will become unavailable immediately, and its data can be permanently purged after 30 days.",
+    title: `Mark ${organization.name} for deletion?`,
+    tone: "danger",
+    typeToConfirm: organization.name,
+  });
+}
+
+function confirmRestore(organization: AdminOrganization) {
+  return confirmDialog({
+    confirmLabel: "Restore",
+    message:
+      "Existing members who do not have another default organization will regain access.",
+    title: `Restore ${organization.name}?`,
+  });
 }

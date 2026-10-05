@@ -6,6 +6,7 @@ import {
   Button,
   ButtonLink,
   Card,
+  confirmDialog,
   cx,
   EmptyState,
   Field,
@@ -173,12 +174,7 @@ function financeActions(
         return "Transaction annotation saved.";
       }),
     deleteData: async (connection: FinanceConnection) => {
-      const name = connection.institutionName ?? "this institution";
-      if (
-        window.confirm(
-          `Permanently delete all imported data for ${name}? This also deletes its transaction annotations and cannot be undone.`,
-        )
-      ) {
+      if (await confirmDataDeletion(connection)) {
         await run(async () => {
           await deleteFinanceConnectionData(connection.id);
           return "Imported bank data permanently deleted.";
@@ -186,12 +182,7 @@ function financeActions(
       }
     },
     disconnect: async (connection: FinanceConnection) => {
-      const name = connection.institutionName ?? "this institution";
-      if (
-        window.confirm(
-          `Disconnect ${name}? Plaid access will be revoked, but imported transactions and annotations will remain.`,
-        )
-      ) {
+      if (await confirmDisconnect(connection)) {
         await run(async () => {
           await disconnectFinanceConnection(connection.id);
           return "Bank disconnected. Imported history was retained.";
@@ -1138,4 +1129,28 @@ function formatDate(value: string) {
 
 function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "Could not update finances.";
+}
+
+function institutionName(connection: FinanceConnection) {
+  return connection.institutionName ?? "this institution";
+}
+
+function confirmDataDeletion(connection: FinanceConnection) {
+  return confirmDialog({
+    confirmLabel: "Delete data",
+    message:
+      "This also deletes its transaction annotations and cannot be undone.",
+    title: `Permanently delete all imported data for ${institutionName(connection)}?`,
+    tone: "danger",
+  });
+}
+
+function confirmDisconnect(connection: FinanceConnection) {
+  return confirmDialog({
+    confirmLabel: "Disconnect",
+    message:
+      "Plaid access will be revoked, but imported transactions and annotations will remain.",
+    title: `Disconnect ${institutionName(connection)}?`,
+    tone: "danger",
+  });
 }

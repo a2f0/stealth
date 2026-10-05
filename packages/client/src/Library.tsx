@@ -3,6 +3,7 @@ import {
   Button,
   buttonClass,
   Card,
+  confirmDialog,
   EmptyState,
   Field,
   Icon,
@@ -234,19 +235,7 @@ function useLibraryActions(
   return {
     busy,
     deleteFolder: async (detail: FolderDetail) => {
-      const { emailCount, fileCount, name } = detail.folder;
-      const consequences = [
-        fileCount
-          ? `${countLabel(fileCount, "file")} will move back to the library`
-          : "",
-        emailCount
-          ? `${countLabel(emailCount, "linked email")} will be unlinked but stay in the inbox`
-          : "",
-      ].filter(Boolean);
-      const message = consequences.length
-        ? `Delete “${name}”? ${consequences.join(", and ")}.`
-        : `Delete “${name}”?`;
-      if (!window.confirm(message)) return;
+      if (!(await confirmFolderDeletion(detail.folder))) return;
       setBusy(true);
       setError(undefined);
       try {
@@ -776,4 +765,27 @@ function formatDate(value: string) {
 
 function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "Something went wrong.";
+}
+
+function confirmFolderDeletion({
+  emailCount,
+  fileCount,
+  name,
+}: FolderDetail["folder"]) {
+  const consequences = [
+    fileCount
+      ? `${countLabel(fileCount, "file")} will move back to the library`
+      : "",
+    emailCount
+      ? `${countLabel(emailCount, "linked email")} will be unlinked but stay in the inbox`
+      : "",
+  ].filter(Boolean);
+  return confirmDialog({
+    confirmLabel: "Delete folder",
+    message: consequences.length
+      ? `${consequences.join(", and ")}.`
+      : undefined,
+    title: `Delete “${name}”?`,
+    tone: "danger",
+  });
 }

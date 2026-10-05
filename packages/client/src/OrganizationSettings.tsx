@@ -2,6 +2,7 @@ import {
   Banner,
   Button,
   Card,
+  confirmDialog,
   EmptyState,
   Field,
   LoadingState,
@@ -300,13 +301,7 @@ function useOrganizationGeneralActions(
   };
   const leave = async () => {
     if (!canLeave) return;
-    if (
-      !window.confirm(
-        `Leave ${organization.name}? You’ll lose access to its files and workspace data.`,
-      )
-    ) {
-      return;
-    }
+    if (!(await confirmLeave(organization.name))) return;
     start("leave");
     try {
       const result = await authClient.organization.leave({
@@ -325,10 +320,7 @@ function useOrganizationGeneralActions(
     }
   };
   const remove = async () => {
-    const confirmation = window.prompt(
-      `Type ${organization.name} to delete this organization and schedule all of its data for permanent deletion in 30 days.`,
-    );
-    if (confirmation !== organization.name) return;
+    if (!(await confirmOrganizationDeletion(organization.name))) return;
     start("delete");
     try {
       await deleteCurrentOrganization();
@@ -522,4 +514,24 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error
     ? cause.message
     : "Could not update your organization.";
+}
+
+function confirmLeave(name: string) {
+  return confirmDialog({
+    confirmLabel: "Leave organization",
+    message: "You’ll lose access to its files and workspace data.",
+    title: `Leave ${name}?`,
+    tone: "danger",
+  });
+}
+
+function confirmOrganizationDeletion(name: string) {
+  return confirmDialog({
+    confirmLabel: "Delete organization",
+    message:
+      "All of its data will be scheduled for permanent deletion in 30 days.",
+    title: `Delete ${name}?`,
+    tone: "danger",
+    typeToConfirm: name,
+  });
 }

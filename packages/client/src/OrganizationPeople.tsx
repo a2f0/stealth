@@ -4,6 +4,7 @@ import {
   Banner,
   Button,
   Card,
+  confirmDialog,
   cx,
   Field,
   Icon,
@@ -118,11 +119,7 @@ async function removeOrganizationMember(
   state: ReturnType<typeof useOrganizationPeopleData>,
   onAccessChanged: () => Promise<void>,
 ) {
-  if (
-    !window.confirm(`Remove ${member.user.name} from ${organization.name}?`)
-  ) {
-    return;
-  }
+  if (!(await confirmMemberRemoval(member, organization))) return;
   state.startAction();
   try {
     const result = await authClient.organization.removeMember({
@@ -632,4 +629,15 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error
     ? cause.message
     : "Could not update organization people.";
+}
+
+function confirmMemberRemoval(
+  member: OrganizationMember,
+  organization: WorkspaceOrganization,
+) {
+  return confirmDialog({
+    confirmLabel: "Remove member",
+    title: `Remove ${member.user.name} from ${organization.name}?`,
+    tone: "danger",
+  });
 }

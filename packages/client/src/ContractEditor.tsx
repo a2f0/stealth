@@ -8,7 +8,12 @@ import {
   SelectedField,
   useContractFieldEditor,
 } from "./ContractFieldEditor";
-import { localDate, recipientTone, reminderOptions } from "./contractFields";
+import {
+  confirmContractDeletion,
+  localDate,
+  recipientTone,
+  reminderOptions,
+} from "./contractFields";
 import {
   type ContractDetail,
   contractDocumentUrl,
@@ -197,9 +202,8 @@ function useDraftSaving({
     busy,
     error,
     notice,
-    remove: () => {
-      if (!window.confirm(`Delete “${contract.title}”? This can't be undone.`))
-        return;
+    remove: async () => {
+      if (!(await confirmContractDeletion(contract.title))) return;
       void run(async () => {
         await deleteContract(contractId);
         unsaved.current = null;

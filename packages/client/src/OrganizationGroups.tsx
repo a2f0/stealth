@@ -3,6 +3,7 @@ import {
   Banner,
   Button,
   Card,
+  confirmDialog,
   EmptyState,
   Field,
   LoadingState,
@@ -270,7 +271,7 @@ function useGroupEditor(
     }
   };
   const remove = async () => {
-    if (!window.confirm(`Delete the ${group.name} group?`)) return;
+    if (!(await confirmGroupDeletion(group.name))) return;
     start("delete");
     try {
       await deleteOrganizationGroup(group.id);
@@ -351,4 +352,12 @@ function GroupMemberPicker({
 
 function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "Could not update the group.";
+}
+
+function confirmGroupDeletion(name: string) {
+  return confirmDialog({
+    confirmLabel: "Delete group",
+    title: `Delete the ${name} group?`,
+    tone: "danger",
+  });
 }

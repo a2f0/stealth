@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, launch } from "puppeteer-core";
 
-it("canceling Back and Forward preserves the browser's history entries", async () => {
+it("guarded Back, Forward, and links ask first and keep history entries", async () => {
   const { CHROME_PATH } = process.env;
   const chrome =
     CHROME_PATH ||
@@ -54,7 +54,9 @@ it("canceling Back and Forward preserves the browser's history entries", async (
       const url = URL.createObjectURL(
         new Blob([code], { type: "text/javascript" }),
       );
-      const { createWorkspaceNavigation } = await import(url);
+      const { addNavigationGuard, createWorkspaceNavigation } = await import(
+        url
+      );
       URL.revokeObjectURL(url);
       const controller = createWorkspaceNavigation(
         window,
@@ -62,8 +64,16 @@ it("canceling Back and Forward preserves the browser's history entries", async (
           document.body.textContent = pathname;
         },
       );
+      let removeGuard: (() => void) | undefined;
+      // A guard stands in for unsaved work; undefined means nothing unsaved.
+      Reflect.set(window, "guard", (answer: boolean | undefined) => {
+        removeGuard?.();
+        removeGuard =
+          answer === undefined
+            ? undefined
+            : addNavigationGuard(async () => answer);
+      });
       Reflect.set(window, "navigation", controller);
-      Reflect.set(window, "allowNavigation", true);
       Reflect.set(window, "navigationPops", 0);
       window.addEventListener("popstate", () =>
         Reflect.set(
@@ -72,53 +82,78 @@ it("canceling Back and Forward preserves the browser's history entries", async (
           Number(Reflect.get(window, "navigationPops")) + 1,
         ),
       );
-      window.addEventListener("workspace:navigate", (event) => {
-        if (!Reflect.get(window, "allowNavigation")) event.preventDefault();
-      });
       controller.navigate("/activity");
       controller.navigate("/contracts/templates/t1");
-      Reflect.set(window, "allowNavigation", false);
-      history.go(-2);
     }, source);
+    const setGuard = (answer: boolean | undefined) =>
+      page.evaluate((value) => {
+        (Reflect.get(window, "guard") as (value?: boolean) => void)(
+          value ?? undefined,
+        );
+      }, answer ?? null);
+    const pops = () =>
+      page.evaluate(() => Number(Reflect.get(window, "navigationPops")));
+    const settled = (pathname: string, minimumPops: number) =>
+      page.waitForFunction(
+        (path, count) =>
+          Number(Reflect.get(window, "navigationPops")) >= count &&
+          location.pathname === path &&
+          document.body.textContent === path,
+        { timeout: 5000 },
+        pathname,
+        minimumPops,
+      );
+
+    // A canceled Back returns to its entry without adding one.
+    await setGuard(false);
+    await page.evaluate(() => history.go(-2));
+    await settled("/contracts/templates/t1", 2);
+    expect(await page.evaluate(() => history.length)).toBe(historyLength + 2);
+
+    // An allowed Back returns first, then replays the move once allowed.
+    await setGuard(true);
+    await page.evaluate(() => history.back());
+    await settled("/activity", 5);
+    expect(await pops()).toBe(5);
+
+    // A canceled Forward also restores the existing entry.
+    await setGuard(false);
+    await page.evaluate(() => history.forward());
     await page.waitForFunction(
-      () =>
-        Number(Reflect.get(window, "navigationPops")) >= 2 &&
-        location.pathname === "/contracts/templates/t1",
+      () => Number(Reflect.get(window, "navigationPops")) >= 7,
       { timeout: 5000 },
     );
+    await settled("/activity", 7);
     expect(await page.evaluate(() => history.length)).toBe(historyLength + 2);
-    await page.evaluate(() => {
-      Reflect.set(window, "allowNavigation", true);
-      history.back();
-    });
-    await page.waitForFunction(() => location.pathname === "/activity", {
-      timeout: 5000,
-    });
-    // A canceled Forward also restores the existing entry instead of adding one.
-    await page.evaluate(() => {
-      Reflect.set(window, "allowNavigation", false);
-      history.forward();
-    });
-    await page.waitForFunction(
-      () =>
-        Number(Reflect.get(window, "navigationPops")) >= 5 &&
-        location.pathname === "/activity",
-      {
-        timeout: 5000,
-      },
+
+    // With nothing unsaved, Forward moves at once.
+    await setGuard(undefined);
+    await page.evaluate(() => history.forward());
+    await settled("/contracts/templates/t1", 8);
+
+    // In-app navigation waits for the guards too.
+    await setGuard(false);
+    await page.evaluate(() =>
+      (
+        Reflect.get(window, "navigation") as {
+          navigate: (path: string) => void;
+        }
+      ).navigate("/library"),
     );
-    expect(await page.evaluate(() => history.length)).toBe(historyLength + 2);
-    await page.evaluate(() => {
-      Reflect.set(window, "allowNavigation", true);
-      history.forward();
-    });
-    await page.waitForFunction(
-      () => location.pathname === "/contracts/templates/t1",
-      { timeout: 5000 },
-    );
-    expect(await page.evaluate(() => document.body.textContent)).toBe(
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await page.evaluate(() => location.pathname)).toBe(
       "/contracts/templates/t1",
     );
+    await setGuard(true);
+    await page.evaluate(() =>
+      (
+        Reflect.get(window, "navigation") as {
+          navigate: (path: string) => void;
+        }
+      ).navigate("/library"),
+    );
+    await settled("/library", 8);
+    expect(await page.evaluate(() => history.length)).toBe(historyLength + 3);
   } finally {
     await browser?.close();
     rmSync(profile, { force: true, recursive: true });

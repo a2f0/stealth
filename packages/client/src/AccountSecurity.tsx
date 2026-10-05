@@ -1,4 +1,11 @@
-import { Badge, Banner, Button, Card, Field } from "@tearleads/ui/react";
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  confirmDialog,
+  Field,
+} from "@tearleads/ui/react";
 import { QRCodeSVG } from "qrcode.react";
 import { type FormEvent, useState } from "react";
 import { authClient } from "./authClient";
@@ -149,7 +156,7 @@ function useMfaMaintenance({
 
   async function regenerateCodes(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!confirmRegeneration()) return;
+    if (!(await confirmRegeneration())) return;
     await run("regenerate", async () => {
       onRecoveryCodes(await generateRecoveryCodes(regeneratePassword));
       setRegeneratePassword("");
@@ -159,7 +166,7 @@ function useMfaMaintenance({
 
   async function disable(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!confirmDisable()) return;
+    if (!(await confirmDisable())) return;
     await run("disable", async () => {
       await disableTotp(disablePassword);
       setDisablePassword("");
@@ -609,15 +616,21 @@ async function disableTotp(password: string) {
 }
 
 function confirmRegeneration() {
-  return window.confirm(
-    "Generate new recovery codes? Every existing recovery code will stop working.",
-  );
+  return confirmDialog({
+    confirmLabel: "Generate new codes",
+    message: "Every existing recovery code will stop working.",
+    title: "Generate new recovery codes?",
+    tone: "danger",
+  });
 }
 
 function confirmDisable() {
-  return window.confirm(
-    "Disable MFA? Your password will be the only protection on your next sign-in.",
-  );
+  return confirmDialog({
+    confirmLabel: "Disable MFA",
+    message: "Your password will be the only protection on your next sign-in.",
+    title: "Disable MFA?",
+    tone: "danger",
+  });
 }
 
 function totpSecret(totpURI: string) {
