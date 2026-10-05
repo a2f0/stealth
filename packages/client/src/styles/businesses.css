@@ -69,6 +69,18 @@
   margin: var(--space-1) 0 0;
 }
 
+/* An identifier followed by the icon button that copies it. The button is
+ * centred on the text line without making the row taller. */
+.businessDetailValue {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.businessDetailValue .button {
+  margin-block: calc((1lh - var(--control-height-sm)) / 2);
+}
+
 .businessMark {
   display: grid;
   width: 2.25rem;
