@@ -4,7 +4,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { AccountSecurity } from "./AccountSecurity";
-import { useDismissDialogsOnChange } from "./navigationGuard";
+import { useDismissDialogsOnWorkspaceChange } from "./navigationGuard";
 
 // Mounts the real security page with the app's dialog host, so the
 // confirmations guard the actual MFA requests.
@@ -75,8 +75,13 @@ function stubAuth() {
   return requests;
 }
 
+/** Stands in for the app: the signed-in account and its organization. */
 function Workspace({ identity }: { identity: string }) {
-  useDismissDialogsOnChange(identity);
+  const [userId = "", organizationId = ""] = identity.split(":");
+  useDismissDialogsOnWorkspaceChange(
+    { session: { activeOrganizationId: organizationId }, user: { id: userId } },
+    organizationId,
+  );
   return null;
 }
 

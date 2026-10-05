@@ -16,12 +16,33 @@ export function guardWorkspaceChange<Args extends unknown[]>(
   };
 }
 
+interface WorkspaceSession {
+  session: { activeOrganizationId?: string | null | undefined };
+  user: { id: string };
+}
+
 /**
- * Answers open dialogs with no when `identity` (the signed-in account and its
- * active organization) changes: a question asked for one workspace must never
- * be answered for another.
+ * Answers open dialogs with no when the workspace changes underneath them: a
+ * question asked for one account or organization must never be answered for
+ * another. The session's active organization is what the API acts on, so it
+ * counts even before the organization list catches up with it.
  */
-export function useDismissDialogsOnChange(identity: string) {
+export function useDismissDialogsOnWorkspaceChange(
+  session: WorkspaceSession | null | undefined,
+  shownOrganizationId: string | undefined,
+) {
+  useDismissDialogsOnChange(
+    [
+      session?.user.id,
+      session?.session.activeOrganizationId,
+      shownOrganizationId,
+    ]
+      .map((part) => part ?? "")
+      .join(":"),
+  );
+}
+
+function useDismissDialogsOnChange(identity: string) {
   const previous = useRef(identity);
   useEffect(() => {
     if (previous.current === identity) return;

@@ -10,7 +10,7 @@ import { act, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import {
   addNavigationGuard,
-  useDismissDialogsOnChange,
+  useDismissDialogsOnWorkspaceChange,
   useWorkspaceNavigation,
 } from "./navigationGuard";
 import { confirmDiscardChanges } from "./unsavedChanges";
@@ -347,25 +347,28 @@ describe("guarded Back with a question open", () => {
   });
 });
 
-describe("useDismissDialogsOnChange", () => {
-  function Workspace({ identity }: { identity: string }) {
-    useDismissDialogsOnChange(identity);
+describe("useDismissDialogsOnWorkspaceChange", () => {
+  const signedIn = (userId: string, activeOrganizationId: string) => ({
+    session: { activeOrganizationId },
+    user: { id: userId },
+  });
+  type Session = ReturnType<typeof signedIn>;
+  function Workspace({ session, shown }: { session: Session; shown: string }) {
+    useDismissDialogsOnWorkspaceChange(session, shown);
     return null;
   }
-  const render = (identity: string) =>
+  const render = (session: Session, shown: string) =>
     act(async () =>
       root?.render(
         <>
           <button type="button">Opener</button>
-          <Workspace identity={identity} />
+          <Workspace session={session} shown={shown} />
           <DialogHost />
         </>,
       ),
     );
-
-  it("answers no when the account or organization changes underneath", async () => {
-    await mount(<Workspace identity="user-1:org-1" />);
-    const { answer } = await open(() =>
+  const askToDelete = () =>
+    open(() =>
       confirmDialog({
         confirmLabel: "Delete organization",
         title: "Delete Northwind?",
@@ -373,12 +376,38 @@ describe("useDismissDialogsOnChange", () => {
         typeToConfirm: "Northwind",
       }),
     );
-    await render("user-1:org-1");
-    expect(openDialog()).toBeTruthy();
 
-    // Another tab switched the active organization.
-    await render("user-1:org-2");
+  it("keeps the question while the workspace stays the same", async () => {
+    await mount(<Workspace session={signedIn("u1", "org-1")} shown="org-1" />);
+    const { answer } = await askToDelete();
+    await render(signedIn("u1", "org-1"), "org-1");
+    expect(openDialog()).toBeTruthy();
+    await click(choice("Cancel"));
+    expect(await answer).toBe(false);
+  });
+
+  it("answers no when another tab switches the organization shown", async () => {
+    await mount(<Workspace session={signedIn("u1", "org-1")} shown="org-1" />);
+    const { answer } = await askToDelete();
+    await render(signedIn("u1", "org-2"), "org-2");
     expect(await answer).toBe(false);
     expect(openDialog()).toBeNull();
+  });
+
+  it("answers no when the session moves before the organization list does", async () => {
+    await mount(<Workspace session={signedIn("u1", "org-1")} shown="org-1" />);
+    const { answer } = await askToDelete();
+    // The newly active organization is missing from the cached list, so the
+    // page still shows org-1, but the API would now act on org-new.
+    await render(signedIn("u1", "org-new"), "org-1");
+    expect(await answer).toBe(false);
+    expect(openDialog()).toBeNull();
+  });
+
+  it("answers no when the account changes", async () => {
+    await mount(<Workspace session={signedIn("u1", "org-1")} shown="org-1" />);
+    const { answer } = await askToDelete();
+    await render(signedIn("u2", "org-1"), "org-1");
+    expect(await answer).toBe(false);
   });
 });

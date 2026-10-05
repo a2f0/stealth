@@ -32,7 +32,7 @@ import { Inbox } from "./Inbox";
 import { Library } from "./Library";
 import {
   guardWorkspaceChange,
-  useDismissDialogsOnChange,
+  useDismissDialogsOnWorkspaceChange,
   useWorkspaceNavigation,
 } from "./navigationGuard";
 import { OrganizationInvitation } from "./OrganizationInvitation";
@@ -70,9 +70,7 @@ export function App() {
   const accounts = useAccountSessions(session, () => refetch());
 
   const navigate = useWorkspaceNavigation(setPathname);
-  useDismissDialogsOnChange(
-    `${session?.user.id ?? ""}:${workspace.activeOrganizationId ?? ""}`,
-  );
+  useDismissDialogsOnWorkspaceChange(session, workspace.activeOrganizationId);
 
   useEffect(() => {
     if (verification.shouldClear) {
