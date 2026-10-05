@@ -1,7 +1,8 @@
 {
   "name": "@tearleads/client",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build",
