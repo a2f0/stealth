@@ -5,6 +5,14 @@ export { Button, ButtonLink, buttonClass } from "./Button";
 export { Card } from "./Card";
 export { ContextMenu } from "./ContextMenu";
 export { cx } from "./cx";
+export {
+  type ConfirmOptions,
+  confirmDialog,
+  DialogHost,
+  dismissDialogs,
+  type PromptOptions,
+  promptDialog,
+} from "./Dialog";
 export { EmptyState, LoadingState } from "./EmptyState";
 export { Field } from "./Field";
 export { Icon } from "./Icon";

@@ -10,6 +10,9 @@ import { apiUrl } from "./config";
 
 export const authClient = createAuthClient({
   baseURL: apiUrl,
+  // Like the app's other API calls, look fetch up per request instead of
+  // keeping the one present when this client was created.
+  fetchOptions: { customFetchImpl: (input, init) => fetch(input, init) },
   plugins: [
     inferAdditionalFields({
       user: {

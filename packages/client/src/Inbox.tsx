@@ -1,6 +1,7 @@
 import {
   Banner,
   Button,
+  confirmDialog,
   cx,
   EmptyState,
   Icon,
@@ -150,13 +151,7 @@ function useInboxActions(messages: ReturnType<typeof useInboxMessages>) {
 
   async function moveToTrash(email: InboundEmailDetail) {
     const subject = email.subject || "(no subject)";
-    if (
-      !window.confirm(
-        `Move “${subject}” to Trash? It can be restored for 30 days.`,
-      )
-    ) {
-      return;
-    }
+    if (!(await confirmMoveToTrash(subject))) return;
     await runAction(email.id, deleteInboundEmail, "Email moved to Trash.");
   }
 
@@ -670,4 +665,13 @@ function formatDateTime(value: string) {
 
 function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "Could not load the inbox.";
+}
+
+function confirmMoveToTrash(subject: string) {
+  return confirmDialog({
+    confirmLabel: "Move to Trash",
+    message: "It can be restored for 30 days.",
+    title: `Move “${subject}” to Trash?`,
+    tone: "danger",
+  });
 }

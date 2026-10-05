@@ -1,3 +1,4 @@
+import { DialogHost } from "@tearleads/ui/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@tearleads/ui/styles.css";
@@ -16,5 +17,6 @@ startThemeSync();
 createRoot(root).render(
   <StrictMode>
     <App />
+    <DialogHost />
   </StrictMode>,
 );

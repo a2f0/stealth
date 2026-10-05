@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { DialogHost } from "@tearleads/ui/react";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -108,7 +109,12 @@ async function mountPage(
   const root = createRoot(container);
   mounted.push({ container, root });
   await act(async () =>
-    root.render(<Businesses onNavigate={onNavigate} pathname={pathname} />),
+    root.render(
+      <>
+        <Businesses onNavigate={onNavigate} pathname={pathname} />
+        <DialogHost />
+      </>,
+    ),
   );
   await settle();
   return page(container);
@@ -573,5 +579,50 @@ describe("editing a business from its detail page", () => {
     const { view } = await mountEditable(undefined, false);
     expect(view.text()).toContain("Acme, Inc.");
     expect(named("Edit")).toBeNull();
+  });
+});
+
+describe("deleting a business", () => {
+  /** Answers the open dialog with the button labelled `label`. */
+  async function answer(label: string) {
+    const dialog = document.querySelector("dialog[open]");
+    const choice = [...(dialog?.querySelectorAll("button") ?? [])].find(
+      (element) => element.textContent?.trim() === label,
+    );
+    await click(choice);
+  }
+
+  it("asks in the app's dialog, and deletes only once confirmed", async () => {
+    const deletes: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      if (init?.method === "DELETE") {
+        deletes.push(String(input));
+        return new Response(null, { status: 204 });
+      }
+      return Response.json({
+        businesses: [business("b1", "Acme, Inc.")],
+        canManage: true,
+      });
+    }) as typeof fetch;
+    const view = await mountPage();
+    const remove = () =>
+      [...(view.row()?.querySelectorAll("button") ?? [])].find(
+        (element) => element.textContent?.trim() === "Delete",
+      );
+
+    await click(remove());
+    const dialog = document.querySelector("dialog[open]");
+    expect(dialog?.textContent).toContain("Delete Acme, Inc.?");
+    expect(dialog?.textContent).toContain("This can't be undone.");
+    await answer("Cancel");
+    expect(document.querySelector("dialog[open]")).toBeNull();
+    expect(deletes).toEqual([]);
+    expect(view.rows()).toBe(1);
+
+    await click(remove());
+    await answer("Delete business");
+    expect(deletes).toEqual([expect.stringContaining("/api/businesses/b1")]);
+    expect(view.rows()).toBe(0);
+    expect(view.text()).toContain("Business deleted.");
   });
 });

@@ -1,6 +1,7 @@
 import {
   Banner,
   Button,
+  confirmDialog,
   LoadingState,
   Page,
   PageBody,
@@ -29,12 +30,7 @@ export function AdminJobs() {
   }, []);
 
   async function trigger(job: MaintenanceJob) {
-    if (
-      !window.confirm(
-        `Run ${job.name}?\n\n${job.description}\n\nThis affects all eligible organizations. Existing retention periods still apply.`,
-      )
-    )
-      return;
+    if (!(await confirmJobRun(job))) return;
     setBusy(job.id);
     setError(undefined);
     setRun(undefined);
@@ -104,4 +100,12 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error
     ? cause.message
     : "Could not complete the request.";
+}
+
+function confirmJobRun(job: MaintenanceJob) {
+  return confirmDialog({
+    confirmLabel: "Run job",
+    message: `${job.description}\n\nThis affects all eligible organizations. Existing retention periods still apply.`,
+    title: `Run ${job.name}?`,
+  });
 }

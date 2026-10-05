@@ -1,4 +1,4 @@
-import { Icon, type IconName, Logo } from "@tearleads/ui/react";
+import { Icon, type IconName, Logo, promptDialog } from "@tearleads/ui/react";
 import {
   type CSSProperties,
   type MouseEvent,
@@ -342,7 +342,7 @@ function OrganizationSwitcher({
 
   async function select(organizationId: string) {
     if (organizationId === "create") {
-      const name = window.prompt("Organization name")?.trim();
+      const name = (await askOrganizationName())?.trim();
       if (!name) return;
       setBusy(true);
       setError(undefined);
@@ -422,4 +422,14 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error
     ? cause.message
     : "Could not switch organizations.";
+}
+
+function askOrganizationName() {
+  return promptDialog({
+    confirmLabel: "Create organization",
+    label: "Organization name",
+    maxLength: 100,
+    required: true,
+    title: "Create an organization",
+  });
 }

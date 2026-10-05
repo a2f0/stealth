@@ -3,6 +3,7 @@ import {
   Banner,
   Button,
   Card,
+  confirmDialog,
   EmptyState,
   Field,
   Icon,
@@ -383,10 +384,7 @@ function useEquipmentDetail(
   }
 
   async function remove(item: EquipmentItem) {
-    const links = item.emailCount
-      ? ` ${countLabel(item.emailCount, "linked email")} will be unlinked but stay in the inbox.`
-      : "";
-    if (!window.confirm(`Delete ${equipmentName(item)}?${links}`)) return;
+    if (!(await confirmEquipmentDeletion(item))) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -823,4 +821,15 @@ function formatDate(value: string) {
 
 function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "Could not load equipment.";
+}
+
+function confirmEquipmentDeletion(item: EquipmentItem) {
+  return confirmDialog({
+    confirmLabel: "Delete equipment",
+    message: item.emailCount
+      ? `${countLabel(item.emailCount, "linked email")} will be unlinked but stay in the inbox.`
+      : undefined,
+    title: `Delete ${equipmentName(item)}?`,
+    tone: "danger",
+  });
 }

@@ -2,6 +2,7 @@ import {
   Banner,
   Button,
   Card,
+  confirmDialog,
   EmptyState,
   Field,
   LoadingState,
@@ -230,13 +231,8 @@ function CategoryRow({
       />
     );
   }
-  function remove() {
-    const consequence = category.transactionCount
-      ? ` ${countLabel(category.transactionCount, "transaction")} will become uncategorized.`
-      : "";
-    if (window.confirm(`Delete “${category.name}”?${consequence}`)) {
-      void onDelete(category);
-    }
+  async function remove() {
+    if (await confirmCategoryDeletion(category)) void onDelete(category);
   }
   return (
     <li className="row">
@@ -259,7 +255,7 @@ function CategoryRow({
         <Button
           disabled={busy}
           icon="trash"
-          onClick={remove}
+          onClick={() => void remove()}
           size="sm"
           variant="danger"
         >
@@ -323,4 +319,15 @@ function RenameCategoryRow({
       </form>
     </li>
   );
+}
+
+function confirmCategoryDeletion(category: ExpenseCategory) {
+  return confirmDialog({
+    confirmLabel: "Delete category",
+    message: category.transactionCount
+      ? `${countLabel(category.transactionCount, "transaction")} will become uncategorized.`
+      : undefined,
+    title: `Delete “${category.name}”?`,
+    tone: "danger",
+  });
 }

@@ -5,6 +5,7 @@ import {
   EmptyState,
   LoadingState,
   Logo,
+  promptDialog,
 } from "@tearleads/ui/react";
 import { useEffect, useState } from "react";
 import { boxStyle, ContractPages } from "./ContractDocument";
@@ -108,10 +109,8 @@ function useSigningSession(
   return {
     busy,
     consent,
-    decline: () => {
-      const reason = window.prompt(
-        "Decline to sign? The sender will be told. Add a reason (optional):",
-      );
+    decline: async () => {
+      const reason = await askDeclineReason();
       if (reason === null) return;
       void run(async () => {
         await declineContract(token, reason);
@@ -396,4 +395,16 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
     new Date(`${value}T12:00:00`),
   );
+}
+
+function askDeclineReason() {
+  return promptDialog({
+    confirmLabel: "Decline to sign",
+    label: "Reason (optional)",
+    maxLength: 500,
+    message: "The sender will be told.",
+    multiline: true,
+    title: "Decline to sign?",
+    tone: "danger",
+  });
 }

@@ -6,10 +6,12 @@ import {
   Card,
   cx,
   PageSection,
+  promptDialog,
 } from "@tearleads/ui/react";
 import { useState } from "react";
 import { boxStyle, ContractPages } from "./ContractDocument";
 import {
+  confirmContractDeletion,
   contractStatus,
   describeContractEvent,
   fieldTypeLabel,
@@ -131,19 +133,16 @@ function useSummaryActions(
           ? "Reminder sent to 1 signer."
           : `Reminders sent to ${result.reminded} signers.`;
       }),
-    remove: () => {
-      if (!window.confirm(`Delete “${contract.title}”? This can't be undone.`))
-        return;
+    remove: async () => {
+      if (!(await confirmContractDeletion(contract.title))) return;
       void run(async () => {
         await deleteContract(contract.id);
         onNavigate(contractPath());
         return undefined;
       });
     },
-    voidIt: () => {
-      const reason = window.prompt(
-        `Void “${contract.title}”? Signers will be told it no longer needs signing. Add a reason (optional):`,
-      );
+    voidIt: async () => {
+      const reason = await askVoidReason(contract.title);
       if (reason === null) return;
       void run(async () => {
         onChanged(await voidContract(contract.id, reason));
@@ -347,4 +346,16 @@ function formatDateTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function askVoidReason(title: string) {
+  return promptDialog({
+    confirmLabel: "Void contract",
+    label: "Reason (optional)",
+    maxLength: 500,
+    message: "Signers will be told it no longer needs signing.",
+    multiline: true,
+    title: `Void “${title}”?`,
+    tone: "danger",
+  });
 }

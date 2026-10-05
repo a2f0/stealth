@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   ContextMenu,
+  confirmDialog,
   cx,
   EmptyState,
   Field,
@@ -379,7 +380,7 @@ function BusinessRow({
   const [busy, setBusy] = useState(false);
 
   async function remove() {
-    if (!window.confirm(`Delete ${business.name}?`)) return;
+    if (!(await confirmBusinessDeletion(business))) return;
     setBusy(true);
     try {
       await deleteBusiness(business.id);
@@ -1025,4 +1026,13 @@ function BusinessEmptyState({ title }: { title: string }) {
 
 function messageFrom(cause: unknown) {
   return cause instanceof Error ? cause.message : "Something went wrong.";
+}
+
+function confirmBusinessDeletion(business: Business) {
+  return confirmDialog({
+    confirmLabel: "Delete business",
+    message: "This can't be undone.",
+    title: `Delete ${business.name}?`,
+    tone: "danger",
+  });
 }

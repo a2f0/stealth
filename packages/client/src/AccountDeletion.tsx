@@ -1,4 +1,4 @@
-import { Banner, Button, Card } from "@tearleads/ui/react";
+import { Banner, Button, Card, confirmDialog } from "@tearleads/ui/react";
 import { useEffect, useState } from "react";
 import { apiUrl } from "./config";
 
@@ -33,13 +33,7 @@ export function AccountDeletion() {
   }, []);
 
   async function update() {
-    if (
-      !requestedAt &&
-      !window.confirm(
-        "Request permanent account deletion after 30 days? You can cancel here before your account is purged.",
-      )
-    )
-      return;
+    if (!requestedAt && !(await confirmDeletionRequest())) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -86,4 +80,13 @@ function messageFrom(cause: unknown) {
   return cause instanceof Error
     ? cause.message
     : "Could not load the deletion request.";
+}
+
+function confirmDeletionRequest() {
+  return confirmDialog({
+    confirmLabel: "Request deletion",
+    message: "You can cancel here before your account is purged.",
+    title: "Permanently delete your account after 30 days?",
+    tone: "danger",
+  });
 }

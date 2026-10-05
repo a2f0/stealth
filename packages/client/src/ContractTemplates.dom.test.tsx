@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { DialogHost } from "@tearleads/ui/react";
 import { Window } from "happy-dom";
 import { act, useState } from "react";
 import type { Root } from "react-dom/client";
@@ -183,10 +184,37 @@ async function mount(
   const root = createRoot(container);
   mounted.push({ container, root });
   await act(async () =>
-    root.render(<Contracts onNavigate={onNavigate} pathname={pathname} />),
+    root.render(
+      <>
+        <Contracts onNavigate={onNavigate} pathname={pathname} />
+        <DialogHost />
+      </>,
+    ),
   );
   await settle();
   return container;
+}
+
+/** Answers the open dialog with the button labelled `label`. */
+async function answer(label: string) {
+  await settle();
+  const choice = [
+    ...(document.querySelector("dialog[open]")?.querySelectorAll("button") ??
+      []),
+  ].find((element) => element.textContent?.trim() === label);
+  expect(choice).toBeTruthy();
+  await act(async () => choice?.click());
+  await settle();
+}
+
+/** Starts a guarded action, answers its dialog, and returns its result. */
+async function decide<Result>(start: () => Promise<Result>, label: string) {
+  let action: Promise<Result> | undefined;
+  await act(async () => {
+    action = start();
+  });
+  await answer(label);
+  return action;
 }
 function button(container: HTMLElement, text: string) {
   const found = [...container.querySelectorAll("button")].find(
@@ -307,14 +335,12 @@ describe("contract templates, mounted", () => {
     stubApi({ conflict: true });
     const container = await mount();
     await change(field(container, "Role 1"), "Worker");
-    const originalConfirm = window.confirm;
-    window.confirm = () => false;
-    try {
-      expect(canNavigate()).toBe(false);
-      await click(button(container, "Use this version"));
-    } finally {
-      window.confirm = originalConfirm;
-    }
+    expect(await decide(canNavigate, "Keep editing")).toBe(false);
+    await click(button(container, "Use this version"));
+    expect(document.querySelector("dialog[open]")?.textContent).toContain(
+      "Discard unsaved changes?",
+    );
+    await answer("Keep editing");
     expect(container.querySelector("input[type=email]")).toBeNull();
     await click(button(container, "Save version 3"));
     expect(container.textContent).toContain("This template changed");
@@ -336,22 +362,15 @@ describe("contract templates, mounted", () => {
     const signOut = guardWorkspaceChange(async () => {
       changes.push("sign-out");
     });
-    const originalConfirm = window.confirm;
-    try {
-      window.confirm = () => false;
-      await switchAccount("a2");
-      await switchOrganization("org2");
-      await signOut();
-      expect(changes).toEqual([]);
-      expect(field(container, "Role 1").value).toBe("Worker");
-      window.confirm = () => true;
-      await switchAccount("a2");
-      await switchOrganization("org2");
-      await signOut();
-      expect(changes).toEqual(["account:a2", "organization:org2", "sign-out"]);
-    } finally {
-      window.confirm = originalConfirm;
-    }
+    await decide(() => switchAccount("a2"), "Keep editing");
+    await decide(() => switchOrganization("org2"), "Keep editing");
+    await decide(signOut, "Keep editing");
+    expect(changes).toEqual([]);
+    expect(field(container, "Role 1").value).toBe("Worker");
+    await decide(() => switchAccount("a2"), "Discard changes");
+    await decide(() => switchOrganization("org2"), "Discard changes");
+    await decide(signOut, "Discard changes");
+    expect(changes).toEqual(["account:a2", "organization:org2", "sign-out"]);
   });
 
   it("blocks version changes while creating and ignores a response after leaving the page", async () => {
@@ -433,13 +452,8 @@ describe("contract templates, mounted", () => {
     stubApi({ deleteResponse });
     const navigations: string[] = [];
     const container = await mount(undefined, (path) => navigations.push(path));
-    const originalConfirm = window.confirm;
-    window.confirm = () => true;
-    try {
-      await click(button(container, "Delete template"));
-    } finally {
-      window.confirm = originalConfirm;
-    }
+    await click(button(container, "Delete template"));
+    await answer("Delete template");
     const root = mounted.at(-1)?.root;
     await act(async () => root?.render(<p>Other workspace</p>));
     await act(async () => {

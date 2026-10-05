@@ -1,4 +1,8 @@
-import type { BadgeTone, IconName } from "@tearleads/ui/react";
+import {
+  type BadgeTone,
+  confirmDialog,
+  type IconName,
+} from "@tearleads/ui/react";
 import type {
   ContractEvent,
   ContractStatus,
@@ -228,4 +232,13 @@ export function describeContractEvent(
 export function localDate(date = new Date()) {
   const offset = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
+export function confirmContractDeletion(title: string) {
+  return confirmDialog({
+    confirmLabel: "Delete contract",
+    message: "This can't be undone.",
+    title: `Delete “${title}”?`,
+    tone: "danger",
+  });
 }
