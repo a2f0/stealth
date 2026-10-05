@@ -55,6 +55,10 @@ interface BusinessResponse {
   };
 }
 
+interface BusinessDetailResponse extends BusinessResponse {
+  canManage: boolean;
+}
+
 describe("business EINs", () => {
   it("normalizes only valid nine-digit EINs", () => {
     expect(normalizeEin("12-3456789")).toBe("123456789");
@@ -350,13 +354,25 @@ describe("organization businesses", () => {
     const business = ((await created.json()) as BusinessResponse).business;
     const path = `/${business.id}`;
 
+    const ownerRead = await fixture.ownerApp.request(
+      path,
+      undefined,
+      fixture.bindings,
+    );
+    expect((await ownerRead.json()) as BusinessDetailResponse).toEqual({
+      business,
+      canManage: true,
+    });
     const memberRead = await fixture.memberApp.request(
       path,
       undefined,
       fixture.bindings,
     );
     expect(memberRead.status).toBe(200);
-    expect((await memberRead.json()) as BusinessResponse).toEqual({ business });
+    expect((await memberRead.json()) as BusinessDetailResponse).toEqual({
+      business,
+      canManage: false,
+    });
 
     const otherRead = await fixture.otherOwnerApp.request(
       path,

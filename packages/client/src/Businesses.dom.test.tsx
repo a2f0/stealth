@@ -426,7 +426,7 @@ describe("a business DUNS number", () => {
 describe("copying identifiers on the business detail page", () => {
   async function mountDetail(detail: Business) {
     globalThis.fetch = (async (_input) =>
-      Response.json({ business: detail })) as typeof fetch;
+      Response.json({ business: detail, canManage: false })) as typeof fetch;
     return mountPage(undefined, `/businesses/${detail.id}`);
   }
 
@@ -476,5 +476,102 @@ describe("copying identifiers on the business detail page", () => {
     await click(view.labelled("Copy EIN"));
     expect(view.text()).not.toContain("Could not copy the EIN");
     expect(view.text()).toContain("EIN copied.");
+  });
+});
+
+describe("editing a business from its detail page", () => {
+  const acme = {
+    ...business("b1", "Acme, Inc."),
+    duns: "123456789",
+    ein: "123456789",
+  };
+
+  /** Serves the detail, and answers each save with `patch`. */
+  async function mountEditable(
+    patch: () => Response = () => Response.json({ business: acme }),
+    canManage = true,
+  ) {
+    const patches: unknown[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      if (init?.method !== "PATCH") {
+        return Response.json({ business: acme, canManage });
+      }
+      patches.push(JSON.parse(String(init.body)));
+      return patch();
+    }) as typeof fetch;
+    const view = await mountPage(undefined, `/businesses/${acme.id}`);
+    return { patches, view };
+  }
+
+  const named = (label: string) =>
+    [...document.querySelectorAll("button")].find(
+      (element) => element.textContent?.trim() === label,
+    ) ?? null;
+  const editor = () =>
+    [...document.querySelectorAll("form")].find((element) =>
+      element.textContent?.includes("Edit business"),
+    );
+  const field = (placeholder: string) =>
+    editor()?.querySelector<HTMLInputElement>(
+      `input[placeholder="${placeholder}"]`,
+    );
+
+  it("opens a filled editor, saves, and hands focus back to Edit", async () => {
+    const { patches, view } = await mountEditable(() =>
+      Response.json({ business: { ...acme, name: "Acme Holdings" } }),
+    );
+    await click(named("Edit"));
+    expect(editor()).toBeTruthy();
+    expect(named("Edit")).toBeNull();
+    expect(document.activeElement).toBe(field("Acme, Inc.") ?? null);
+    expect(field("12-3456789")?.value).toBe("12-3456789");
+    expect(field("12-345-6789")?.value).toBe("12-345-6789");
+
+    await typeName(field("Acme, Inc."), "Acme Holdings");
+    await click(named("Save changes"));
+    expect(patches).toEqual([
+      expect.objectContaining({
+        duns: "12-345-6789",
+        ein: "12-3456789",
+        name: "Acme Holdings",
+      }),
+    ]);
+    expect(editor()).toBeUndefined();
+    expect(view.text()).toContain("Business updated.");
+    expect(document.querySelector("h1")?.textContent).toBe("Acme Holdings");
+    expect(document.activeElement).toBe(named("Edit"));
+  });
+
+  it("discards edits on cancel and hands focus back to Edit", async () => {
+    const { patches, view } = await mountEditable();
+    await click(named("Edit"));
+    await typeName(field("Acme, Inc."), "Changed");
+    await click(named("Cancel"));
+    expect(patches).toEqual([]);
+    expect(editor()).toBeUndefined();
+    expect(view.text()).not.toContain("Changed");
+    expect(document.activeElement).toBe(named("Edit"));
+  });
+
+  it("keeps the editor and its values open when saving fails", async () => {
+    const { view } = await mountEditable(() =>
+      Response.json(
+        { error: "A business with that EIN already exists." },
+        { status: 409 },
+      ),
+    );
+    await click(named("Edit"));
+    await typeName(field("Acme, Inc."), "Acme Holdings");
+    await click(named("Save changes"));
+    expect(editor()).toBeTruthy();
+    expect(field("Acme, Inc.")?.value).toBe("Acme Holdings");
+    expect(view.text()).toContain("A business with that EIN already exists.");
+    expect(named("Save changes")?.disabled).toBe(false);
+  });
+
+  it("offers no Edit button to read-only members", async () => {
+    const { view } = await mountEditable(undefined, false);
+    expect(view.text()).toContain("Acme, Inc.");
+    expect(named("Edit")).toBeNull();
   });
 });
