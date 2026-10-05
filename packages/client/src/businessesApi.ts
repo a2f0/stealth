@@ -34,8 +34,13 @@ export function getBusinesses() {
   return request<BusinessListing>("");
 }
 
+export interface BusinessDetail {
+  business: Business;
+  canManage: boolean;
+}
+
 export function getBusiness(id: string) {
-  return request<{ business: Business }>(`/${encodeURIComponent(id)}`);
+  return request<BusinessDetail>(`/${encodeURIComponent(id)}`);
 }
 
 export function createBusiness(input: BusinessInput) {

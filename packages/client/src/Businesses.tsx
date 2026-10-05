@@ -26,6 +26,7 @@ import {
 } from "react";
 import {
   type Business,
+  type BusinessDetail,
   type BusinessInput,
   createBusiness,
   deleteBusiness,
@@ -165,8 +166,8 @@ export function BusinessListView(props: BusinessListViewProps) {
 }
 
 /**
- * Folding the form away (cancelled, or a business was added) removes the
- * focused field; hand focus to the button that reopens it.
+ * Folding a form away (cancelled, or a business was added or saved) removes
+ * the focused field; hand focus to the button that reopens it.
  */
 function useFocusWhenFolded(formOpen: boolean) {
   const button = useRef<HTMLButtonElement>(null);
@@ -554,24 +555,25 @@ function BusinessDetailPage({
   id: string;
   onNavigate: (pathname: string) => void;
 }) {
-  const [business, setBusiness] = useState<Business>();
+  const [detail, setDetail] = useState<BusinessDetail>();
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const copyOutcome = {
-    onCopied: (identifier: BusinessIdentifier) => {
-      setError(undefined);
-      setNotice(copiedNotice(identifier));
-    },
-    onError: (message: string) => {
-      setNotice(undefined);
-      setError(message);
-    },
+  const editButton = useFocusWhenFolded(editing);
+  const business = detail?.business;
+  const announce = (message: string) => {
+    setError(undefined);
+    setNotice(message);
+  };
+  const fail = (message: string) => {
+    setNotice(undefined);
+    setError(message);
   };
   useEffect(() => {
     let active = true;
     getBusiness(id)
-      .then(({ business: result }) => {
-        if (active) setBusiness(result);
+      .then((result) => {
+        if (active) setDetail(result);
       })
       .catch((cause: unknown) => {
         if (active) setError(messageFrom(cause));
@@ -585,9 +587,20 @@ function BusinessDetailPage({
     <Page>
       <PageHeader
         actions={
-          <Button icon="arrowLeft" onClick={() => onNavigate(businessPath())}>
-            Businesses
-          </Button>
+          <>
+            {detail?.canManage && !editing && (
+              <Button
+                icon="edit"
+                onClick={() => setEditing(true)}
+                ref={editButton}
+              >
+                Edit
+              </Button>
+            )}
+            <Button icon="arrowLeft" onClick={() => onNavigate(businessPath())}>
+              Businesses
+            </Button>
+          </>
         }
         eyebrow="Business"
         title={business?.name ?? "Business details"}
@@ -596,58 +609,155 @@ function BusinessDetailPage({
         {error && <Banner tone="danger">{error}</Banner>}
         {notice && <Toast tone="success">{notice}</Toast>}
         {!business && !error && <LoadingState label="Loading business…" />}
-        {business && (
-          <PageSection title="Details">
-            <Card>
-              <dl className="businessDetails">
-                <div>
-                  <dt>Name</dt>
-                  <dd>{business.name}</dd>
-                </div>
-                {businessIdentifiers(business).map(
-                  ({ id, identifier, value }) => (
-                    <div key={id}>
-                      <dt>{identifier}</dt>
-                      <dd className="businessDetailValue">
-                        {value ?? "Not provided"}
-                        {value && (
-                          <Button
-                            aria-label={`Copy ${identifier}`}
-                            icon="copy"
-                            iconOnly
-                            onClick={() =>
-                              void copyIdentifier(
-                                identifier,
-                                value,
-                                copyOutcome,
-                              )
-                            }
-                            size="sm"
-                            variant="ghost"
-                          />
-                        )}
-                      </dd>
-                    </div>
-                  ),
-                )}
-                <div>
-                  <dt>Incorporation date</dt>
-                  <dd>
-                    {business.incorporationDate
-                      ? formatBusinessDate(business.incorporationDate)
-                      : "Not provided"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Address</dt>
-                  <dd>{formatBusinessAddress(business) || "Not provided"}</dd>
-                </div>
-              </dl>
-            </Card>
-          </PageSection>
-        )}
+        {business &&
+          (editing ? (
+            <BusinessEditCard
+              business={business}
+              onCancel={() => setEditing(false)}
+              onError={fail}
+              onSaved={(updated) => {
+                setDetail((current) =>
+                  current ? { ...current, business: updated } : current,
+                );
+                setEditing(false);
+                announce("Business updated.");
+              }}
+            />
+          ) : (
+            <BusinessDetailCard
+              business={business}
+              onCopied={(identifier) => announce(copiedNotice(identifier))}
+              onError={fail}
+            />
+          ))}
       </PageBody>
     </Page>
+  );
+}
+
+function BusinessDetailCard({
+  business,
+  onCopied,
+  onError,
+}: {
+  business: Business;
+  onCopied: (identifier: BusinessIdentifier) => void;
+  onError: (message: string) => void;
+}) {
+  return (
+    <PageSection title="Details">
+      <Card>
+        <dl className="businessDetails">
+          <div>
+            <dt>Name</dt>
+            <dd>{business.name}</dd>
+          </div>
+          {businessIdentifiers(business).map(({ id, identifier, value }) => (
+            <div key={id}>
+              <dt>{identifier}</dt>
+              <dd className="businessDetailValue">
+                {value ?? "Not provided"}
+                {value && (
+                  <Button
+                    aria-label={`Copy ${identifier}`}
+                    icon="copy"
+                    iconOnly
+                    onClick={() =>
+                      void copyIdentifier(identifier, value, {
+                        onCopied,
+                        onError,
+                      })
+                    }
+                    size="sm"
+                    variant="ghost"
+                  />
+                )}
+              </dd>
+            </div>
+          ))}
+          <div>
+            <dt>Incorporation date</dt>
+            <dd>
+              {business.incorporationDate
+                ? formatBusinessDate(business.incorporationDate)
+                : "Not provided"}
+            </dd>
+          </div>
+          <div>
+            <dt>Address</dt>
+            <dd>{formatBusinessAddress(business) || "Not provided"}</dd>
+          </div>
+        </dl>
+      </Card>
+    </PageSection>
+  );
+}
+
+/** The detail page's editor: the add form's fields, filled from the business. */
+function BusinessEditCard({
+  business,
+  onCancel,
+  onError,
+  onSaved,
+}: {
+  business: Business;
+  onCancel: () => void;
+  onError: (message: string) => void;
+  onSaved: (business: Business) => void;
+}) {
+  const [form, setForm] = useState<BusinessFormState>(() =>
+    businessForm(business),
+  );
+  const [busy, setBusy] = useState(false);
+  const nameField = useRef<HTMLInputElement>(null);
+  // The Edit button that opened the form is gone; move focus into the form.
+  useEffect(() => nameField.current?.focus(), []);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const result = await updateBusiness(business.id, businessInput(form));
+      onSaved(result.business);
+    } catch (cause) {
+      onError(messageFrom(cause));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card
+      footer={
+        <>
+          <span className="textSm textSubtle">
+            Only the business name is required.
+          </span>
+          <div className="cluster">
+            <Button disabled={busy} onClick={onCancel} variant="ghost">
+              Cancel
+            </Button>
+            <Button
+              busy={busy}
+              disabled={!form.name.trim()}
+              icon="check"
+              type="submit"
+              variant="primary"
+            >
+              {busy ? "Saving…" : "Save changes"}
+            </Button>
+          </div>
+        </>
+      }
+      onSubmit={(event) => void save(event)}
+      title="Edit business"
+    >
+      <BusinessFields
+        disabled={busy}
+        form={form}
+        nameField={nameField}
+        onChange={setForm}
+      />
+    </Card>
   );
 }
 

@@ -54,7 +54,10 @@ businesses.get("/:id", async (context) => {
     .bind(context.req.param("id"), context.get("organizationId"))
     .first<BusinessRow>();
   if (!business) return context.json({ error: "Business not found." }, 404);
-  return context.json({ business: businessResponse(business) });
+  return context.json({
+    business: businessResponse(business),
+    canManage: canManage(context),
+  });
 });
 
 businesses.post("/", async (context) => {
