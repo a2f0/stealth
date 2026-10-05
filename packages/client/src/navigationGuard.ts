@@ -1,3 +1,4 @@
+import { dismissDialogs } from "@tearleads/ui/react";
 import { useEffect, useRef } from "react";
 
 const positionKey = "workspacePosition";
@@ -22,7 +23,11 @@ export function useWorkspaceNavigation(
     typeof createWorkspaceNavigation
   > | null>(null);
   useEffect(() => {
-    const navigation = createWorkspaceNavigation(window, onNavigated);
+    const navigation = createWorkspaceNavigation(window, (pathname) => {
+      // A question the previous page asked has no page left to act on.
+      dismissDialogs();
+      onNavigated(pathname);
+    });
     controller.current = navigation;
     return () => {
       controller.current = null;
@@ -118,8 +123,13 @@ export function createWorkspaceNavigation(
       asking = true;
       void canNavigate().then((allowed) => {
         asking = false;
+        if (!allowed) return;
         // Never push over a location that changed while the guards asked.
-        if (allowed && !restoring && location.href === origin) go();
+        const proceed = () => {
+          if (location.href === origin) go();
+        };
+        if (restoring) afterRestore = proceed;
+        else proceed();
       });
     },
   };

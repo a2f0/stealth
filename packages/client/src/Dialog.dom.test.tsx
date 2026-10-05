@@ -1,8 +1,14 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { confirmDialog, DialogHost, promptDialog } from "@tearleads/ui/react";
+import {
+  confirmDialog,
+  DialogHost,
+  dismissDialogs,
+  promptDialog,
+} from "@tearleads/ui/react";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
+import { useWorkspaceNavigation } from "./navigationGuard";
 
 const dom = new Window({ url: "http://localhost:5173" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -44,7 +50,7 @@ afterAll(async () => {
 });
 
 /** Mounts the host beside a button that stands in for whatever opened it. */
-async function mount() {
+async function mount(page?: ReactNode) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -52,6 +58,7 @@ async function mount() {
     root?.render(
       <>
         <button type="button">Opener</button>
+        {page}
         <DialogHost />
       </>,
     ),
@@ -250,5 +257,51 @@ describe("promptDialog", () => {
     await type("Northwind");
     await click(choice("Create organization"));
     expect(await answer).toBe("Northwind");
+  });
+});
+
+describe("dismissDialogs", () => {
+  it("answers the open and queued questions with no", async () => {
+    await mount();
+    const { answer: confirmed } = await open(() => confirmDialog(deletion));
+    const { answer: prompted } = await open(() =>
+      promptDialog({
+        confirmLabel: "Create organization",
+        label: "Organization name",
+        title: "Create an organization",
+      }),
+    );
+    await act(async () => dismissDialogs());
+    expect(await confirmed).toBe(false);
+    expect(await prompted).toBeNull();
+    expect(openDialog()).toBeNull();
+  });
+
+  it("is how a page change answers the question its old page asked", async () => {
+    const pages: string[] = [];
+    function Workspace() {
+      useWorkspaceNavigation(onNavigated);
+      return null;
+    }
+    const onNavigated = (pathname: string) => {
+      pages.push(pathname);
+    };
+    await mount(<Workspace />);
+    const { answer } = await open(() =>
+      confirmDialog({
+        confirmLabel: "Generate new codes",
+        message: "Every existing recovery code will stop working.",
+        title: "Generate new recovery codes?",
+        tone: "danger",
+      }),
+    );
+    // Browser Back lands on another workspace page while the question is open.
+    const back = new dom.PopStateEvent("popstate", {
+      state: { workspacePosition: -1 },
+    });
+    await act(async () => dom.dispatchEvent(back as never));
+    expect(pages).toEqual(["/"]);
+    expect(await answer).toBe(false);
+    expect(openDialog()).toBeNull();
   });
 });

@@ -9,6 +9,7 @@ export {
   type ConfirmOptions,
   confirmDialog,
   DialogHost,
+  dismissDialogs,
   type PromptOptions,
   promptDialog,
 } from "./Dialog";

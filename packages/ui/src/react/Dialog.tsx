@@ -83,6 +83,17 @@ export function promptDialog(options: PromptOptions) {
 }
 
 /**
+ * Answers every open and queued dialog with no. Call it when the page that
+ * asked is gone, so a late answer cannot act on a page nobody is looking at.
+ */
+export function dismissDialogs() {
+  const pending = requests;
+  if (pending.length === 0) return;
+  publish([]);
+  for (const request of pending) request.resolve(null);
+}
+
+/**
  * Shows the dialogs that `confirmDialog` and `promptDialog` request, one at a
  * time and in order. Mount it once, at the root of the app.
  */
