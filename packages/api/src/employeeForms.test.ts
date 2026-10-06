@@ -1131,7 +1131,10 @@ describe("employee forms", () => {
       const rejected = await fixture
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
-      expect(rejected.status).toBe(500);
+      expect(rejected.status).toBe(502);
+      expect((await rejected.json()) as { error: string }).toEqual({
+        error: "Checkr request failed (400): Package is not enabled.",
+      });
       expect(
         fixture.database
           .query(
@@ -1214,7 +1217,7 @@ describe("employee forms", () => {
       const failed = await fixture
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
-      expect(failed.status).toBe(500);
+      expect(failed.status).toBe(502);
       fixture.database
         .query("DELETE FROM member WHERE id = 'employee-member'")
         .run();
@@ -1308,7 +1311,7 @@ describe("employee forms", () => {
       const failed = await fixture
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
-      expect(failed.status).toBe(500);
+      expect(failed.status).toBe(502);
       fixture.database
         .query(
           "UPDATE employee_requirements SET checkr_start_nonce_at = ? WHERE id = ?",
@@ -1596,7 +1599,7 @@ describe("employee forms", () => {
       const first = await fixture
         .app("owner", "owner")
         .request(`/${id}/checkr/start`, jsonPost({ state: "NY" }));
-      expect(first.status).toBe(500);
+      expect(first.status).toBe(502);
       fixture.database
         .query(
           "UPDATE employee_requirements SET checkr_start_nonce_at = ? WHERE id = ?",
