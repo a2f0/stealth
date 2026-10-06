@@ -16,6 +16,7 @@ import {
 } from "./authMiddleware";
 import { billing, handleStripeWebhook, syncOrganizationSeats } from "./billing";
 import { businesses } from "./businesses";
+import { handleCheckrWebhook } from "./checkrSync";
 import { contracts } from "./contracts";
 import { employeeForms } from "./employeeForms";
 import { equipment } from "./equipment";
@@ -152,6 +153,9 @@ app.route("/api/signing", signing);
 app.use("/api/equipment", requireAuth, requireOrganization);
 app.use("/api/equipment/*", requireAuth, requireOrganization);
 app.route("/api/equipment", equipment);
+
+// Checkr signs these with the account API key; no session is involved.
+app.post("/api/checkr/webhook", handleCheckrWebhook);
 
 app.use("/api/employee-forms", requireAuth, requireOrganization);
 app.use("/api/employee-forms/*", requireAuth, requireOrganization);

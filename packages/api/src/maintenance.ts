@@ -4,6 +4,7 @@ import {
   reconcileSubscriptionSeats,
 } from "./billing";
 import { purgeExpiredFreeAuditRuns } from "./billingRetention";
+import { refreshActiveCheckrScreenings } from "./checkrSync";
 import { maintainContracts } from "./contractReminders";
 import { purgeDeletedObjects } from "./deletedObjectCleanup";
 import type { Bindings } from "./types";
@@ -50,6 +51,12 @@ export const maintenanceJobs = [
     description:
       "Sends due reminder emails and resumes stalled signing workflows.",
   },
+  {
+    id: "refreshCheckrScreenings",
+    name: "Refresh Checkr screenings",
+    description:
+      "Re-reads unfinished Checkr screenings in case a webhook was missed.",
+  },
 ] as const;
 
 type MaintenanceJobId = (typeof maintenanceJobs)[number]["id"];
@@ -69,6 +76,7 @@ export function maintenanceTasks(environment: Bindings): MaintenanceTasks {
     purgeStripeWebhookReceipts: () => purgeStripeWebhookReceipts(environment),
     reconcileSubscriptionSeats: () => reconcileSubscriptionSeats(environment),
     maintainContracts: () => maintainContracts(environment),
+    refreshCheckrScreenings: () => refreshActiveCheckrScreenings(environment),
   };
 }
 

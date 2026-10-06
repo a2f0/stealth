@@ -3,6 +3,11 @@ import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AuthSession } from "./auth";
 import type { AuthVariables } from "./authMiddleware";
+import { verifyCheckrWebhook } from "./checkr";
+import {
+  handleCheckrWebhook,
+  refreshActiveCheckrScreenings,
+} from "./checkrSync";
 import { purgeDeletedObjects } from "./deletedObjectCleanup";
 import {
   assignAcceptedInvitationRequirements,
@@ -1615,7 +1620,333 @@ describe("employee forms", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("verifies Checkr webhook signatures with Checkr's published example", async () => {
+    const payload = new TextEncoder().encode(
+      JSON.stringify({ monday: "75F", tuesday: "80F" }),
+    );
+    const signature =
+      "b7412f05e981a473b5ecbdb5393afaea02a679db6d7c8e56803512ec4ba98151";
+    expect(await verifyCheckrWebhook(payload, signature, "test-secret")).toBe(
+      true,
+    );
+    expect(await verifyCheckrWebhook(payload, signature, "other-key")).toBe(
+      false,
+    );
+    expect(await verifyCheckrWebhook(payload, "not-hex", "test-secret")).toBe(
+      false,
+    );
+    expect(await verifyCheckrWebhook(payload, undefined, "test-secret")).toBe(
+      false,
+    );
+  });
+
+  it("refreshes a screening from a signed Checkr invitation webhook", async () => {
+    const fixture = await createFixture();
+    const id = await startedScreening(fixture);
+    const requests: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      requests.push(String(input));
+      if (String(input).includes("/invitations/invitation-1?")) {
+        return Response.json({
+          id: "invitation-1",
+          report_id: "report-1",
+          status: "completed",
+        });
+      }
+      return Response.json({
+        id: "report-1",
+        result: "clear",
+        status: "complete",
+      });
+    }) as typeof fetch;
+    try {
+      const event = {
+        id: "event-1",
+        object: "event",
+        type: "invitation.completed",
+        data: { object: { id: "invitation-1", object: "invitation" } },
+      };
+      const unconfigured = await checkrWebhook(
+        withoutCheckrKey(fixture.bindings),
+        event,
+      );
+      expect(unconfigured.status).toBe(503);
+      const forged = await checkrWebhook(fixture.bindings, event, "other-key");
+      expect(forged.status).toBe(400);
+      const unsigned = await checkrWebhook(fixture.bindings, event, null);
+      expect(unsigned.status).toBe(400);
+      expect(requests).toEqual([]);
+
+      const ignored = await checkrWebhook(fixture.bindings, {
+        ...event,
+        type: "candidate.created",
+        data: { object: { id: "candidate-1", object: "candidate" } },
+      });
+      expect(ignored.status).toBe(200);
+      const malformed = await checkrWebhook(fixture.bindings, {
+        type: "invitation.completed",
+        data: {},
+      });
+      expect(malformed.status).toBe(400);
+      expect(requests).toEqual([]);
+
+      const received = await checkrWebhook(fixture.bindings, event);
+      expect(received.status).toBe(200);
+      expect((await received.json()) as { received: boolean }).toEqual({
+        received: true,
+      });
+      expect(requests).toEqual([
+        "https://api.checkr-staging.com/v1/invitations/invitation-1?include_deleted=true",
+        "https://api.checkr-staging.com/v1/reports/report-1",
+      ]);
+      expect(
+        fixture.database
+          .query(`SELECT status, checkr_report_id, checkr_result,
+                         checkr_invitation_status
+                  FROM employee_requirements WHERE id = ?`)
+          .get(id),
+      ).toEqual({
+        status: "complete",
+        checkr_report_id: "report-1",
+        checkr_result: "clear",
+        checkr_invitation_status: "completed",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("links a Checkr report webhook to its screening through the candidate", async () => {
+    const fixture = await createFixture();
+    const id = await startedScreening(fixture);
+    const requests: string[] = [];
+    let checkrAvailable = true;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (!checkrAvailable) {
+        return Response.json({ error: "unavailable" }, { status: 503 });
+      }
+      if (url.endsWith("/reports/stranger-report")) {
+        return Response.json({
+          candidate_id: "someone-else",
+          id: "stranger-report",
+          status: "complete",
+        });
+      }
+      if (url.includes("/invitations/invitation-1?")) {
+        return Response.json({
+          id: "invitation-1",
+          report_id: "report-9",
+          status: "completed",
+        });
+      }
+      return Response.json({
+        candidate_id: "candidate-1",
+        id: "report-9",
+        result: "consider",
+        status: "complete",
+      });
+    }) as typeof fetch;
+    try {
+      const stranger = await checkrWebhook(fixture.bindings, {
+        type: "report.completed",
+        data: { object: { id: "stranger-report", object: "report" } },
+      });
+      expect(stranger.status).toBe(200);
+      expect(requests).toEqual([
+        "https://api.checkr-staging.com/v1/reports/stranger-report",
+      ]);
+
+      checkrAvailable = false;
+      requests.length = 0;
+      const unavailable = await checkrWebhook(fixture.bindings, {
+        type: "report.completed",
+        data: { object: { id: "report-9", object: "report" } },
+      });
+      expect(unavailable.status).toBe(200);
+      expect(
+        fixture.database
+          .query("SELECT status FROM employee_requirements WHERE id = ?")
+          .get(id),
+      ).toEqual({ status: "in_progress" });
+
+      checkrAvailable = true;
+      requests.length = 0;
+      const completed = await checkrWebhook(fixture.bindings, {
+        type: "report.completed",
+        data: { object: { id: "report-9", object: "report" } },
+      });
+      expect(completed.status).toBe(200);
+      expect(requests).toEqual([
+        "https://api.checkr-staging.com/v1/reports/report-9",
+        "https://api.checkr-staging.com/v1/invitations/invitation-1?include_deleted=true",
+        "https://api.checkr-staging.com/v1/reports/report-9",
+      ]);
+      expect(
+        fixture.database
+          .query(`SELECT status, checkr_report_id, checkr_result
+                  FROM employee_requirements WHERE id = ?`)
+          .get(id),
+      ).toEqual({
+        status: "complete",
+        checkr_report_id: "report-9",
+        checkr_result: "consider",
+      });
+
+      requests.length = 0;
+      const duplicate = await checkrWebhook(fixture.bindings, {
+        type: "report.completed",
+        data: { object: { id: "report-9", object: "report" } },
+      });
+      expect(duplicate.status).toBe(200);
+      expect(requests).toEqual([
+        "https://api.checkr-staging.com/v1/invitations/invitation-1?include_deleted=true",
+        "https://api.checkr-staging.com/v1/reports/report-9",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("refreshes unfinished Checkr screenings on schedule", async () => {
+    const fixture = await createFixture();
+    const active = await startedScreening(fixture);
+    const failing = await startedScreening(fixture, "invitation-2");
+    const finished = await startedScreening(fixture, "invitation-3");
+    const expired = await startedScreening(fixture, "invitation-4");
+    const manual = await createRequirement(
+      fixture,
+      "background_check",
+      "Manual check",
+    );
+    fixture.database
+      .query(
+        "UPDATE employee_requirements SET status = 'complete' WHERE id = ?",
+      )
+      .run(finished);
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET status = 'pending', checkr_invitation_status = 'expired'
+              WHERE id = ?`)
+      .run(expired);
+    const requests: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes("/invitations/invitation-2?")) {
+        return Response.json({ error: "unavailable" }, { status: 503 });
+      }
+      return Response.json({
+        id: "invitation-1",
+        report_id: null,
+        status: "pending",
+      });
+    }) as typeof fetch;
+    try {
+      expect(
+        await refreshActiveCheckrScreenings(withoutCheckrKey(fixture.bindings)),
+      ).toEqual({ refreshed: 0, skipped: true });
+      expect(requests).toEqual([]);
+      await expect(
+        refreshActiveCheckrScreenings(fixture.bindings),
+      ).rejects.toThrow("Could not refresh 1 Checkr screening(s).");
+      expect(requests.toSorted()).toEqual([
+        "https://api.checkr-staging.com/v1/invitations/invitation-1?include_deleted=true",
+        "https://api.checkr-staging.com/v1/invitations/invitation-2?include_deleted=true",
+      ]);
+      const rows = fixture.database
+        .query(`SELECT id, checkr_refresh_revision
+                FROM employee_requirements ORDER BY id`)
+        .all() as Array<{ id: string; checkr_refresh_revision: number }>;
+      const revisions = Object.fromEntries(
+        rows.map((row) => [row.id, row.checkr_refresh_revision]),
+      );
+      expect(revisions[active]).toBe(1);
+      expect(revisions[failing]).toBe(0);
+      expect(revisions[finished]).toBe(0);
+      expect(revisions[expired]).toBe(0);
+      expect(revisions[manual]).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
+
+async function startedScreening(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  invitationId = "invitation-1",
+) {
+  fixture.bindings.CHECKR_API_KEY = "staging-key";
+  fixture.bindings.CHECKR_ENV = "staging";
+  const id = await createRequirement(
+    fixture,
+    "background_check",
+    "Background check",
+  );
+  fixture.database
+    .query(`UPDATE employee_requirements
+            SET checkr_candidate_id = ?, checkr_invitation_id = ?,
+                checkr_invitation_status = 'pending', status = 'in_progress'
+            WHERE id = ?`)
+    .run(
+      invitationId === "invitation-1" ? "candidate-1" : `candidate-${id}`,
+      invitationId,
+      id,
+    );
+  return id;
+}
+
+function withoutCheckrKey(bindings: Bindings): Bindings {
+  const { CHECKR_API_KEY: _apiKey, ...configured } = bindings;
+  return configured;
+}
+
+async function checkrWebhook(
+  bindings: Bindings,
+  event: unknown,
+  signingKey: string | null = "staging-key",
+) {
+  const body = JSON.stringify(event);
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (signingKey) {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(signingKey),
+      { hash: "SHA-256", name: "HMAC" },
+      false,
+      ["sign"],
+    );
+    const digest = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(body),
+    );
+    headers.set("X-Checkr-Signature", Buffer.from(digest).toString("hex"));
+  }
+  const app = new Hono<{ Bindings: Bindings }>();
+  app.post("/webhook", handleCheckrWebhook);
+  const background: Promise<unknown>[] = [];
+  const executionContext = {
+    passThroughOnException: () => undefined,
+    props: {},
+    waitUntil: (promise: Promise<unknown>) => {
+      background.push(promise);
+    },
+  } as unknown as ExecutionContext;
+  const response = await app.request(
+    "/webhook",
+    { body, headers, method: "POST" },
+    bindings,
+    executionContext,
+  );
+  await Promise.all(background);
+  return response;
+}
 
 async function createRequirement(
   fixture: Awaited<ReturnType<typeof createFixture>>,
