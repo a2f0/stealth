@@ -2010,6 +2010,27 @@ describe("employee forms", () => {
         checkr_refresh_requested_at: newer,
       });
 
+      const reordered = await createFixture();
+      const delayed = await startedScreening(reordered);
+      reordered.database
+        .query(`UPDATE employee_requirements
+                SET checkr_refresh_requested_at = ? WHERE id = ?`)
+        .run(newer, delayed);
+      const late = await checkrWebhook(reordered.bindings, {
+        type: "invitation.completed",
+        data: { object: { id: "invitation-1", object: "invitation" } },
+      });
+      expect(late.status).toBe(200);
+      expect(
+        reordered.database
+          .query(`SELECT checkr_refresh_revision, checkr_refresh_requested_at
+                  FROM employee_requirements WHERE id = ?`)
+          .get(delayed),
+      ).toEqual({
+        checkr_refresh_revision: 1,
+        checkr_refresh_requested_at: newer,
+      });
+
       const conflicted = await createFixture();
       const second = await startedScreening(conflicted);
       beforeCheckrRefreshWrite(conflicted, () => {

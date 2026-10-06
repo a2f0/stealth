@@ -147,6 +147,8 @@ async function refreshEventScreenings(
   }
 }
 
+// Keeps the latest request: a delayed write from an earlier event must not
+// move the marker back before a refresh that has not seen a later event.
 async function requestScreeningRefreshes(
   database: D1Database,
   screenings: CheckrScreeningRow[],
@@ -155,10 +157,12 @@ async function requestScreeningRefreshes(
   for (const screening of screenings) {
     await database
       .prepare(
-        `UPDATE employee_requirements SET checkr_refresh_requested_at = ?
+        `UPDATE employee_requirements
+         SET checkr_refresh_requested_at =
+           MAX(COALESCE(checkr_refresh_requested_at, ?), ?)
          WHERE id = ? AND organization_id = ?`,
       )
-      .bind(requestedAt, screening.id, screening.organization_id)
+      .bind(requestedAt, requestedAt, screening.id, screening.organization_id)
       .run();
   }
 }
