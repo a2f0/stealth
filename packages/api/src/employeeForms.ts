@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { AuthVariables } from "./authMiddleware";
 import {
+  CheckrRequestError,
   cancelCheckrInvitation,
   checkrConfigured,
   checkrPackage,
@@ -602,6 +603,14 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
     reportStatus: report?.status ?? null,
     result: report?.result ?? null,
   });
+});
+
+employeeForms.onError((error, context) => {
+  console.error(error);
+  if (error instanceof CheckrRequestError) {
+    return context.json({ error: error.message }, 502);
+  }
+  return context.json({ error: "Unexpected server error." }, 500);
 });
 
 interface CheckrStartClaim {

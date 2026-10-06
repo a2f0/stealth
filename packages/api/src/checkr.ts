@@ -26,7 +26,7 @@ interface CheckrReport {
   status: string;
 }
 
-class CheckrRequestError extends Error {
+export class CheckrRequestError extends Error {
   constructor(
     message: string,
     readonly status: number,
