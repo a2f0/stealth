@@ -1976,6 +1976,80 @@ describe("employee forms", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("keeps a Checkr refresh request that a racing refresh cannot settle", async () => {
+    const newer = "2999-01-01T00:00:00.000Z";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      Response.json({
+        id: "invitation-1",
+        report_id: null,
+        status: "pending",
+      })) as unknown as typeof fetch;
+    try {
+      const requestedDuringRefresh = await createFixture();
+      const first = await startedScreening(requestedDuringRefresh);
+      beforeCheckrRefreshWrite(requestedDuringRefresh, () => {
+        requestedDuringRefresh.database
+          .query(`UPDATE employee_requirements
+                  SET checkr_refresh_requested_at = ? WHERE id = ?`)
+          .run(newer, first);
+      });
+      const delivered = await checkrWebhook(requestedDuringRefresh.bindings, {
+        type: "invitation.completed",
+        data: { object: { id: "invitation-1", object: "invitation" } },
+      });
+      expect(delivered.status).toBe(200);
+      expect(
+        requestedDuringRefresh.database
+          .query(`SELECT checkr_refresh_revision, checkr_refresh_requested_at
+                  FROM employee_requirements WHERE id = ?`)
+          .get(first),
+      ).toEqual({
+        checkr_refresh_revision: 1,
+        checkr_refresh_requested_at: newer,
+      });
+
+      const conflicted = await createFixture();
+      const second = await startedScreening(conflicted);
+      beforeCheckrRefreshWrite(conflicted, () => {
+        conflicted.database
+          .query(`UPDATE employee_requirements
+                  SET checkr_refresh_revision = checkr_refresh_revision + 1
+                  WHERE id = ?`)
+          .run(second);
+      });
+      const raced = await checkrWebhook(conflicted.bindings, {
+        type: "invitation.completed",
+        data: { object: { id: "invitation-1", object: "invitation" } },
+      });
+      expect(raced.status).toBe(200);
+      const kept = conflicted.database
+        .query(`SELECT checkr_refresh_revision, checkr_refresh_requested_at
+                FROM employee_requirements WHERE id = ?`)
+        .get(second) as {
+        checkr_refresh_revision: number;
+        checkr_refresh_requested_at: string | null;
+      };
+      expect(kept.checkr_refresh_revision).toBe(1);
+      expect(kept.checkr_refresh_requested_at).toEqual(expect.any(String));
+      expect(await refreshActiveCheckrScreenings(conflicted.bindings)).toEqual({
+        refreshed: 1,
+        skipped: false,
+      });
+      expect(
+        conflicted.database
+          .query(`SELECT checkr_refresh_revision, checkr_refresh_requested_at
+                  FROM employee_requirements WHERE id = ?`)
+          .get(second),
+      ).toEqual({
+        checkr_refresh_revision: 2,
+        checkr_refresh_requested_at: null,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 async function startedScreening(
@@ -2000,6 +2074,26 @@ async function startedScreening(
       id,
     );
   return id;
+}
+
+// Runs action just before a Checkr refresh records its result, skipping any
+// earlier writes such as a webhook's refresh request.
+function beforeCheckrRefreshWrite(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  action: () => void,
+) {
+  const arm = () => {
+    fixture.beforeRun((query) => {
+      if (
+        query.includes("checkr_refresh_revision = checkr_refresh_revision + 1")
+      ) {
+        action();
+      } else {
+        arm();
+      }
+    });
+  };
+  arm();
 }
 
 function withoutCheckrKey(bindings: Bindings): Bindings {
