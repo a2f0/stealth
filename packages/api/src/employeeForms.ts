@@ -545,15 +545,57 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
   if (!row?.checkr_invitation_id) {
     return context.json({ error: "Screening not started." }, 404);
   }
-  const invitation = await getCheckrInvitation(
-    context.env,
-    row.checkr_invitation_id,
-  );
-  const invitationStatus = invitation.deleted_at
-    ? "deleted"
-    : invitation.status;
-  const reportId = invitation.report_id ?? row.checkr_report_id;
-  const report = reportId ? await getCheckrReport(context.env, reportId) : null;
+  const refreshed = await refreshCheckrScreening(context.env, {
+    ...row,
+    checkr_invitation_id: row.checkr_invitation_id,
+    organization_id: context.get("organizationId"),
+  });
+  if (!refreshed) {
+    return context.json({ error: "Screening changed. Please refresh." }, 409);
+  }
+  return context.json(refreshed);
+});
+
+employeeForms.onError((error, context) => {
+  console.error(error);
+  if (error instanceof CheckrRequestError) {
+    return context.json({ error: error.message }, 502);
+  }
+  return context.json({ error: "Unexpected server error." }, 500);
+});
+
+export interface CheckrScreeningRow {
+  id: string;
+  organization_id: string;
+  status: RequirementStatus;
+  checkr_invitation_id: string;
+  checkr_report_id: string | null;
+  checkr_invitation_status: string | null;
+  checkr_refresh_revision: number;
+}
+
+// Records the current Checkr invitation and report state on a started
+// screening, and clears any refresh requested before this one began. Returns
+// null when another refresh or edit changed it first. Every attempt records
+// checkr_checked_at, so a screening Checkr keeps failing on cannot hold its
+// place at the front of the scheduled refresh.
+export async function refreshCheckrScreening(
+  env: Bindings,
+  row: CheckrScreeningRow,
+) {
+  const checkedAt = new Date().toISOString();
+  const { invitationStatus, report, reportId } = await readCheckrScreening(
+    env,
+    row,
+  ).catch(async (cause: unknown) => {
+    await env.DB.prepare(
+      `UPDATE employee_requirements SET checkr_checked_at = ?
+       WHERE id = ? AND organization_id = ?`,
+    )
+      .bind(checkedAt, row.id, row.organization_id)
+      .run();
+    throw cause;
+  });
   const screeningStatus =
     report?.status === "complete" && report.includes_canceled
       ? report.result
@@ -570,13 +612,17 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
       ? "pending"
       : "in_progress";
   const now = new Date().toISOString();
-  const refreshed = await context.env.DB.prepare(
+  const refreshed = await env.DB.prepare(
     `UPDATE employee_requirements
      SET checkr_invitation_status = ?, checkr_report_id = ?,
          checkr_result = ?, status = ?,
          completed_at = CASE WHEN ? = 'complete'
            THEN COALESCE(completed_at, ?) ELSE NULL END,
-         updated_at = ?,
+         updated_at = ?, checkr_checked_at = ?,
+         checkr_refresh_requested_at = CASE
+           WHEN checkr_refresh_requested_at <= ? THEN NULL
+           ELSE checkr_refresh_requested_at
+         END,
          checkr_refresh_revision = checkr_refresh_revision + 1
      WHERE id = ? AND organization_id = ? AND checkr_invitation_id = ?
        AND checkr_refresh_revision = ?`,
@@ -589,29 +635,31 @@ employeeForms.post("/:id/checkr/refresh", async (context) => {
       nextStatus,
       now,
       now,
+      checkedAt,
+      checkedAt,
       row.id,
-      context.get("organizationId"),
+      row.organization_id,
       row.checkr_invitation_id,
       row.checkr_refresh_revision,
     )
     .run();
-  if (!refreshed.meta.changes) {
-    return context.json({ error: "Screening changed. Please refresh." }, 409);
-  }
-  return context.json({
+  if (!refreshed.meta.changes) return null;
+  return {
     invitationStatus: screeningStatus,
     reportStatus: report?.status ?? null,
     result: report?.result ?? null,
-  });
-});
+  };
+}
 
-employeeForms.onError((error, context) => {
-  console.error(error);
-  if (error instanceof CheckrRequestError) {
-    return context.json({ error: error.message }, 502);
-  }
-  return context.json({ error: "Unexpected server error." }, 500);
-});
+async function readCheckrScreening(env: Bindings, row: CheckrScreeningRow) {
+  const invitation = await getCheckrInvitation(env, row.checkr_invitation_id);
+  const invitationStatus = invitation.deleted_at
+    ? "deleted"
+    : invitation.status;
+  const reportId = invitation.report_id ?? row.checkr_report_id;
+  const report = reportId ? await getCheckrReport(env, reportId) : null;
+  return { invitationStatus, report, reportId };
+}
 
 interface CheckrStartClaim {
   checkr_candidate_id: string | null;

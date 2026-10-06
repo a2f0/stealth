@@ -10,6 +10,7 @@ import {
   verifyStripeWebhook,
 } from "./stripe";
 import type { Bindings } from "./types";
+import { readWebhookPayload } from "./webhookPayload";
 
 export const freeFormTemplateLimit = 5;
 export const freeRetentionDays = 30;
@@ -268,7 +269,10 @@ billing.post("/portal", async (context) => {
 });
 
 export async function handleStripeWebhook(context: Context<BillingEnv>) {
-  const payload = await readStripeWebhookPayload(context.req.raw);
+  const payload = await readWebhookPayload(
+    context.req.raw,
+    maxStripeWebhookBytes,
+  );
   if (payload === null) {
     return context.json({ error: "Webhook payload is too large." }, 413);
   }
@@ -325,33 +329,6 @@ export async function handleStripeWebhook(context: Context<BillingEnv>) {
     throw cause;
   }
   return context.json({ received: true });
-}
-
-async function readStripeWebhookPayload(request: Request) {
-  const contentLength = Number(request.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > maxStripeWebhookBytes) {
-    return null;
-  }
-  if (request.body === null) return new ArrayBuffer(0);
-  const reader = request.body.getReader();
-  const bytes = new Uint8Array(maxStripeWebhookBytes);
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) return bytes.slice(0, total).buffer;
-      if (total + value.byteLength > maxStripeWebhookBytes) {
-        void reader
-          .cancel("Stripe webhook payload exceeded the limit.")
-          .catch(() => undefined);
-        return null;
-      }
-      bytes.set(value, total);
-      total += value.byteLength;
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 export async function organizationSeatLimit(

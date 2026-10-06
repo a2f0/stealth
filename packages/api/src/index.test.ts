@@ -19,6 +19,7 @@ it("tombstones expired audit images before scheduled cleanup", async () => {
     purgeStripeWebhookReceipts: async () => events.push("webhook receipts"),
     reconcileSubscriptionSeats: async () => events.push("seats"),
     maintainContracts: async () => events.push("contracts"),
+    refreshCheckrScreenings: async () => events.push("checkr screenings"),
   });
 
   await Promise.resolve();
@@ -34,6 +35,7 @@ it("tombstones expired audit images before scheduled cleanup", async () => {
     "webhook receipts",
     "seats",
     "contracts",
+    "checkr screenings",
   ]);
 });
 
@@ -51,6 +53,7 @@ it("runs independent maintenance after retention fails", async () => {
     purgeStripeWebhookReceipts: async () => events.push("webhook receipts"),
     reconcileSubscriptionSeats: async () => events.push("seats"),
     maintainContracts: async () => events.push("contracts"),
+    refreshCheckrScreenings: async () => events.push("checkr screenings"),
   });
 
   await expect(maintenance).rejects.toThrow("Scheduled maintenance failed.");
@@ -62,5 +65,6 @@ it("runs independent maintenance after retention fails", async () => {
     "webhook receipts",
     "seats",
     "contracts",
+    "checkr screenings",
   ]);
 });

@@ -20,6 +20,7 @@ interface CheckrInvitationList {
 }
 
 interface CheckrReport {
+  candidate_id?: string;
   id: string;
   includes_canceled?: boolean;
   result: string | null;
@@ -126,6 +127,27 @@ export async function listCheckrCandidateInvitations(
 
 export async function getCheckrReport(env: Bindings, id: string) {
   return checkrRequest<CheckrReport>(env, `/reports/${encodeURIComponent(id)}`);
+}
+
+// Checkr signs each webhook with an HMAC-SHA256 hex digest of the compact
+// JSON body, keyed with the account's API key.
+export async function verifyCheckrWebhook(
+  payload: BufferSource,
+  signature: string | undefined,
+  apiKey: string,
+) {
+  if (!signature || !/^[0-9a-f]{64}$/i.test(signature)) return false;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(apiKey),
+    { hash: "SHA-256", name: "HMAC" },
+    false,
+    ["verify"],
+  );
+  const expected = Uint8Array.from(signature.match(/../g) ?? [], (pair) =>
+    Number.parseInt(pair, 16),
+  );
+  return crypto.subtle.verify("HMAC", key, expected, payload);
 }
 
 async function checkrRequest<T>(

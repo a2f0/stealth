@@ -337,9 +337,12 @@ managers. Deleted or replaced form files are queued for R2 cleanup.
 Background and credit screening use Checkr's hosted invitation flow. A manager
 starts a screening with the person's US work state and optional city. Checkr
 emails the person to collect the information and authorization it requires.
-Managers use **Refresh check** to retrieve the current invitation and report
-status. A completed report is marked complete in the app; a `consider` result
-still needs the manager's review in Checkr.
+Checkr webhooks update a screening when its invitation or report changes. An
+hourly Worker task refreshes up to 24 screenings that are unfinished or whose
+webhook refresh failed, least recently checked first, in case a webhook was
+missed. Managers can also use **Refresh check** to retrieve the current
+invitation and report status at any time. A completed report is marked complete
+in the app; a `consider` result still needs the manager's review in Checkr.
 If a start request loses its response, retry it while Checkr's idempotency key
 is valid. For an older unresolved request, look up the invitation in Checkr and
 enter its ID in **Link invitation**. The app verifies the candidate, package,
@@ -362,6 +365,21 @@ Checkr to enable an employment credit screening package if needed. The
 deployment scripts upload the three values as Worker secrets when present.
 Without a configured package and key, managers can still track a check
 manually.
+
+Register the API's webhook URL with each Checkr account, either under
+**Developer Settings** in the Checkr Dashboard or with `POST /v1/webhooks`:
+
+| Checkr account | Webhook URL |
+| --- | --- |
+| Staging | `https://api-staging.tearleads.de/api/checkr/webhook` |
+| Production | `https://api.tearleads.de/api/checkr/webhook` |
+
+Checkr signs each delivery with the account's API key, so the Worker's
+`CHECKR_API_KEY` must belong to the account that sends the webhook. The endpoint
+rejects unsigned or mis-signed requests and acknowledges valid ones before
+refreshing the matching screening. Checkr staging completes reports only for
+the mocked candidates in the data document Checkr provides with the staging
+account; any other candidate's report stays `pending` indefinitely.
 
 ## Billing and plans
 
