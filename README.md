@@ -337,9 +337,10 @@ managers. Deleted or replaced form files are queued for R2 cleanup.
 Background and credit screening use Checkr's hosted invitation flow. A manager
 starts a screening with the person's US work state and optional city. Checkr
 emails the person to collect the information and authorization it requires.
-Checkr webhooks update a screening when its invitation or report changes, and an
-hourly Worker task refreshes up to 24 unfinished screenings in case a webhook
-was missed. Managers can also use **Refresh check** to retrieve the current
+Checkr webhooks update a screening when its invitation or report changes. An
+hourly Worker task refreshes up to 24 screenings that are unfinished or whose
+webhook refresh failed, least recently checked first, in case a webhook was
+missed. Managers can also use **Refresh check** to retrieve the current
 invitation and report status at any time. A completed report is marked complete
 in the app; a `consider` result still needs the manager's review in Checkr.
 If a start request loses its response, retry it while Checkr's idempotency key

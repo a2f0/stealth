@@ -18,10 +18,11 @@ interface CheckrEventSubject {
   kind: "invitation" | "report";
 }
 
-// Checkr posts invitation and report events here. A verified event is
-// acknowledged at once, as Checkr asks, and then only triggers a refresh from
-// the Checkr API, so duplicate or out-of-order deliveries settle on the current
-// state. The hourly refresh below covers events whose refresh fails.
+// Checkr posts invitation and report events here. A verified event marks its
+// screenings for refresh and is acknowledged at once, as Checkr asks; the
+// refresh then reads the Checkr API, so duplicate or out-of-order deliveries
+// settle on the current state. When that refresh fails, the mark keeps the
+// screening in the hourly refresh below, even if it was already complete.
 export async function handleCheckrWebhook(
   context: Context<{ Bindings: Bindings }>,
 ) {
@@ -56,17 +57,26 @@ export async function handleCheckrWebhook(
     return context.json({ error: "Webhook event is invalid." }, 400);
   }
   if (subject !== "ignored") {
+    const screenings = await screeningsForEvent(
+      context.env.DB,
+      subject.id,
+      subject.candidateId,
+    );
+    await requestScreeningRefreshes(context.env.DB, screenings);
     context.executionCtx.waitUntil(
-      refreshEventScreenings(context.env, subject).catch((cause) => {
-        console.error("Could not apply a Checkr webhook event.", cause);
-      }),
+      refreshEventScreenings(context.env, subject, screenings).catch(
+        (cause) => {
+          console.error("Could not apply a Checkr webhook event.", cause);
+        },
+      ),
     );
   }
   return context.json({ received: true });
 }
 
-// Safety net for missed webhooks: re-reads the least recently updated
-// screenings that Checkr has not finished.
+// Safety net for missed webhooks and failed refreshes: re-reads the least
+// recently checked screenings that Checkr has not finished or that a webhook
+// asked to refresh.
 export async function refreshActiveCheckrScreenings(env: Bindings) {
   if (!env.CHECKR_API_KEY) return { refreshed: 0, skipped: true };
   const { results } = await env.DB.prepare(
@@ -74,10 +84,12 @@ export async function refreshActiveCheckrScreenings(env: Bindings) {
             checkr_report_id, checkr_invitation_status,
             checkr_refresh_revision
      FROM employee_requirements
-     WHERE checkr_invitation_id IS NOT NULL AND status <> 'complete'
-       AND (checkr_invitation_status IS NULL OR checkr_invitation_status NOT IN
-              ('expired', 'canceled', 'deleted', 'partially_canceled'))
-     ORDER BY updated_at ASC
+     WHERE checkr_invitation_id IS NOT NULL
+       AND (checkr_refresh_requested_at IS NOT NULL OR (
+         status <> 'complete'
+         AND (checkr_invitation_status IS NULL OR checkr_invitation_status NOT IN
+                ('expired', 'canceled', 'deleted', 'partially_canceled'))))
+     ORDER BY checkr_checked_at ASC, updated_at ASC
      LIMIT ?`,
   )
     .bind(screeningRefreshLimit)
@@ -111,14 +123,12 @@ export async function refreshActiveCheckrScreenings(env: Bindings) {
 async function refreshEventScreenings(
   env: Bindings,
   subject: CheckrEventSubject,
+  matched: CheckrScreeningRow[],
 ) {
-  let screenings = await screeningsForEvent(
-    env.DB,
-    subject.id,
-    subject.candidateId,
-  );
+  let screenings = matched;
   // Without include_object a report event carries only its ID, and a new
-  // report is not linked to its screening until the first refresh.
+  // report is not linked to its screening until the first refresh. That
+  // screening is unfinished, so the hourly refresh covers a failed lookup.
   if (
     screenings.length === 0 &&
     subject.kind === "report" &&
@@ -130,9 +140,26 @@ async function refreshEventScreenings(
       subject.id,
       report.candidate_id ?? null,
     );
+    await requestScreeningRefreshes(env.DB, screenings);
   }
   for (const screening of screenings) {
     await refreshCheckrScreening(env, screening);
+  }
+}
+
+async function requestScreeningRefreshes(
+  database: D1Database,
+  screenings: CheckrScreeningRow[],
+) {
+  const requestedAt = new Date().toISOString();
+  for (const screening of screenings) {
+    await database
+      .prepare(
+        `UPDATE employee_requirements SET checkr_refresh_requested_at = ?
+         WHERE id = ? AND organization_id = ?`,
+      )
+      .bind(requestedAt, screening.id, screening.organization_id)
+      .run();
   }
 }
 

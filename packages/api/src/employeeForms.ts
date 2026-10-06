@@ -575,17 +575,27 @@ export interface CheckrScreeningRow {
 }
 
 // Records the current Checkr invitation and report state on a started
-// screening. Returns null when another refresh or edit changed it first.
+// screening, and clears any refresh requested before this one began. Returns
+// null when another refresh or edit changed it first. Every attempt records
+// checkr_checked_at, so a screening Checkr keeps failing on cannot hold its
+// place at the front of the scheduled refresh.
 export async function refreshCheckrScreening(
   env: Bindings,
   row: CheckrScreeningRow,
 ) {
-  const invitation = await getCheckrInvitation(env, row.checkr_invitation_id);
-  const invitationStatus = invitation.deleted_at
-    ? "deleted"
-    : invitation.status;
-  const reportId = invitation.report_id ?? row.checkr_report_id;
-  const report = reportId ? await getCheckrReport(env, reportId) : null;
+  const checkedAt = new Date().toISOString();
+  const { invitationStatus, report, reportId } = await readCheckrScreening(
+    env,
+    row,
+  ).catch(async (cause: unknown) => {
+    await env.DB.prepare(
+      `UPDATE employee_requirements SET checkr_checked_at = ?
+       WHERE id = ? AND organization_id = ?`,
+    )
+      .bind(checkedAt, row.id, row.organization_id)
+      .run();
+    throw cause;
+  });
   const screeningStatus =
     report?.status === "complete" && report.includes_canceled
       ? report.result
@@ -608,7 +618,11 @@ export async function refreshCheckrScreening(
          checkr_result = ?, status = ?,
          completed_at = CASE WHEN ? = 'complete'
            THEN COALESCE(completed_at, ?) ELSE NULL END,
-         updated_at = ?,
+         updated_at = ?, checkr_checked_at = ?,
+         checkr_refresh_requested_at = CASE
+           WHEN checkr_refresh_requested_at <= ? THEN NULL
+           ELSE checkr_refresh_requested_at
+         END,
          checkr_refresh_revision = checkr_refresh_revision + 1
      WHERE id = ? AND organization_id = ? AND checkr_invitation_id = ?
        AND checkr_refresh_revision = ?`,
@@ -621,6 +635,8 @@ export async function refreshCheckrScreening(
       nextStatus,
       now,
       now,
+      checkedAt,
+      checkedAt,
       row.id,
       row.organization_id,
       row.checkr_invitation_id,
@@ -633,6 +649,16 @@ export async function refreshCheckrScreening(
     reportStatus: report?.status ?? null,
     result: report?.result ?? null,
   };
+}
+
+async function readCheckrScreening(env: Bindings, row: CheckrScreeningRow) {
+  const invitation = await getCheckrInvitation(env, row.checkr_invitation_id);
+  const invitationStatus = invitation.deleted_at
+    ? "deleted"
+    : invitation.status;
+  const reportId = invitation.report_id ?? row.checkr_report_id;
+  const report = reportId ? await getCheckrReport(env, reportId) : null;
+  return { invitationStatus, report, reportId };
 }
 
 interface CheckrStartClaim {

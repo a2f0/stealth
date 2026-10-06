@@ -1704,7 +1704,7 @@ describe("employee forms", () => {
       expect(
         fixture.database
           .query(`SELECT status, checkr_report_id, checkr_result,
-                         checkr_invitation_status
+                         checkr_invitation_status, checkr_refresh_requested_at
                   FROM employee_requirements WHERE id = ?`)
           .get(id),
       ).toEqual({
@@ -1712,6 +1712,7 @@ describe("employee forms", () => {
         checkr_report_id: "report-1",
         checkr_result: "clear",
         checkr_invitation_status: "completed",
+        checkr_refresh_requested_at: null,
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -1875,6 +1876,106 @@ describe("employee forms", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("rotates scheduled Checkr refreshes past screenings that keep failing", async () => {
+    const fixture = await createFixture();
+    const invitations = Array.from(
+      { length: 26 },
+      (_, index) => `rotating-${String(index).padStart(2, "0")}`,
+    );
+    for (const invitation of invitations) {
+      await startedScreening(fixture, invitation);
+    }
+    const attempted: string[][] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const invitation = /invitations\/([^?]+)/.exec(String(input))?.[1];
+      if (invitation) attempted.at(-1)?.push(invitation);
+      return Response.json({ error: "unavailable" }, { status: 503 });
+    }) as typeof fetch;
+    try {
+      for (let run = 0; run < 2; run += 1) {
+        attempted.push([]);
+        await expect(
+          refreshActiveCheckrScreenings(fixture.bindings),
+        ).rejects.toThrow("Could not refresh 24 Checkr screening(s).");
+      }
+      expect(attempted[0]).toHaveLength(24);
+      const skipped = invitations.filter(
+        (invitation) => !attempted[0]?.includes(invitation),
+      );
+      expect(skipped).toHaveLength(2);
+      for (const invitation of skipped) {
+        expect(attempted[1]).toContain(invitation);
+      }
+      expect(
+        fixture.database
+          .query(`SELECT COUNT(*) AS unchecked FROM employee_requirements
+                  WHERE checkr_checked_at IS NULL`)
+          .get(),
+      ).toEqual({ unchecked: 0 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("retries a failed webhook refresh even after the screening completed", async () => {
+    const fixture = await createFixture();
+    const id = await startedScreening(fixture);
+    fixture.database
+      .query(`UPDATE employee_requirements
+              SET status = 'complete', checkr_report_id = 'report-1',
+                  checkr_result = 'clear',
+                  checkr_invitation_status = 'completed'
+              WHERE id = ?`)
+      .run(id);
+    let checkrAvailable = false;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      if (!checkrAvailable) {
+        return Response.json({ error: "unavailable" }, { status: 503 });
+      }
+      if (String(input).includes("/invitations/invitation-1?")) {
+        return Response.json({
+          id: "invitation-1",
+          report_id: "report-1",
+          status: "completed",
+        });
+      }
+      return Response.json({ id: "report-1", result: null, status: "pending" });
+    }) as typeof fetch;
+    try {
+      const upgraded = await checkrWebhook(fixture.bindings, {
+        type: "report.upgraded",
+        data: { object: { id: "report-1", object: "report" } },
+      });
+      expect(upgraded.status).toBe(200);
+      const requested = fixture.database
+        .query(`SELECT status, checkr_refresh_requested_at
+                FROM employee_requirements WHERE id = ?`)
+        .get(id) as { status: string; checkr_refresh_requested_at: string };
+      expect(requested.status).toBe("complete");
+      expect(requested.checkr_refresh_requested_at).toEqual(expect.any(String));
+
+      checkrAvailable = true;
+      expect(await refreshActiveCheckrScreenings(fixture.bindings)).toEqual({
+        refreshed: 1,
+        skipped: false,
+      });
+      expect(
+        fixture.database
+          .query(`SELECT status, checkr_result, checkr_refresh_requested_at
+                  FROM employee_requirements WHERE id = ?`)
+          .get(id),
+      ).toEqual({
+        status: "in_progress",
+        checkr_result: null,
+        checkr_refresh_requested_at: null,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 async function startedScreening(
@@ -2007,6 +2108,7 @@ async function createFixture() {
   await migration(database, "0045_track_employee_form_uploads.sql");
   await migration(database, "0046_version_employee_screening_refresh.sql");
   await migration(database, "0047_bind_employee_screening_attempt.sql");
+  await migration(database, "0052_track_checkr_refreshes.sql");
   const files = new Map<string, File>();
   const storageState = { failPutAfterWrite: false, failDelete: false };
   const hooks: {
