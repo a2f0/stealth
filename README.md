@@ -77,9 +77,13 @@ Registration sends a
 one-hour verification link, but unverified users can sign in immediately. The
 library displays a reminder with a resend action until the address is verified.
 Root admins can list registered accounts at `/root/users` and inspect all
-organizations at `/root/organizations`. The shared inbound mailbox is at
-`/inbox`. Each account receives a default organization at signup; existing
-accounts are backfilled by the organization migration. Organization owners and
+organizations at `/root/organizations`. Clicking an organization name opens
+its admin detail page with the organization's people, employee requirements,
+Checkr results, and links to
+available Checkr reports, without changing the admin's active workspace.
+The shared inbound mailbox is at `/inbox`. Each account receives a default
+organization at signup; existing accounts are backfilled by the organization
+migration. Organization owners and
 administrators can rename their organization at `/organization`. The API
 independently enforces the platform `admin` role for administrative data.
 

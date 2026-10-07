@@ -12,9 +12,26 @@ export function isOrganizationPath(pathname: string) {
 export function isRootAdminPath(pathname: string) {
   return (
     pathname === "/root/users" ||
-    pathname === "/root/organizations" ||
+    isAdminOrganizationPath(pathname) ||
     pathname === "/root/jobs"
   );
+}
+
+export function isAdminOrganizationPath(pathname: string) {
+  return (
+    pathname === "/root/organizations" ||
+    pathname.startsWith("/root/organizations/")
+  );
+}
+
+export function adminOrganizationIdForPath(pathname: string) {
+  const match = /^\/root\/organizations\/([^/]+)\/?$/.exec(pathname);
+  if (!match?.[1]) return undefined;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return undefined;
+  }
 }
 
 export function organizationPathRequiresAccess(pathname: string) {

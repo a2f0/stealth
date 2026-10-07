@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  adminOrganizationIdForPath,
   assignableOrganizationRoles,
   canDeleteOrganization,
   canLeaveOrganizationWithOwnerCount,
@@ -68,6 +69,7 @@ describe("organization state", () => {
       "/account/security",
       "/root/users",
       "/root/organizations",
+      "/root/organizations/other-organization",
       "/root/jobs",
       "/invite",
     ]) {
@@ -77,7 +79,24 @@ describe("organization state", () => {
     expect(isRootAdminPath("/root/jobs")).toBeTrue();
     expect(isRootAdminPath("/root/users")).toBeTrue();
     expect(isRootAdminPath("/root/organizations")).toBeTrue();
+    expect(
+      isRootAdminPath("/root/organizations/other-organization"),
+    ).toBeTrue();
     expect(isRootAdminPath("/admin")).toBeFalse();
+  });
+
+  it("resolves organization detail links and rejects malformed IDs", () => {
+    expect(adminOrganizationIdForPath("/root/organizations/org%2F1")).toBe(
+      "org/1",
+    );
+    expect(adminOrganizationIdForPath("/root/organizations/org-1/")).toBe(
+      "org-1",
+    );
+    expect(adminOrganizationIdForPath("/root/organizations")).toBeUndefined();
+    expect(adminOrganizationIdForPath("/root/organizations/%")).toBeUndefined();
+    expect(
+      adminOrganizationIdForPath("/root/organizations/org-1/unexpected"),
+    ).toBeUndefined();
   });
 
   it("only lets organization managers invite members", () => {
