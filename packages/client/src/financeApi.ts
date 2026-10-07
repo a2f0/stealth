@@ -1,4 +1,5 @@
 import type { LinkedEmail } from "./api";
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export interface FinanceConnection {
@@ -136,7 +137,7 @@ export function syncFinanceConnection(id: string) {
 }
 
 export async function disconnectFinanceConnection(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/finance/connections/${encodeURIComponent(id)}`,
     { credentials: "include", method: "DELETE" },
   );
@@ -144,7 +145,7 @@ export async function disconnectFinanceConnection(id: string) {
 }
 
 export async function deleteFinanceConnectionData(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/finance/connections/${encodeURIComponent(id)}/data`,
     { credentials: "include", method: "DELETE" },
   );
@@ -194,7 +195,7 @@ export function renameExpenseCategory(id: string, name: string) {
 }
 
 export async function deleteExpenseCategory(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/finance/categories/${encodeURIComponent(id)}`,
     { credentials: "include", method: "DELETE" },
   );
@@ -224,7 +225,7 @@ async function request<T>(path: string, init?: RequestInit) {
     credentials: "include",
   };
   if (init?.body) requestInit.headers = { "Content-Type": "application/json" };
-  const response = await fetch(`${apiUrl}/api/finance${path}`, requestInit);
+  const response = await fetchApi(`${apiUrl}/api/finance${path}`, requestInit);
   if (response.ok) return response.json() as Promise<T>;
   throw await parseError(response);
 }

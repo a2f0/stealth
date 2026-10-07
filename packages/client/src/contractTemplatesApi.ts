@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 import type { DraftField, DraftInput } from "./contractsApi";
 
@@ -115,7 +116,7 @@ export function deleteContractTemplate(id: string) {
 }
 
 export async function loadTemplateDocument(id: string, version: number) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${root}${path(id)}/document?version=${version}`,
     { credentials: "include" },
   );
@@ -129,7 +130,7 @@ function path(id: string) {
 }
 
 async function request<T>(route: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${root}${route}`, {
+  const response = await fetchApi(`${root}${route}`, {
     ...init,
     credentials: "include",
     ...(typeof init?.body === "string"

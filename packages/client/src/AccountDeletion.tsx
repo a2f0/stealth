@@ -1,9 +1,10 @@
 import { Banner, Button, Card, confirmDialog } from "@tearleads/ui/react";
 import { useEffect, useState } from "react";
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 async function deletionRequest(method: "GET" | "POST" | "DELETE") {
-  const response = await fetch(`${apiUrl}/api/account-settings/deletion`, {
+  const response = await fetchApi(`${apiUrl}/api/account-settings/deletion`, {
     method,
     credentials: "include",
     ...(method === "POST"

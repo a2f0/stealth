@@ -1,5 +1,6 @@
 import { Banner, Button, Card, cx, Field } from "@tearleads/ui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchApi } from "./apiVersion";
 import { ContractPages } from "./ContractDocument";
 import {
   EditorOverlay,
@@ -514,7 +515,7 @@ function draftFrom(contract: ContractDetail): DraftInput {
 }
 
 async function fetchDocument(id: string) {
-  const response = await fetch(contractDocumentUrl(id), {
+  const response = await fetchApi(contractDocumentUrl(id), {
     credentials: "include",
   });
   if (!response.ok) throw new Error("The document could not be loaded.");

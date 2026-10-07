@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export type EmployeeRequirementKind =
@@ -43,7 +44,7 @@ export interface RequirementDraft {
 const endpoint = `${apiUrl}/api/employee-forms`;
 
 export async function listEmployeeRequirements() {
-  const response = await fetch(endpoint, { credentials: "include" });
+  const response = await fetchApi(endpoint, { credentials: "include" });
   return (
     await parseResponse<{ requirements: EmployeeRequirement[] }>(response)
   ).requirements;
@@ -53,7 +54,7 @@ export async function createEmployeeRequirements(
   target: { invitationId: string } | { memberId: string },
   requirements: RequirementDraft[],
 ) {
-  const response = await fetch(endpoint, {
+  const response = await fetchApi(endpoint, {
     body: JSON.stringify({ ...target, requirements }),
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -70,7 +71,7 @@ export async function updateEmployeeRequirement(
     status?: EmployeeRequirementStatus;
   },
 ) {
-  const response = await fetch(`${endpoint}/${encodeURIComponent(id)}`, {
+  const response = await fetchApi(`${endpoint}/${encodeURIComponent(id)}`, {
     body: JSON.stringify(update),
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -80,7 +81,7 @@ export async function updateEmployeeRequirement(
 }
 
 export async function deleteEmployeeRequirement(id: string) {
-  const response = await fetch(`${endpoint}/${encodeURIComponent(id)}`, {
+  const response = await fetchApi(`${endpoint}/${encodeURIComponent(id)}`, {
     credentials: "include",
     method: "DELETE",
   });
@@ -90,7 +91,7 @@ export async function deleteEmployeeRequirement(id: string) {
 export async function uploadEmployeeForm(id: string, file: File) {
   const body = new FormData();
   body.set("file", file);
-  const response = await fetch(
+  const response = await fetchApi(
     `${endpoint}/${encodeURIComponent(id)}/document`,
     {
       body,
@@ -106,7 +107,7 @@ export async function startCheckrScreening(
   state: string,
   city: string,
 ) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${endpoint}/${encodeURIComponent(id)}/checkr/start`,
     {
       body: JSON.stringify({ state, city }),
@@ -122,7 +123,7 @@ export async function reconcileCheckrScreening(
   id: string,
   invitationId: string,
 ) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${endpoint}/${encodeURIComponent(id)}/checkr/reconcile`,
     {
       body: JSON.stringify({ invitationId }),
@@ -135,7 +136,7 @@ export async function reconcileCheckrScreening(
 }
 
 export async function refreshCheckrScreening(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${endpoint}/${encodeURIComponent(id)}/checkr/refresh`,
     {
       credentials: "include",
@@ -150,7 +151,7 @@ export async function refreshCheckrScreening(id: string) {
 }
 
 export async function downloadEmployeeForm(id: string, filename: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${endpoint}/${encodeURIComponent(id)}/document`,
     {
       credentials: "include",

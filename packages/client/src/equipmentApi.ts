@@ -1,4 +1,5 @@
 import type { LinkedEmail } from "./api";
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export interface EquipmentMember {
@@ -75,7 +76,7 @@ export async function updateEquipment(
 }
 
 export async function deleteEquipment(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/equipment/${encodeURIComponent(id)}`,
     { credentials: "include", method: "DELETE" },
   );
@@ -85,7 +86,10 @@ export async function deleteEquipment(id: string) {
 async function request<T>(path: string, init?: RequestInit) {
   const requestInit: RequestInit = { ...init, credentials: "include" };
   if (init?.body) requestInit.headers = { "Content-Type": "application/json" };
-  const response = await fetch(`${apiUrl}/api/equipment${path}`, requestInit);
+  const response = await fetchApi(
+    `${apiUrl}/api/equipment${path}`,
+    requestInit,
+  );
   if (response.ok) return response.json() as Promise<T>;
   throw await parseError(response);
 }

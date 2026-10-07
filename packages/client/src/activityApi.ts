@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export interface ActivityActor {
@@ -51,7 +52,7 @@ export async function listActivity(source?: ActivitySource, cursor?: string) {
     ? `/api/audits/${source.type === "audit_run" ? "runs" : "templates"}/${encodeURIComponent(source.id)}/activity`
     : "/api/activity";
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-  const response = await fetch(`${apiUrl}${base}${query}`, {
+  const response = await fetchApi(`${apiUrl}${base}${query}`, {
     credentials: "include",
   });
   if (!response.ok) {

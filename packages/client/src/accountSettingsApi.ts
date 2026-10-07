@@ -1,7 +1,8 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 async function updateDefaultOrganization(organizationId: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/account-settings/default-organization`,
     {
       body: JSON.stringify({ organizationId }),

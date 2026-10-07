@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 import type { WorkspaceOrganization } from "./organizationState";
 
@@ -24,15 +25,18 @@ export interface OrganizationPeopleData {
 }
 
 export async function deleteCurrentOrganization() {
-  const response = await fetch(`${apiUrl}/api/organization-settings/current`, {
-    credentials: "include",
-    method: "DELETE",
-  });
+  const response = await fetchApi(
+    `${apiUrl}/api/organization-settings/current`,
+    {
+      credentials: "include",
+      method: "DELETE",
+    },
+  );
   return parseResponse<{ deletedAt: string; organizationId: string }>(response);
 }
 
 export async function getWorkspaceOrganizations() {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/organization-settings/organizations`,
     { credentials: "include" },
   );
@@ -43,9 +47,12 @@ export async function getWorkspaceOrganizations() {
 }
 
 export async function getOrganizationPeople() {
-  const response = await fetch(`${apiUrl}/api/organization-settings/people`, {
-    credentials: "include",
-  });
+  const response = await fetchApi(
+    `${apiUrl}/api/organization-settings/people`,
+    {
+      credentials: "include",
+    },
+  );
   return parseResponse<OrganizationPeopleData>(response);
 }
 
@@ -53,7 +60,7 @@ export async function updateMemberTwoFactorRequirement(
   memberId: string,
   required: boolean,
 ) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/organization-settings/people/${encodeURIComponent(memberId)}/two-factor-required`,
     {
       body: JSON.stringify({ required }),

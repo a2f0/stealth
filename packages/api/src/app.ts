@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { version as apiVersion } from "../package.json";
 import { accountSettings } from "./accountSettings";
 import { activity } from "./activity";
 import { adminJobs } from "./adminJobs";
@@ -30,10 +31,19 @@ import { signing } from "./signing";
 import type { Bindings } from "./types";
 import { userDeletion } from "./userDeletion";
 
+const apiVersionHeader = "API-Version";
+
 const app = new Hono<{
   Bindings: Bindings;
   Variables: AuthVariables;
 }>();
+
+// Every response names the API version, errors and preflights included, so
+// the client can show which deploy answered.
+app.use("*", async (context, next) => {
+  await next();
+  context.header(apiVersionHeader, apiVersion);
+});
 
 app.use(
   "/api/*",
@@ -41,7 +51,7 @@ app.use(
     allowHeaders: ["Authorization", "Content-Type"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
-    exposeHeaders: ["Retry-After", "X-Document-Revision"],
+    exposeHeaders: ["Retry-After", "X-Document-Revision", apiVersionHeader],
     origin: (_origin, context) => context.env.CORS_ORIGIN,
   }),
 );

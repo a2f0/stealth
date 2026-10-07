@@ -193,6 +193,13 @@
   width: min(18rem, calc(100vw - 2rem));
 }
 
+.menuMeta {
+  margin: 0;
+  padding: var(--space-1) var(--space-2-5) var(--space-2);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
 .accountMenuError {
   margin: 0 var(--space-2-5) var(--space-2);
   color: var(--color-danger-fg);

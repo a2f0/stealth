@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export type ContractStatus =
@@ -136,7 +137,7 @@ export async function listContracts() {
 export async function uploadContract(file: File) {
   const form = new FormData();
   form.set("file", file);
-  const response = await fetch(`${apiUrl}/api/contracts`, {
+  const response = await fetchApi(`${apiUrl}/api/contracts`, {
     body: form,
     credentials: "include",
     method: "POST",
@@ -197,7 +198,7 @@ export async function voidContract(id: string, reason: string) {
 }
 
 export async function deleteContract(id: string) {
-  const response = await fetch(`${apiUrl}/api/contracts${path(id)}`, {
+  const response = await fetchApi(`${apiUrl}/api/contracts${path(id)}`, {
     credentials: "include",
     method: "DELETE",
   });
@@ -219,7 +220,10 @@ function path(id: string) {
 async function request<T>(route: string, init?: RequestInit) {
   const requestInit: RequestInit = { ...init, credentials: "include" };
   if (init?.body) requestInit.headers = { "Content-Type": "application/json" };
-  const response = await fetch(`${apiUrl}/api/contracts${route}`, requestInit);
+  const response = await fetchApi(
+    `${apiUrl}/api/contracts${route}`,
+    requestInit,
+  );
   if (response.ok) return response.json() as Promise<T>;
   throw await parseError(response);
 }

@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export interface MaintenanceJob {
@@ -16,7 +17,7 @@ export interface MaintenanceRun {
 }
 
 export async function listMaintenanceJobs() {
-  const response = await fetch(`${apiUrl}/api/admin/jobs`, {
+  const response = await fetchApi(`${apiUrl}/api/admin/jobs`, {
     credentials: "include",
   });
   if (!response.ok) throw new Error("Could not load maintenance jobs.");
@@ -25,7 +26,7 @@ export async function listMaintenanceJobs() {
 }
 
 export async function triggerMaintenanceJob(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/admin/jobs/${encodeURIComponent(id)}/run`,
     {
       credentials: "include",
