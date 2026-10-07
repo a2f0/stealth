@@ -8,6 +8,7 @@ import {
   markOrganizationForDeletion,
   restoreOrganization,
 } from "./organizationDeletion";
+import { listOrganizationMembers } from "./organizationMembers";
 import type { Bindings } from "./types";
 
 const adminOrganizations = new Hono<{
@@ -29,9 +30,7 @@ interface OrganizationRow {
   slug: string;
 }
 
-adminOrganizations.get("/", async (context) => {
-  const result = await context.env.DB.prepare(
-    `SELECT organization.id, organization.name, organization.slug,
+const organizationQuery = `SELECT organization.id, organization.name, organization.slug,
             organization.createdAt AS created_at,
             organization.deletedAt AS deleted_at,
             organization.deletedByUserId AS deleted_by_user_id,
@@ -44,28 +43,110 @@ adminOrganizations.get("/", async (context) => {
        ON owner.defaultOrganizationId = organization.id
      LEFT JOIN user AS deleted_by
        ON deleted_by.id = organization.deletedByUserId
-     LEFT JOIN member ON member.organizationId = organization.id
+     LEFT JOIN member ON member.organizationId = organization.id`;
+
+adminOrganizations.get("/", async (context) => {
+  const result = await context.env.DB.prepare(
+    `${organizationQuery}
      GROUP BY organization.id
      ORDER BY organization.createdAt DESC
      LIMIT 100`,
   ).all<OrganizationRow>();
 
   return context.json({
-    organizations: result.results.map((organization) => ({
-      createdAt: organization.created_at,
-      deletedByEmail: organization.deleted_by_email,
-      deletedByName: organization.deleted_by_name,
-      deletedByUserId: organization.deleted_by_user_id,
-      deletedAt: organization.deleted_at,
-      id: organization.id,
-      memberCount: organization.member_count,
-      name: organization.name,
-      ownerEmail: organization.owner_email,
-      ownerName: organization.owner_name,
-      slug: organization.slug,
-    })),
+    organizations: result.results.map(toAdminOrganization),
   });
 });
+
+adminOrganizations.get("/:organizationId", async (context) => {
+  const organizationId = context.req.param("organizationId");
+  const organization = await context.env.DB.prepare(
+    `${organizationQuery} WHERE organization.id = ? GROUP BY organization.id`,
+  )
+    .bind(organizationId)
+    .first<OrganizationRow>();
+  if (!organization) {
+    return context.json({ error: "Organization not found." }, 404);
+  }
+  const [members, requirements] = await Promise.all([
+    listOrganizationMembers(context.env.DB, organizationId),
+    listAdminRequirements(context.env, organizationId),
+  ]);
+  return context.json({
+    organization: toAdminOrganization(organization),
+    members,
+    requirements,
+  });
+});
+
+function toAdminOrganization(organization: OrganizationRow) {
+  return {
+    createdAt: organization.created_at,
+    deletedByEmail: organization.deleted_by_email,
+    deletedByName: organization.deleted_by_name,
+    deletedByUserId: organization.deleted_by_user_id,
+    deletedAt: organization.deleted_at,
+    id: organization.id,
+    memberCount: organization.member_count,
+    name: organization.name,
+    ownerEmail: organization.owner_email,
+    ownerName: organization.owner_name,
+    slug: organization.slug,
+  };
+}
+
+interface AdminRequirementRow {
+  id: string;
+  kind: "form" | "background_check" | "credit_check";
+  title: string;
+  due_date: string;
+  status: "pending" | "in_progress" | "submitted" | "complete";
+  target_name: string | null;
+  target_email: string;
+  completed_at: string | null;
+  checkr_invitation_status: string | null;
+  checkr_result: string | null;
+  checkr_report_id: string | null;
+}
+
+async function listAdminRequirements(env: Bindings, organizationId: string) {
+  const result = await env.DB.prepare(
+    `SELECT requirement.id, requirement.kind, requirement.title,
+            requirement.due_date, requirement.status, requirement.completed_at,
+            target.name AS target_name,
+            COALESCE(target.email, invitation.email, requirement.target_email)
+              AS target_email,
+            requirement.checkr_invitation_status, requirement.checkr_result,
+            requirement.checkr_report_id
+     FROM employee_requirements AS requirement
+     LEFT JOIN member ON member.id = requirement.member_id
+     LEFT JOIN user AS target ON target.id = member.userId
+     LEFT JOIN invitation ON invitation.id = requirement.invitation_id
+     WHERE requirement.organization_id = ?
+     ORDER BY requirement.due_date ASC, requirement.created_at ASC`,
+  )
+    .bind(organizationId)
+    .all<AdminRequirementRow>();
+  const dashboard =
+    env.CHECKR_ENV === "production"
+      ? "https://dashboard.checkr.com"
+      : "https://dashboard.checkrhq-staging.net";
+  return result.results.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    dueDate: row.due_date,
+    status: row.status,
+    targetName: row.target_name,
+    targetEmail: row.target_email,
+    completedAt: row.completed_at,
+    checkrInvitationStatus: row.checkr_invitation_status,
+    checkrResult: row.checkr_result,
+    checkrReportUrl: row.checkr_report_id
+      ? `${dashboard}/reports/${encodeURIComponent(row.checkr_report_id)}`
+      : null,
+  }));
+}
 
 adminOrganizations.delete("/:organizationId", async (context) => {
   const organizationId = context.req.param("organizationId");

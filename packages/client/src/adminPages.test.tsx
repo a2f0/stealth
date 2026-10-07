@@ -20,7 +20,9 @@ describe("root admin pages", () => {
   });
 
   it("keeps the organization listing on the Organizations page", () => {
-    const markup = renderToStaticMarkup(<AdminOrganizations />);
+    const markup = renderToStaticMarkup(
+      <AdminOrganizations onNavigate={() => {}} />,
+    );
 
     expect(markup).toContain("All organizations");
     expect(markup).toContain("Loading organizations…");

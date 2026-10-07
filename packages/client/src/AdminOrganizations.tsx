@@ -17,6 +17,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { AdminOrganizationDetails } from "./AdminOrganizationDetails";
 import { formatDate, Identity } from "./adminDisplay";
 import {
   type AdminOrganization,
@@ -25,6 +26,7 @@ import {
   restoreAdminOrganization,
 } from "./api";
 import { countLabel } from "./labels";
+import { adminOrganizationIdForPath } from "./organizationState";
 
 interface AdminOrganizationAction {
   organizationId: string;
@@ -37,7 +39,34 @@ interface OrganizationActions {
   onRestore: (organization: AdminOrganization) => Promise<void>;
 }
 
-export function AdminOrganizations() {
+interface OrganizationTableActions extends OrganizationActions {
+  onNavigate: (pathname: string) => void;
+}
+
+export function AdminOrganizations({
+  onNavigate,
+  pathname = "/root/organizations",
+}: {
+  onNavigate: (pathname: string) => void;
+  pathname?: string | undefined;
+}) {
+  const organizationId = adminOrganizationIdForPath(pathname);
+  return organizationId ? (
+    <AdminOrganizationDetails
+      key={organizationId}
+      onNavigate={onNavigate}
+      organizationId={organizationId}
+    />
+  ) : (
+    <AdminOrganizationList onNavigate={onNavigate} />
+  );
+}
+
+function AdminOrganizationList({
+  onNavigate,
+}: {
+  onNavigate: (pathname: string) => void;
+}) {
   const [organizations, setOrganizations] = useState<AdminOrganization[]>();
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string>();
@@ -84,6 +113,7 @@ export function AdminOrganizations() {
           action={lifecycle.action}
           busy={busy}
           onMarkForDeletion={lifecycle.markForDeletion}
+          onNavigate={onNavigate}
           onRestore={lifecycle.restore}
           organizations={organizations}
         />
@@ -164,9 +194,10 @@ function OrganizationSection({
   action,
   busy,
   onMarkForDeletion,
+  onNavigate,
   onRestore,
   organizations,
-}: OrganizationActions & {
+}: OrganizationTableActions & {
   busy: boolean;
   organizations?: AdminOrganization[] | undefined;
 }) {
@@ -187,6 +218,7 @@ function OrganizationSection({
         <OrganizationTable
           action={action}
           onMarkForDeletion={onMarkForDeletion}
+          onNavigate={onNavigate}
           onRestore={onRestore}
           organizations={organizations}
         />
@@ -206,9 +238,10 @@ function OrganizationSection({
 function OrganizationTable({
   action,
   onMarkForDeletion,
+  onNavigate,
   onRestore,
   organizations,
-}: OrganizationActions & { organizations: AdminOrganization[] }) {
+}: OrganizationTableActions & { organizations: AdminOrganization[] }) {
   return (
     <div className="tableWrap">
       <table className="table adminOrganizationTable">
@@ -233,6 +266,7 @@ function OrganizationTable({
               action={action}
               key={organization.id}
               onMarkForDeletion={onMarkForDeletion}
+              onNavigate={onNavigate}
               onRestore={onRestore}
               organization={organization}
             />
@@ -246,14 +280,35 @@ function OrganizationTable({
 function OrganizationTableRow({
   action,
   onMarkForDeletion,
+  onNavigate,
   onRestore,
   organization,
-}: OrganizationActions & { organization: AdminOrganization }) {
+}: OrganizationTableActions & { organization: AdminOrganization }) {
   return (
     <tr>
       <td>
         <div className="adminIdentityText adminOrganization">
-          <span className="adminOrganizationName">{organization.name}</span>
+          <a
+            className="adminOrganizationName adminOrganizationLink"
+            href={`/root/organizations/${encodeURIComponent(organization.id)}`}
+            onClick={(event) => {
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              ) {
+                return;
+              }
+              event.preventDefault();
+              onNavigate(
+                `/root/organizations/${encodeURIComponent(organization.id)}`,
+              );
+            }}
+          >
+            {organization.name}
+          </a>
           <span className="adminSlug mono">{organization.slug}</span>
         </div>
       </td>
