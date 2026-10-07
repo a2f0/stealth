@@ -5,7 +5,7 @@ import {
   toolExecutable,
 } from "../process/trustedTooling";
 
-export interface PrIdentity {
+interface PrIdentity {
   readonly branch: string;
   readonly repo: string;
   readonly prNumber: string;

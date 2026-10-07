@@ -1,9 +1,7 @@
 import type { KnipConfig } from "knip";
 
 const rootToolingWorkspace = {
-  entry: ["commitlint.config.mts"],
-  project: ["*.{ts,mts}"],
-  ignoreDependencies: ["markdownlint-cli2"],
+  project: ["*.{css,ts,mts}"],
   ignoreBinaries: ["shellcheck"],
 };
 
@@ -23,11 +21,11 @@ const baseConfig = {
     ".": rootToolingWorkspace,
     "packages/agent-tool": {
       entry: ["src/index.ts", "src/**/*.test.ts"],
-      project: ["src/**/*.ts"],
+      project: ["src/**/*.{css,ts}"],
     },
     "packages/api": {
       entry: ["src/**/*.test.ts"],
-      project: ["src/**/*.ts"],
+      project: ["src/**/*.{css,ts}"],
     },
     "packages/client": {
       entry: ["browser/**/*.test.tsx"],
@@ -39,7 +37,7 @@ const baseConfig = {
     },
     "packages/website": {
       entry: ["src/pages/**/*.astro"],
-      project: ["src/**/*.{astro,ts}"],
+      project: ["src/**/*.{astro,css,ts}"],
     },
   },
 } satisfies KnipConfig;

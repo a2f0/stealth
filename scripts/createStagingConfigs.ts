@@ -9,7 +9,20 @@ const required = (name: string) => {
   return value;
 };
 
-async function config(app: string): Promise<Record<string, unknown>> {
+interface WorkerConfig extends Record<string, unknown> {
+  name?: string;
+  vars?: Record<string, unknown>;
+  d1_databases?: {
+    binding: string;
+    database_name: string;
+    database_id: string;
+    migrations_dir: string;
+  }[];
+  r2_buckets?: { binding: string; bucket_name: string }[];
+  triggers?: unknown;
+}
+
+async function config(app: string): Promise<WorkerConfig> {
   const source = resolve(root, "packages", app, "wrangler.jsonc");
   const parsed = ts.parseConfigFileTextToJson(
     source,
@@ -18,7 +31,7 @@ async function config(app: string): Promise<Record<string, unknown>> {
   if (parsed.error || !parsed.config) {
     throw new Error(`Could not parse ${source}`);
   }
-  return parsed.config as Record<string, unknown>;
+  return parsed.config as WorkerConfig;
 }
 
 async function save(app: string, value: Record<string, unknown>) {
@@ -30,7 +43,7 @@ async function save(app: string, value: Record<string, unknown>) {
 const api = await config("api");
 api.name = "tearleads-api-staging";
 api.vars = {
-  ...(api.vars as Record<string, unknown>),
+  ...api.vars,
   BETTER_AUTH_URL: "https://api-staging.tearleads.de",
   CORS_ORIGIN: "https://app-staging.tearleads.de",
   CHECKR_ENV: "staging",
@@ -38,7 +51,7 @@ api.vars = {
   PLAID_ENV: "sandbox",
   PLAID_REDIRECT_URI: "https://app-staging.tearleads.de/finance",
   STRIPE_PORTAL_CONFIGURATION_ID:
-    process.env.STAGING_STRIPE_PORTAL_CONFIGURATION_ID ?? "",
+    Reflect.get(process.env, "STAGING_STRIPE_PORTAL_CONFIGURATION_ID") ?? "",
   STRIPE_PRO_LEGACY_PRICE_IDS: "",
   STRIPE_PRO_PRICE_ID: required("STAGING_STRIPE_PRO_PRICE_ID"),
 };

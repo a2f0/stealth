@@ -27,7 +27,7 @@ export interface InboundEmailSummary {
 
 export type InboxFolder = "inbox" | "trash";
 
-export interface InboundEmailAttachment {
+interface InboundEmailAttachment {
   contentType: string;
   filename: string;
   id: string;

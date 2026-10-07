@@ -33,11 +33,7 @@ export function organizationSettingsPage(
   return "general";
 }
 
-export const organizationInvitationRoles = [
-  "member",
-  "admin",
-  "owner",
-] as const;
+const organizationInvitationRoles = ["member", "admin", "owner"] as const;
 
 export type OrganizationInvitationRole =
   (typeof organizationInvitationRoles)[number];

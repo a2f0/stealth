@@ -2,7 +2,7 @@ import type { ActivityActor } from "./activityApi";
 import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
-export type AuditResponseType = "check" | "text";
+type AuditResponseType = "check" | "text";
 export type AuditStatus = "completed" | "in_progress";
 export type AuditTemplateScope = "global" | "organization";
 
@@ -39,7 +39,7 @@ export interface AuditTemplate {
   version: number;
 }
 
-export type AuditTemplateVersionActor = ActivityActor;
+type AuditTemplateVersionActor = ActivityActor;
 
 export interface AuditTemplateVersion {
   createdAt: string;

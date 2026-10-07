@@ -1,13 +1,13 @@
-export type AuditResponseType = "check" | "text";
+type AuditResponseType = "check" | "text";
 
-export interface AuditTemplateItem {
+interface AuditTemplateItem {
   id: string;
   prompt: string;
   required: boolean;
   responseType: AuditResponseType;
 }
 
-export interface AuditTemplateSection {
+interface AuditTemplateSection {
   id: string;
   items: AuditTemplateItem[];
   title: string;
