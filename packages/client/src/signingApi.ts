@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 import type {
   ContractStatus,
@@ -77,7 +78,7 @@ function path(token: string) {
 async function request<T>(route: string, init?: RequestInit) {
   const requestInit: RequestInit = { ...init, credentials: "omit" };
   if (init?.body) requestInit.headers = { "Content-Type": "application/json" };
-  const response = await fetch(`${apiUrl}/api/signing${route}`, requestInit);
+  const response = await fetchApi(`${apiUrl}/api/signing${route}`, requestInit);
   if (response.ok) return response.json() as Promise<T>;
   const body = (await response.json().catch(() => null)) as {
     error?: string;

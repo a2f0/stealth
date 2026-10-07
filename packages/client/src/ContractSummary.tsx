@@ -9,6 +9,7 @@ import {
   promptDialog,
 } from "@tearleads/ui/react";
 import { useState } from "react";
+import { fetchApi } from "./apiVersion";
 import { boxStyle, ContractPages } from "./ContractDocument";
 import {
   confirmContractDeletion,
@@ -330,7 +331,7 @@ export function ContractStatusBadge({
 }
 
 async function fetchPdf(url: string) {
-  const response = await fetch(url, { credentials: "include" });
+  const response = await fetchApi(url, { credentials: "include" });
   if (!response.ok) throw new Error("The document could not be loaded.");
   return response.arrayBuffer();
 }

@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 import type { OrganizationMember } from "./organizationSettingsApi";
 
@@ -78,7 +79,7 @@ export function deleteOrganizationGroup(id: string) {
 
 async function request<T>(path: string, init?: RequestInit) {
   const headers = init?.body ? { "Content-Type": "application/json" } : {};
-  const response = await fetch(`${apiUrl}/api/organization-groups${path}`, {
+  const response = await fetchApi(`${apiUrl}/api/organization-groups${path}`, {
     ...init,
     credentials: "include",
     headers,

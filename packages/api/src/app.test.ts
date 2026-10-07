@@ -1,5 +1,6 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
+import { version } from "../package.json";
 import { app } from "./app";
 import { createAuth } from "./auth";
 import type { Bindings } from "./types";
@@ -46,8 +47,49 @@ describe("api", () => {
       "https://app.test",
     );
     expect(response.headers.get("access-control-expose-headers")).toBe(
-      "Retry-After,X-Document-Revision",
+      "Retry-After,X-Document-Revision,API-Version",
     );
+  });
+
+  it("names the API version on every response", async () => {
+    const authDatabase = new Database(":memory:");
+    authDatabase.exec(
+      await Bun.file(
+        new URL("../migrations/0003_create_auth.sql", import.meta.url),
+      ).text(),
+    );
+    const responses = [
+      await app.request("/health", undefined, {} as Bindings),
+      await app.request("/missing", undefined, {} as Bindings),
+      await app.request("/api/me", undefined, authBindings()),
+      await app.request(
+        "/api/inbox",
+        {
+          headers: {
+            "Access-Control-Request-Method": "GET",
+            Origin: "https://app.test",
+          },
+          method: "OPTIONS",
+        },
+        authBindings(),
+      ),
+      await app.request("/api/auth/ok", undefined, authBindings(authDatabase), {
+        passThroughOnException: () => undefined,
+        props: {},
+        waitUntil: () => undefined,
+      } as unknown as ExecutionContext),
+      // Without an execution context the auth route throws.
+      await app.request("/api/auth/get-session", undefined, authBindings()),
+    ];
+
+    // Health, not found, unauthenticated, a CORS preflight, a Better Auth
+    // response, and an unexpected error.
+    expect(responses.map((response) => response.status)).toEqual([
+      200, 404, 401, 204, 200, 500,
+    ]);
+    for (const response of responses) {
+      expect(response.headers.get("API-Version")).toBe(version);
+    }
   });
 
   it("requires authentication for the inbox", async () => {

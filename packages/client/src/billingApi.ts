@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export interface BillingStatus {
@@ -22,7 +23,7 @@ export async function getBillingStatus(sessionId?: string) {
   const query = sessionId
     ? `?${new URLSearchParams({ session_id: sessionId })}`
     : "";
-  const response = await fetch(`${apiUrl}/api/billing${query}`, {
+  const response = await fetchApi(`${apiUrl}/api/billing${query}`, {
     credentials: "include",
   });
   return parseResponse<BillingStatus>(response);
@@ -48,7 +49,7 @@ export async function redirectToCurrentBillingSession(
 }
 
 async function billingRedirect(endpoint: "checkout" | "portal") {
-  const response = await fetch(`${apiUrl}/api/billing/${endpoint}`, {
+  const response = await fetchApi(`${apiUrl}/api/billing/${endpoint}`, {
     credentials: "include",
     method: "POST",
   });

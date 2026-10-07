@@ -6,13 +6,14 @@ import {
   twoFactorClient,
 } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export const authClient = createAuthClient({
   baseURL: apiUrl,
-  // Like the app's other API calls, look fetch up per request instead of
-  // keeping the one present when this client was created.
-  fetchOptions: { customFetchImpl: (input, init) => fetch(input, init) },
+  // Like the app's other API calls, go through fetchApi: it looks fetch up per
+  // request and records the API version each response names.
+  fetchOptions: { customFetchImpl: (input, init) => fetchApi(input, init) },
   plugins: [
     inferAdditionalFields({
       user: {

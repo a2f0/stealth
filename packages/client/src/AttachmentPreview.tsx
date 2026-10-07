@@ -5,6 +5,7 @@ import type {
   RenderTask,
 } from "pdfjs-dist";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { fetchApi } from "./apiVersion";
 import { countLabel, formatBytes } from "./labels";
 import { isRenderCancellation, openPdf, renderPdfPage } from "./pdfDocument";
 
@@ -345,7 +346,7 @@ function usePdfDocument(url: string, enabled: boolean): PdfState {
     let active = true;
     let task: PDFDocumentLoadingTask | undefined;
     setState({ loading: true });
-    fetch(url, { credentials: "include" })
+    fetchApi(url, { credentials: "include" })
       .then((response) => {
         if (!response.ok) throw new Error("The PDF could not be downloaded.");
         return response.arrayBuffer();

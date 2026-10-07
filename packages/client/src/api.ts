@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export interface StoredObject {
@@ -114,7 +115,7 @@ export interface AdminOrganization {
 }
 
 export async function listAdminOrganizations() {
-  const response = await fetch(`${apiUrl}/api/admin/organizations`, {
+  const response = await fetchApi(`${apiUrl}/api/admin/organizations`, {
     credentials: "include",
   });
   const body = await parseResponse<{ organizations: AdminOrganization[] }>(
@@ -124,7 +125,7 @@ export async function listAdminOrganizations() {
 }
 
 export async function markAdminOrganizationForDeletion(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/admin/organizations/${encodeURIComponent(id)}`,
     {
       credentials: "include",
@@ -141,7 +142,7 @@ export async function markAdminOrganizationForDeletion(id: string) {
 }
 
 export async function restoreAdminOrganization(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/admin/organizations/${encodeURIComponent(id)}/restore`,
     {
       credentials: "include",
@@ -152,7 +153,7 @@ export async function restoreAdminOrganization(id: string) {
 }
 
 export async function listInboundEmails(folder: InboxFolder = "inbox") {
-  const response = await fetch(`${apiUrl}/api/inbox${folderQuery(folder)}`, {
+  const response = await fetchApi(`${apiUrl}/api/inbox${folderQuery(folder)}`, {
     credentials: "include",
   });
   return parseResponse<OrganizationInbox>(response);
@@ -162,7 +163,7 @@ export async function getInboundEmail(
   id: string,
   folder: InboxFolder = "inbox",
 ) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/inbox/${encodeURIComponent(id)}${folderQuery(folder)}`,
     {
       credentials: "include",
@@ -181,7 +182,7 @@ export function inboundAttachmentUrl(
 }
 
 export async function deleteInboundEmail(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/inbox/${encodeURIComponent(id)}`,
     { credentials: "include", method: "DELETE" },
   );
@@ -193,7 +194,7 @@ export async function deleteInboundEmail(id: string) {
 }
 
 export async function restoreInboundEmail(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/inbox/${encodeURIComponent(id)}/restore`,
     { credentials: "include", method: "POST" },
   );
@@ -204,7 +205,7 @@ export async function linkInboundEmail(
   emailId: string,
   target: InboundEmailLinkTarget,
 ) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/inbox/${encodeURIComponent(emailId)}/links`,
     {
       body: JSON.stringify(target),
@@ -218,7 +219,7 @@ export async function linkInboundEmail(
 }
 
 export async function unlinkInboundEmail(emailId: string, linkId: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/inbox/${encodeURIComponent(emailId)}/links/${encodeURIComponent(linkId)}`,
     { credentials: "include", method: "DELETE" },
   );
@@ -234,7 +235,7 @@ function folderQuery(folder: InboxFolder) {
 /** Lists one folder's files, or the files at the library root. */
 export async function listObjects(folderId?: string) {
   const query = folderId ? `?folder=${encodeURIComponent(folderId)}` : "";
-  const response = await fetch(`${apiUrl}/api/objects${query}`, {
+  const response = await fetchApi(`${apiUrl}/api/objects${query}`, {
     credentials: "include",
   });
   const body = await parseResponse<{ objects: StoredObject[] }>(response);
@@ -245,7 +246,7 @@ export async function uploadObject(file: File, folderId?: string) {
   const form = new FormData();
   form.set("file", file);
   if (folderId) form.set("folderId", folderId);
-  const response = await fetch(`${apiUrl}/api/objects`, {
+  const response = await fetchApi(`${apiUrl}/api/objects`, {
     method: "POST",
     body: form,
     credentials: "include",
@@ -254,7 +255,7 @@ export async function uploadObject(file: File, folderId?: string) {
 }
 
 export async function deleteObject(id: string) {
-  const response = await fetch(`${apiUrl}/api/objects/${id}`, {
+  const response = await fetchApi(`${apiUrl}/api/objects/${id}`, {
     method: "DELETE",
     credentials: "include",
   });
@@ -265,7 +266,7 @@ export async function deleteObject(id: string) {
 
 /** Moves a file into a folder, or back to the library root with null. */
 export async function moveObject(id: string, folderId: string | null) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/objects/${encodeURIComponent(id)}`,
     {
       body: JSON.stringify({ folderId }),
@@ -283,7 +284,7 @@ export function objectDownloadUrl(id: string) {
 }
 
 export async function listLibraryFolders() {
-  const response = await fetch(`${apiUrl}/api/library/folders`, {
+  const response = await fetchApi(`${apiUrl}/api/library/folders`, {
     credentials: "include",
   });
   const body = await parseResponse<{ folders: LibraryFolder[] }>(response);
@@ -291,7 +292,7 @@ export async function listLibraryFolders() {
 }
 
 export async function getLibraryFolder(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/library/folders/${encodeURIComponent(id)}`,
     { credentials: "include" },
   );
@@ -301,7 +302,7 @@ export async function getLibraryFolder(id: string) {
 }
 
 export async function createLibraryFolder(name: string) {
-  const response = await fetch(`${apiUrl}/api/library/folders`, {
+  const response = await fetchApi(`${apiUrl}/api/library/folders`, {
     body: JSON.stringify({ name }),
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -312,7 +313,7 @@ export async function createLibraryFolder(name: string) {
 }
 
 export async function renameLibraryFolder(id: string, name: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/library/folders/${encodeURIComponent(id)}`,
     {
       body: JSON.stringify({ name }),
@@ -325,7 +326,7 @@ export async function renameLibraryFolder(id: string, name: string) {
 }
 
 export async function deleteLibraryFolder(id: string) {
-  const response = await fetch(
+  const response = await fetchApi(
     `${apiUrl}/api/library/folders/${encodeURIComponent(id)}`,
     { credentials: "include", method: "DELETE" },
   );

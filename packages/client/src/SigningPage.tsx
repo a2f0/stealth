@@ -8,6 +8,7 @@ import {
   promptDialog,
 } from "@tearleads/ui/react";
 import { useEffect, useState } from "react";
+import { fetchApi } from "./apiVersion";
 import { boxStyle, ContractPages } from "./ContractDocument";
 import { fieldTypeLabel, initialsFor } from "./contractFields";
 import { SignatureDialog } from "./SignatureDialog";
@@ -384,7 +385,7 @@ function SigningOutcome({ token, view }: { token: string; view: SigningView }) {
 }
 
 async function fetchSigningDocument(token: string) {
-  const response = await fetch(signingDocumentUrl(token), {
+  const response = await fetchApi(signingDocumentUrl(token), {
     credentials: "omit",
   });
   if (!response.ok) throw new Error("The document could not be loaded.");

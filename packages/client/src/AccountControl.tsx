@@ -1,6 +1,8 @@
 import { Avatar, Icon } from "@tearleads/ui/react";
 import { useId, useRef, useState } from "react";
+import { version as appVersion } from "../package.json";
 import type { AccountSession } from "./accountSessions";
+import { useApiVersion } from "./apiVersion";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { useMenuDismissal } from "./useMenuDismissal";
 
@@ -186,7 +188,20 @@ function AccountMenu({
         <Icon name="signOut" />
         {busy === "sign-out" ? "Signing out…" : "Sign out of this account"}
       </button>
+      <hr className="menuSeparator" />
+      <AppVersions />
     </div>
+  );
+}
+
+// The API version follows a deploy: it is whatever the latest response named.
+function AppVersions() {
+  const apiVersion = useApiVersion();
+  return (
+    <p className="menuMeta">
+      App v{appVersion} · API{" "}
+      {apiVersion === null ? "version unknown" : `v${apiVersion}`}
+    </p>
   );
 }
 

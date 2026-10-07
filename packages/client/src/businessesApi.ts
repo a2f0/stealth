@@ -1,3 +1,4 @@
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export interface Business {
@@ -63,7 +64,7 @@ export function deleteBusiness(id: string) {
 
 async function request<T>(path: string, init?: RequestInit) {
   const headers = init?.body ? { "Content-Type": "application/json" } : {};
-  const response = await fetch(`${apiUrl}/api/businesses${path}`, {
+  const response = await fetchApi(`${apiUrl}/api/businesses${path}`, {
     ...init,
     credentials: "include",
     headers,

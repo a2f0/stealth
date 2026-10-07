@@ -1,4 +1,5 @@
 import type { ActivityActor } from "./activityApi";
+import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 
 export type AuditResponseType = "check" | "text";
@@ -292,7 +293,7 @@ async function request<T>(path: string, init?: RequestInit) {
   if (init?.body && !(init.body instanceof FormData) && !init.headers) {
     requestInit.headers = { "Content-Type": "application/json" };
   }
-  const response = await fetch(`${apiUrl}/api/audits${path}`, requestInit);
+  const response = await fetchApi(`${apiUrl}/api/audits${path}`, requestInit);
   if (response.ok) {
     return response.status === 204
       ? (undefined as T)
