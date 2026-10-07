@@ -1,5 +1,10 @@
 import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
+import type {
+  EmployeeRequirementKind,
+  EmployeeRequirementStatus,
+} from "./employeeFormsApi";
+import type { OrganizationMember } from "./organizationSettingsApi";
 
 export interface StoredObject {
   folderId: string | null;
@@ -112,6 +117,34 @@ export interface AdminOrganization {
   ownerEmail: string | null;
   ownerName: string | null;
   slug: string;
+}
+
+export interface AdminOrganizationRequirement {
+  checkrInvitationStatus: string | null;
+  checkrReportUrl: string | null;
+  checkrResult: string | null;
+  completedAt: string | null;
+  dueDate: string;
+  id: string;
+  kind: EmployeeRequirementKind;
+  status: EmployeeRequirementStatus;
+  targetEmail: string;
+  targetName: string | null;
+  title: string;
+}
+
+export interface AdminOrganizationDetail {
+  members: OrganizationMember[];
+  organization: AdminOrganization;
+  requirements: AdminOrganizationRequirement[];
+}
+
+export async function getAdminOrganization(id: string) {
+  const response = await fetchApi(
+    `${apiUrl}/api/admin/organizations/${encodeURIComponent(id)}`,
+    { credentials: "include" },
+  );
+  return parseResponse<AdminOrganizationDetail>(response);
 }
 
 export async function listAdminOrganizations() {

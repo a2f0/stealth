@@ -46,6 +46,15 @@
   font-weight: 600;
 }
 
+.adminOrganizationLink {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.adminOrganizationLink:hover {
+  color: var(--color-text-subtle);
+}
+
 .adminStatus {
   display: grid;
   justify-items: start;

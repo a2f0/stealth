@@ -40,6 +40,7 @@ import { OrganizationSettings } from "./OrganizationSettings";
 import { getWorkspaceOrganizations } from "./organizationSettingsApi";
 import {
   createOrganizationSlug,
+  isAdminOrganizationPath,
   isOrganizationPath,
   isRootAdminPath,
   organizationPathRequiresAccess,
@@ -545,7 +546,9 @@ function contentForPath(
   }
   if (pathname === "/root/jobs") return <AdminJobs />;
   if (pathname === "/root/users") return <AdminUsers />;
-  if (pathname === "/root/organizations") return <AdminOrganizations />;
+  if (isAdminOrganizationPath(pathname)) {
+    return <AdminOrganizations onNavigate={navigate} pathname={pathname} />;
+  }
   if (pathname === "/account" || pathname === "/account/security") {
     return (
       <AccountSettings
@@ -602,7 +605,9 @@ function activePageFor(pathname: string) {
   if (pathname === "/inbox") return "inbox" as const;
   if (pathname === "/root/jobs") return "rootJobs" as const;
   if (pathname === "/root/users") return "rootUsers" as const;
-  if (pathname === "/root/organizations") return "rootOrganizations" as const;
+  if (isAdminOrganizationPath(pathname)) {
+    return "rootOrganizations" as const;
+  }
   if (pathname === "/account" || pathname === "/account/security") {
     return "account" as const;
   }
