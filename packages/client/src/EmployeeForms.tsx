@@ -333,7 +333,10 @@ function RequirementItem({
         </Badge>
       </div>
       {canManage && requirement.checkrResult && (
-        <p className="rowMeta">Checkr result: {requirement.checkrResult}</p>
+        <CheckrResult
+          completedAt={requirement.completedAt}
+          result={requirement.checkrResult}
+        />
       )}
       <div className="requirementActions">
         <RequirementDocumentControl
@@ -419,13 +422,19 @@ function CheckrControl({
   const [city, setCity] = useState("");
   const [invitationId, setInvitationId] = useState("");
   if (requirement.checkrStarted) {
+    // Once the report has a result, a completed invitation adds nothing.
+    const settled =
+      requirement.checkrResult !== null &&
+      requirement.checkrInvitationStatus === "completed";
     return (
       <>
-        <span className="rowMeta">
-          Checkr:{" "}
-          {requirement.checkrInvitationStatus?.replaceAll("_", " ") ??
-            "pending"}
-        </span>
+        {!settled && (
+          <span className="rowMeta">
+            Checkr:{" "}
+            {requirement.checkrInvitationStatus?.replaceAll("_", " ") ??
+              "pending"}
+          </span>
+        )}
         <Button
           disabled={busy}
           onClick={() =>
@@ -508,6 +517,33 @@ function CheckrControl({
           ? "Restart Checkr check"
           : "Start Checkr check"}
       </Button>
+    </div>
+  );
+}
+
+function CheckrResult({
+  completedAt,
+  result,
+}: {
+  completedAt: string | null;
+  result: string;
+}) {
+  return (
+    <div className="checkrResult">
+      <Badge tone={checkrResultTone(result)}>
+        Checkr result: {formatCheckrResult(result)}
+      </Badge>
+      {completedAt && (
+        <span className="rowMeta">
+          Completed {formatTimestamp(completedAt)}
+        </span>
+      )}
+      {result === "consider" && (
+        <p className="rowMeta">
+          The report found records to review. Review it in Checkr before making
+          a decision.
+        </p>
+      )}
     </div>
   );
 }
@@ -629,6 +665,24 @@ function statusTone(status: EmployeeRequirementStatus) {
   if (status === "complete") return "success";
   if (status === "pending") return "warning";
   return "info";
+}
+
+function checkrResultTone(result: string) {
+  if (result === "clear") return "success";
+  if (result === "consider") return "warning";
+  return "neutral";
+}
+
+function formatCheckrResult(result: string) {
+  return result
+    .replaceAll("_", " ")
+    .replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function formatTimestamp(value: string) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+    new Date(value),
+  );
 }
 
 function formatDate(value: string) {
