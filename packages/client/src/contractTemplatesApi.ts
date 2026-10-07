@@ -2,7 +2,7 @@ import { fetchApi } from "./apiVersion";
 import { apiUrl } from "./config";
 import type { DraftField, DraftInput } from "./contractsApi";
 
-export interface TemplateRole {
+interface TemplateRole {
   key: string;
   label: string;
   routingOrder: number;

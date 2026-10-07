@@ -45,7 +45,7 @@ export interface StampedField {
   text?: string | undefined;
 }
 
-export interface CertificateSigner {
+interface CertificateSigner {
   email: string;
   ip: string | null;
   name: string;

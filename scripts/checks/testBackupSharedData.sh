@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FIXTURE="$(mktemp -d "$REPO_ROOT/.backup-test.XXXXXX")"
-GPG_HOME="$(mktemp -d "$HOME/.backup-gnupg.XXXXXX")"
+GPG_HOME="$(mktemp -d "${TMPDIR:-/tmp}/stealth-backup-gnupg.XXXXXX")"
 trap 'rm -rf "$FIXTURE" "$GPG_HOME"' EXIT
 mkdir -p "$FIXTURE/source/.secrets" "$FIXTURE/output" "$FIXTURE/bin"
 chmod 700 "$GPG_HOME"

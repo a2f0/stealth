@@ -34,7 +34,7 @@ export interface ContractSummary {
   updatedAt: string;
 }
 
-export interface ContractRecipient {
+interface ContractRecipient {
   declineReason: string | null;
   declinedAt: string | null;
   email: string;
@@ -56,7 +56,7 @@ export interface FieldBox {
   y: number;
 }
 
-export interface ContractField extends FieldBox {
+interface ContractField extends FieldBox {
   id: string;
   label: string | null;
   recipientId: string;

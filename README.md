@@ -18,7 +18,10 @@ and Biome) without carrying over its mature product architecture.
 
 ## Start locally
 
-Install [Bun](https://bun.sh/) and authenticate Wrangler with a Cloudflare
+Install [Bun](https://bun.sh/) 1.4.2 and Node.js 22.22.1 or newer; CI uses
+Node.js 24.21.0. Bun owns the workspace lockfile; Node runs tooling with Node
+shebangs, including commitlint and lint-staged. Install Terraform, TFLint, and
+ShellCheck for the complete lint suite. Authenticate Wrangler with a Cloudflare
 account when you are ready to provision remote resources.
 
 ```sh
@@ -611,6 +614,13 @@ Run client browser layout checks with `bun run --cwd packages/client test:browse
 This separate command requires Google Chrome or Chromium. Set `CHROME_PATH` to
 the browser executable if it is not on your `PATH`. CI installs Chrome and runs
 these checks in addition to the default test suite.
+
+## Dependency upgrades
+
+Use the `update-dependencies` skill in either `.codex/skills` or `.claude/skills`.
+It composes the shared agent-tool 0.1.10 upgrade workflow with this repository's
+trusted-base shipping rules. See [dependency upgrades](docs/dependency-upgrades.md)
+for compatibility constraints and infrastructure preview requirements.
 
 ## Agent pull request flow
 
