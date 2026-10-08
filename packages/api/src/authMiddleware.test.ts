@@ -4,6 +4,7 @@ import type { AuthSession } from "./auth";
 import {
   type AuthVariables,
   requireAuthOrganizationSeat,
+  requireBillingOrganization,
   requireOrganization,
   requireOrganizationPluginAccess,
 } from "./authMiddleware";
@@ -156,7 +157,102 @@ describe("organization middleware", () => {
 
     expect(response.status).toBe(200);
   });
+
+  it("lets an unseated Free-plan owner reach only billing", async () => {
+    const request = seatTestApp("owner");
+    const billingResponse = await request("/billing");
+    expect(billingResponse.status).toBe(200);
+    const billingBody: unknown = await billingResponse.json();
+    expect(billingBody).toEqual({
+      organizationId: "active-org",
+      organizationRole: "owner",
+    });
+
+    const auditsResponse = await request("/audits");
+    expect(auditsResponse.status).toBe(403);
+    const auditsBody: unknown = await auditsResponse.json();
+    expect(auditsBody).toEqual({
+      error:
+        "This organization's Free plan includes one user. Upgrade to Pro on the Billing page to restore your access.",
+    });
+  });
+
+  it("keeps two-factor protection on billing for unseated owners", async () => {
+    const setup = await seatTestApp("owner", { twoFactorRequired: true })(
+      "/billing",
+    );
+    expect(setup.status).toBe(403);
+    expect(await setup.json()).toMatchObject({
+      code: "TWO_FACTOR_SETUP_REQUIRED",
+    });
+
+    const verification = await seatTestApp("owner", {
+      twoFactorEnabled: true,
+      twoFactorRequired: true,
+    })("/billing");
+    expect(verification.status).toBe(403);
+    expect(await verification.json()).toMatchObject({
+      code: "TWO_FACTOR_VERIFICATION_REQUIRED",
+    });
+
+    const verified = await seatTestApp("owner", {
+      twoFactorEnabled: true,
+      twoFactorRequired: true,
+      twoFactorVerified: true,
+    })("/billing");
+    expect(verified.status).toBe(200);
+  });
+
+  it("keeps billing behind a seat for unseated managers", async () => {
+    const response = await seatTestApp("admin")("/billing");
+    expect(response.status).toBe(403);
+    const body: unknown = await response.json();
+    expect(body).toEqual({
+      error:
+        "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+    });
+  });
 });
+
+function seatTestApp(role: string, twoFactorState: TwoFactorState = {}) {
+  const app = new Hono<{
+    Bindings: Bindings;
+    Variables: AuthVariables;
+  }>();
+  app.use("*", async (context, next) => {
+    context.set("authSession", {
+      session: {
+        activeOrganizationId: "active-org",
+        twoFactorVerified: twoFactorState.twoFactorVerified ?? false,
+      },
+      user: {
+        defaultOrganizationId: null,
+        id: "user-id",
+        twoFactorEnabled: twoFactorState.twoFactorEnabled ?? false,
+      },
+    } as unknown as AuthSession);
+    await next();
+  });
+  app.use("/billing", requireBillingOrganization);
+  app.use("/audits", requireOrganization);
+  app.get("*", (context) =>
+    context.json({
+      organizationId: context.get("organizationId"),
+      organizationRole: context.get("organizationRole"),
+    }),
+  );
+  const bindings = {
+    DB: membershipDatabase(
+      ["active-org"],
+      [],
+      twoFactorState.twoFactorRequired ? ["active-org"] : [],
+      "owner-id",
+      {},
+      role,
+    ),
+  } as Bindings;
+  return (path: string) => app.request(path, undefined, bindings);
+}
 
 function authOrganizationApp() {
   const app = new Hono<{
@@ -547,6 +643,7 @@ function membershipDatabase(
   twoFactorRequiredOrganizations: string[],
   freeSeatUserIds: string | Record<string, string> = "user-id",
   resourceOrganizations: ResourceOrganizations = {},
+  role = "member",
 ) {
   return {
     prepare: (query: string) => ({
@@ -564,7 +661,7 @@ function membershipDatabase(
                   )
                   .map((organizationId) => ({
                     organizationId,
-                    role: "member",
+                    role,
                     twoFactorRequired:
                       twoFactorRequiredOrganizations.includes(organizationId),
                   }))
