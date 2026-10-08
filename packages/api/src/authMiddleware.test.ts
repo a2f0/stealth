@@ -177,6 +177,32 @@ describe("organization middleware", () => {
     });
   });
 
+  it("keeps two-factor protection on billing for unseated owners", async () => {
+    const setup = await seatTestApp("owner", { twoFactorRequired: true })(
+      "/billing",
+    );
+    expect(setup.status).toBe(403);
+    expect(await setup.json()).toMatchObject({
+      code: "TWO_FACTOR_SETUP_REQUIRED",
+    });
+
+    const verification = await seatTestApp("owner", {
+      twoFactorEnabled: true,
+      twoFactorRequired: true,
+    })("/billing");
+    expect(verification.status).toBe(403);
+    expect(await verification.json()).toMatchObject({
+      code: "TWO_FACTOR_VERIFICATION_REQUIRED",
+    });
+
+    const verified = await seatTestApp("owner", {
+      twoFactorEnabled: true,
+      twoFactorRequired: true,
+      twoFactorVerified: true,
+    })("/billing");
+    expect(verified.status).toBe(200);
+  });
+
   it("keeps billing behind a seat for unseated managers", async () => {
     const response = await seatTestApp("admin")("/billing");
     expect(response.status).toBe(403);
@@ -188,15 +214,22 @@ describe("organization middleware", () => {
   });
 });
 
-function seatTestApp(role: string) {
+function seatTestApp(role: string, twoFactorState: TwoFactorState = {}) {
   const app = new Hono<{
     Bindings: Bindings;
     Variables: AuthVariables;
   }>();
   app.use("*", async (context, next) => {
     context.set("authSession", {
-      session: { activeOrganizationId: "active-org" },
-      user: { defaultOrganizationId: null, id: "user-id" },
+      session: {
+        activeOrganizationId: "active-org",
+        twoFactorVerified: twoFactorState.twoFactorVerified ?? false,
+      },
+      user: {
+        defaultOrganizationId: null,
+        id: "user-id",
+        twoFactorEnabled: twoFactorState.twoFactorEnabled ?? false,
+      },
     } as unknown as AuthSession);
     await next();
   });
@@ -209,7 +242,14 @@ function seatTestApp(role: string) {
     }),
   );
   const bindings = {
-    DB: membershipDatabase(["active-org"], [], [], "owner-id", {}, role),
+    DB: membershipDatabase(
+      ["active-org"],
+      [],
+      twoFactorState.twoFactorRequired ? ["active-org"] : [],
+      "owner-id",
+      {},
+      role,
+    ),
   } as Bindings;
   return (path: string) => app.request(path, undefined, bindings);
 }
