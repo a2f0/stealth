@@ -449,6 +449,7 @@ async function createFixture() {
   await applyMigration(database, "0020_add_two_factor_authentication.sql");
   await applyMigration(database, "0031_require_member_two_factor.sql");
   await applyMigration(database, "0032_create_billing.sql");
+  await applyMigration(database, "0053_track_paid_billing_end.sql");
   insertSession(database, "owner-user", targetOrganizationId);
   insertSession(database, "member-user", targetOrganizationId);
   const bindings = {

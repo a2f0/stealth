@@ -21,7 +21,7 @@ export const maintenanceJobs = [
     id: "purgeExpiredFreeAuditRuns",
     name: "Purge expired Free audit history",
     description:
-      "Permanently deletes audit runs that meet the existing Free-plan retention policy.",
+      "Permanently deletes audit runs that meet the existing Free-plan retention policy. Organizations whose paid plan ended keep their history for a 30-day grace period first.",
   },
   {
     id: "purgeDeletedObjects",

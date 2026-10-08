@@ -1,20 +1,29 @@
 import {
   freeRetentionDays,
+  lapsedRetentionGraceDays,
   reconcilePendingCheckoutEntitlements,
 } from "./billing";
 import type { Bindings } from "./types";
 
 const retentionBatchSize = 100;
 const retentionBatchesPerInvocation = 5;
+const dayMilliseconds = 24 * 60 * 60 * 1_000;
 
-/** Permanently remove audit history outside a free organization's window. */
+/**
+ * Permanently remove audit history outside a free organization's window.
+ * Organizations whose paid plan ended after `paidEndedAfter` are still in
+ * their grace period and keep all history.
+ */
 export async function purgeExpiredFreeAuditRuns(
   environment: Pick<
     Bindings,
     "DB" | "STRIPE_PRO_PRICE_ID" | "STRIPE_SECRET_KEY"
   >,
   retainedAfter = new Date(
-    Date.now() - freeRetentionDays * 24 * 60 * 60 * 1_000,
+    Date.now() - freeRetentionDays * dayMilliseconds,
+  ).toISOString(),
+  paidEndedAfter = new Date(
+    Date.now() - lapsedRetentionGraceDays * dayMilliseconds,
   ).toISOString(),
 ) {
   const proPriceId = environment.STRIPE_PRO_PRICE_ID;
@@ -46,6 +55,10 @@ export async function purgeExpiredFreeAuditRuns(
              billing.checkout_disabled_at IS NOT NULL
              AND COALESCE(billing.checkout_disabled_expires_at, 0) > unixepoch()
            )
+           AND NOT (
+             billing.paid_ended_at IS NOT NULL
+             AND datetime(billing.paid_ended_at) >= datetime(?)
+           )
            AND datetime(COALESCE(audit.completed_at, audit.updated_at)) <
                datetime(?)
            AND COALESCE(billing.stripe_status, '') NOT IN
@@ -56,7 +69,7 @@ export async function purgeExpiredFreeAuditRuns(
        )
        RETURNING id`,
     )
-      .bind(retainedAfter, retentionBatchSize)
+      .bind(paidEndedAfter, retainedAfter, retentionBatchSize)
       .all<{ id: string }>();
     deleted += result.results.length;
     if (result.results.length < retentionBatchSize) return deleted;

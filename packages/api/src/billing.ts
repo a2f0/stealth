@@ -14,6 +14,8 @@ import { readWebhookPayload } from "./webhookPayload";
 
 export const freeFormTemplateLimit = 5;
 export const freeRetentionDays = 30;
+/** Days a lapsed paid organization keeps its history before Free retention. */
+export const lapsedRetentionGraceDays = 30;
 const unlimitedSeatLimit = Number.MAX_SAFE_INTEGER;
 const paidStatuses = new Set(["active", "past_due", "trialing"]);
 const maxStripeWebhookBytes = 256 * 1024;
@@ -1331,6 +1333,10 @@ async function persistSubscription(
   const cancelAtPeriodEnd =
     subscription.cancel_at_period_end === true ||
     subscription.cancel_at != null;
+  // paid_ended_at marks when a paid status lapsed, so retention can grant a
+  // grace period. Stripe reports no end time for unpaid or paused
+  // subscriptions, and processing time is never earlier than the real end.
+  const now = new Date().toISOString();
   if (checkoutSessionId) {
     const persisted = await environment.DB.prepare(
       `UPDATE organization_billing
@@ -1339,6 +1345,12 @@ async function persistSubscription(
            stripe_status = ?, seat_quantity = ?, cancel_at_period_end = ?,
            current_period_end = ?,
            stripe_event_created = MAX(stripe_event_created, ?),
+           paid_ended_at = CASE
+             WHEN ? IN ('active', 'past_due', 'trialing') THEN NULL
+             WHEN COALESCE(stripe_status, '') IN
+               ('active', 'past_due', 'trialing') THEN ?
+             ELSE paid_ended_at
+           END,
            checkout_claim_id = CASE
              WHEN pending_checkout_session_id = ? THEN NULL
              ELSE checkout_claim_id
@@ -1391,6 +1403,8 @@ async function persistSubscription(
         cancelAtPeriodEnd ? 1 : 0,
         periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
         eventCreated,
+        subscription.status,
+        now,
         checkoutSessionId,
         checkoutSessionId,
         checkoutSessionId,
@@ -1400,7 +1414,7 @@ async function persistSubscription(
         checkoutSessionId,
         checkoutSessionId,
         checkoutSessionId,
-        new Date().toISOString(),
+        now,
         organizationId,
         checkoutSessionId,
         subscription.id,
@@ -1428,6 +1442,13 @@ async function persistSubscription(
          organization_billing.stripe_event_created,
          excluded.stripe_event_created
        ),
+       paid_ended_at = CASE
+         WHEN excluded.stripe_status IN ('active', 'past_due', 'trialing')
+           THEN NULL
+         WHEN COALESCE(organization_billing.stripe_status, '') IN
+           ('active', 'past_due', 'trialing') THEN excluded.updated_at
+         ELSE organization_billing.paid_ended_at
+       END,
        updated_at = excluded.updated_at
      WHERE organization_billing.stripe_subscription_id IS NULL
         OR organization_billing.stripe_subscription_id =
@@ -1444,7 +1465,7 @@ async function persistSubscription(
       cancelAtPeriodEnd ? 1 : 0,
       periodEnd ? new Date(periodEnd * 1_000).toISOString() : null,
       eventCreated,
-      new Date().toISOString(),
+      now,
     )
     .run();
   return Number(persisted.meta.changes) === 1;

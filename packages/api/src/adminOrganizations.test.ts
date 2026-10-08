@@ -537,6 +537,7 @@ async function createDeletionFixture() {
     "0013_track_organization_deletion_actor.sql",
     "0014_restore_organization_defaults.sql",
     "0032_create_billing.sql",
+    "0053_track_paid_billing_end.sql",
   ]) {
     database.exec(
       await Bun.file(
