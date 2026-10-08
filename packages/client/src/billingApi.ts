@@ -29,31 +29,39 @@ export async function getBillingStatus(sessionId?: string) {
   return parseResponse<BillingStatus>(response);
 }
 
+/** Stripe's hosted Checkout page, or an inline session to embed. */
+export type CheckoutSession = { url: string } | InlineCheckoutSession;
+
+export interface InlineCheckoutSession {
+  clientSecret: string;
+  publishableKey: string;
+}
+
 export async function createCheckoutSession() {
-  return billingRedirect("checkout");
+  return billingPost<CheckoutSession>("checkout");
 }
 
 export async function createPortalSession() {
-  return billingRedirect("portal");
+  return billingPost<{ url: string }>("portal");
 }
 
-export async function redirectToCurrentBillingSession(
-  request: () => Promise<{ url: string }>,
+export async function openCurrentBillingSession<T>(
+  request: () => Promise<T>,
   isCurrent: () => boolean,
-  navigate: (url: string) => void,
+  open: (result: T) => void,
 ) {
   const result = await request();
   if (!isCurrent()) return false;
-  navigate(result.url);
+  open(result);
   return true;
 }
 
-async function billingRedirect(endpoint: "checkout" | "portal") {
+async function billingPost<T>(endpoint: "checkout" | "portal") {
   const response = await fetchApi(`${apiUrl}/api/billing/${endpoint}`, {
     credentials: "include",
     method: "POST",
   });
-  return parseResponse<{ url: string }>(response);
+  return parseResponse<T>(response);
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {

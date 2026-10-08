@@ -28,7 +28,7 @@
     },
     "packages/api": {
       "name": "@tearleads/api",
-      "version": "0.1.8",
+      "version": "0.1.12",
       "dependencies": {
         "better-auth": "1.7.0",
         "hono": "4.13.13",
@@ -43,8 +43,9 @@
     },
     "packages/client": {
       "name": "@tearleads/client",
-      "version": "0.1.15",
+      "version": "0.1.17",
       "dependencies": {
+        "@stripe/stripe-js": "9.17.0",
         "@tearleads/ui": "workspace:*",
         "better-auth": "1.7.0",
         "pdfjs-dist": "6.3.289",
@@ -599,6 +600,8 @@
     "@speed-highlight/core": ["@speed-highlight/core@1.2.24", "", {}, "sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
+
+    "@stripe/stripe-js": ["@stripe/stripe-js@9.17.0", "", {}, "sha512-uidL4OJum5kivsOAQnVfQmYLJ2zdgirtmT0zWgskASZ4TPXxpXQ0MNrzW4NsXB90uEqmPHpSEtciLFbF1QQvNA=="],
 
     "@tearleads/agent-tool": ["@tearleads/agent-tool@workspace:packages/agent-tool"],
 

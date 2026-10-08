@@ -21,7 +21,10 @@
     "PLAID_REDIRECT_URI": "https://app.tearleads.de/finance",
     "STRIPE_PORTAL_CONFIGURATION_ID": "bpc_1U8gHBB19gR8AJxmNFLm8BVk",
     "STRIPE_PRO_LEGACY_PRICE_IDS": "",
-    "STRIPE_PRO_PRICE_ID": "price_1U8fg7B19gR8AJxmpcqsWGg8"
+    "STRIPE_PRO_PRICE_ID": "price_1U8fg7B19gR8AJxmpcqsWGg8",
+    // Empty keeps production on Stripe-hosted Checkout until its account's
+    // live publishable key is set here.
+    "STRIPE_PUBLISHABLE_KEY": ""
   },
   "d1_databases": [
     {

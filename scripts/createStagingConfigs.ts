@@ -54,6 +54,8 @@ api.vars = {
     Reflect.get(process.env, "STAGING_STRIPE_PORTAL_CONFIGURATION_ID") ?? "",
   STRIPE_PRO_LEGACY_PRICE_IDS: "",
   STRIPE_PRO_PRICE_ID: required("STAGING_STRIPE_PRO_PRICE_ID"),
+  STRIPE_PUBLISHABLE_KEY:
+    Reflect.get(process.env, "STAGING_STRIPE_PUBLISHABLE_KEY") ?? "",
 };
 api.d1_databases = [
   {

@@ -13,6 +13,7 @@
     "test:browser": "bun test browser"
   },
   "dependencies": {
+    "@stripe/stripe-js": "9.17.0",
     "@tearleads/ui": "workspace:*",
     "better-auth": "1.7.0",
     "pdfjs-dist": "6.3.289",

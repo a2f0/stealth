@@ -33,6 +33,7 @@ PLAID_TOKEN_ENCRYPTION_KEY=test-plaid-encryption
 STRIPE_SECRET_KEY=sk_test_fixture
 STRIPE_WEBHOOK_SECRET=whsec_fixture
 STAGING_STRIPE_PRO_PRICE_ID=price_fixture
+STAGING_STRIPE_PUBLISHABLE_KEY=pk_test_fixture
 CLOUDFLARE_EMAIL_API_TOKEN=test-email-token
 EOF
 cat > "$FIXTURE/bin/terraform" <<'EOF'
@@ -97,6 +98,7 @@ if (api.vars.BETTER_AUTH_URL !== "https://api-staging.tearleads.de") throw new E
 if (api.vars.CORS_ORIGIN !== "https://app-staging.tearleads.de") throw new Error("CORS origin is not staging");
 if (api.vars.INBOUND_EMAIL_DOMAIN !== "inbox-staging.tearleads.de") throw new Error("Inbound email domain is not staging");
 if (api.vars.PLAID_ENV !== "sandbox") throw new Error("Plaid environment is not sandbox");
+if (api.vars.STRIPE_PUBLISHABLE_KEY !== "pk_test_fixture") throw new Error("Stripe publishable key is not staging");
 if (api.d1_databases.length !== 1 || api.d1_databases[0].database_name !== "fixture-db-staging" || api.d1_databases[0].database_id !== "00000000-0000-4000-8000-000000000000") throw new Error("D1 binding ignored Terraform output");
 if (api.r2_buckets.length !== 1 || api.r2_buckets[0].bucket_name !== "fixture-objects-staging") throw new Error("R2 binding ignored Terraform output");
 if ("triggers" in api) throw new Error("Staging has production cron triggers");
@@ -136,5 +138,13 @@ if PATH="$FIXTURE/bin:$PATH" DRY_RUN=1 bash "$FIXTURE/scripts/deployStaging.sh" 
   exit 1
 fi
 [[ ! -s "$MOCK_LOG" ]] || { echo 'Staging ran commands after rejecting a live Stripe key' >&2; exit 1; }
+
+sed -i.bak -e 's/sk_live_fixture/sk_test_fixture/' -e 's/pk_test_fixture/pk_live_fixture/' "$FIXTURE/.secrets/staging.env"
+: > "$MOCK_LOG"
+if PATH="$FIXTURE/bin:$PATH" DRY_RUN=1 bash "$FIXTURE/scripts/deployStaging.sh" > "$FIXTURE/output.log" 2>&1; then
+  echo 'Staging accepted a live Stripe publishable key' >&2
+  exit 1
+fi
+[[ ! -s "$MOCK_LOG" ]] || { echo 'Staging ran commands after rejecting a live publishable key' >&2; exit 1; }
 
 echo 'Staging deployment isolation checks passed.'

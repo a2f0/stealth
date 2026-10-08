@@ -3,7 +3,7 @@ import {
   createCheckoutSession,
   createPortalSession,
   getBillingStatus,
-  redirectToCurrentBillingSession,
+  openCurrentBillingSession,
 } from "./billingApi";
 import { apiUrl } from "./config";
 
@@ -77,10 +77,10 @@ describe("billing API", () => {
     });
     let current = true;
     const navigations: string[] = [];
-    const redirect = redirectToCurrentBillingSession(
+    const redirect = openCurrentBillingSession(
       () => request,
       () => current,
-      (url) => navigations.push(url),
+      ({ url }) => navigations.push(url),
     );
 
     current = false;

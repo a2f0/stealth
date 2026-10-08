@@ -16,8 +16,10 @@ import {
   createCheckoutSession,
   createPortalSession,
   getBillingStatus,
-  redirectToCurrentBillingSession,
+  type InlineCheckoutSession,
+  openCurrentBillingSession,
 } from "./billingApi";
+import { InlineCheckout } from "./InlineCheckout";
 import { countLabel, formatLabel } from "./labels";
 
 type BillingRedirect = "checkout" | "portal";
@@ -34,20 +36,22 @@ export function OrganizationBilling({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [checkout, setCheckout] = useState<InlineCheckoutSession>();
   const loadSequence = useRef(0);
   const actionSequence = useRef(0);
-  const redirect = createBillingAction(
-    actionSequence,
+  const redirect = createBillingAction(actionSequence, {
     setBusy,
+    setCheckout,
     setError,
     setNotice,
-  );
+  });
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
     setStatus(undefined);
     setError(undefined);
     setNotice(undefined);
     setBusy(false);
+    setCheckout(undefined);
     if (!organizationId) return;
     const query = new URLSearchParams(window.location.search);
     const sessionId = query.get("session_id") ?? undefined;
@@ -79,20 +83,28 @@ export function OrganizationBilling({
       {status && (
         <>
           <CurrentPlanCard status={status} />
-          <PageSection
-            description={
-              status.canManage
-                ? undefined
-                : "An organization owner or admin can change the plan and manage payment details."
-            }
-            title="Plans"
-          >
-            <PlanCards
-              busy={busy}
-              onRedirect={(action) => void redirect(action)}
-              status={status}
+          {checkout ? (
+            <InlineCheckout
+              key={checkout.clientSecret}
+              onCancel={() => setCheckout(undefined)}
+              session={checkout}
             />
-          </PageSection>
+          ) : (
+            <PageSection
+              description={
+                status.canManage
+                  ? undefined
+                  : "An organization owner or admin can change the plan and manage payment details."
+              }
+              title="Plans"
+            >
+              <PlanCards
+                busy={busy}
+                onRedirect={(action) => void redirect(action)}
+                status={status}
+              />
+            </PageSection>
+          )}
         </>
       )}
     </>
@@ -101,23 +113,39 @@ export function OrganizationBilling({
 
 function createBillingAction(
   actionSequence: { current: number },
-  setBusy: (value: boolean) => void,
-  setError: (value: string | undefined) => void,
-  setNotice: (value: string | undefined) => void,
+  {
+    setBusy,
+    setCheckout,
+    setError,
+    setNotice,
+  }: {
+    setBusy: (value: boolean) => void;
+    setCheckout: (value: InlineCheckoutSession) => void;
+    setError: (value: string | undefined) => void;
+    setNotice: (value: string | undefined) => void;
+  },
 ) {
   return async (action: BillingRedirect) => {
     const sequence = ++actionSequence.current;
+    const isCurrent = () => sequence === actionSequence.current;
     setBusy(true);
     setError(undefined);
     setNotice(undefined);
     try {
-      const request =
-        action === "checkout" ? createCheckoutSession : createPortalSession;
-      await redirectToCurrentBillingSession(
-        request,
-        () => sequence === actionSequence.current,
-        (url) => window.location.assign(url),
-      );
+      if (action === "portal") {
+        await openCurrentBillingSession(createPortalSession, isCurrent, (s) =>
+          window.location.assign(s.url),
+        );
+        return;
+      }
+      await openCurrentBillingSession(createCheckoutSession, isCurrent, (s) => {
+        if ("url" in s) {
+          window.location.assign(s.url);
+          return;
+        }
+        setCheckout(s);
+        setBusy(false);
+      });
     } catch (cause) {
       if (sequence === actionSequence.current) {
         setError(messageFrom(cause));
