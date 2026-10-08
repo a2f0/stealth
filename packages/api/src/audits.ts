@@ -230,6 +230,7 @@ audits.post("/templates", async (context) => {
   if (Number(results[0]?.meta.changes) !== 1) {
     return context.json(
       {
+        code: "UPGRADE_REQUIRED",
         error: `The Free plan is limited to ${templateLimit} form templates. Upgrade to Pro for unlimited forms.`,
       },
       409,
@@ -280,6 +281,7 @@ audits.post("/templates/:id/copies", async (context) => {
   if (!saved) {
     return context.json(
       {
+        code: "UPGRADE_REQUIRED",
         error: `The Free plan is limited to ${freeFormTemplateLimit} form templates. Upgrade to Pro for unlimited forms.`,
       },
       409,

@@ -30,8 +30,11 @@ interface Notice {
 }
 
 export function OrganizationBilling({
+  onPlanChanged,
   organizationId,
 }: {
+  /** Called after a completed Checkout, so stale workspace access refreshes. */
+  onPlanChanged: () => Promise<void>;
   organizationId: string;
 }) {
   const [status, setStatus] = useState<BillingStatus>();
@@ -41,6 +44,10 @@ export function OrganizationBilling({
   const [checkout, setCheckout] = useState<InlineCheckoutSession>();
   const loadSequence = useRef(0);
   const actionSequence = useRef(0);
+  const planChanged = useRef(onPlanChanged);
+  useEffect(() => {
+    planChanged.current = onPlanChanged;
+  }, [onPlanChanged]);
   const redirect = createBillingAction(actionSequence, {
     setBusy,
     setCheckout,
@@ -63,6 +70,9 @@ export function OrganizationBilling({
       setStatus(nextStatus);
       setNotice(checkoutNotice(query, nextStatus));
       clearCheckoutQuery(query);
+      // Workspace access loaded before this confirmation and may still say
+      // the organization needs an upgrade.
+      if (nextStatus.checkout === "complete") void planChanged.current();
     } catch (cause) {
       if (sequence === loadSequence.current) {
         setError(messageFrom(cause));

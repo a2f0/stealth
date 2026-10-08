@@ -1,5 +1,4 @@
 import {
-  Banner,
   Button,
   EmptyState,
   Icon,
@@ -35,6 +34,7 @@ import {
   useDismissDialogsOnWorkspaceChange,
   useWorkspaceNavigation,
 } from "./navigationGuard";
+import { OrganizationGate } from "./OrganizationGate";
 import { OrganizationInvitation } from "./OrganizationInvitation";
 import { OrganizationSettings } from "./OrganizationSettings";
 import { getWorkspaceOrganizations } from "./organizationSettingsApi";
@@ -268,9 +268,6 @@ function AuthenticatedWorkspace({
     hasWorkspace ||
     !organizationPathRequiresAccess(pathname) ||
     pathname === "/inbox";
-  const organizationRequirement = organizationPathRequiresAccess(pathname)
-    ? access.twoFactorRequirement
-    : undefined;
   return (
     <WorkspaceShell
       accountLoadError={accounts.loadError}
@@ -291,31 +288,32 @@ function AuthenticatedWorkspace({
       organizations={workspace.organizations}
       user={session.user}
     >
-      {organizationRequirement ? (
-        <OrganizationTwoFactorRequired
-          onSecurity={() => navigate("/account/security")}
-          onSignOut={guardWorkspaceChange(accounts.signOutActiveAccount)}
-          requirement={organizationRequirement}
-        />
-      ) : showContent ? (
-        contentForPath(
-          pathname,
-          library,
-          navigate,
-          workspace,
-          addAccount,
-          access,
-          hasRole(session.user.role, "admin"),
-          session.user.defaultOrganizationId,
-          Boolean(session.user.twoFactorEnabled),
-          async () => {
-            await onSessionChanged();
-            await access.refresh();
-          },
-        )
-      ) : (
-        <NoOrganization />
-      )}
+      <OrganizationGate
+        access={access}
+        navigate={navigate}
+        pathname={pathname}
+        signOut={guardWorkspaceChange(accounts.signOutActiveAccount)}
+      >
+        {showContent ? (
+          contentForPath(
+            pathname,
+            library,
+            navigate,
+            workspace,
+            addAccount,
+            access,
+            hasRole(session.user.role, "admin"),
+            session.user.defaultOrganizationId,
+            Boolean(session.user.twoFactorEnabled),
+            async () => {
+              await onSessionChanged();
+              await access.refresh();
+            },
+          )
+        ) : (
+          <NoOrganization />
+        )}
+      </OrganizationGate>
     </WorkspaceShell>
   );
 }
@@ -338,72 +336,12 @@ function blockedWorkspaceContent(
   if (
     isFinancePath(pathname) &&
     !access.twoFactorRequirement &&
+    !access.seatRequirement &&
     !access.can("finance")
   ) {
     return <FeatureAccessDenied onNavigate={() => navigate("/")} />;
   }
   return undefined;
-}
-
-function OrganizationTwoFactorRequired({
-  onSecurity,
-  onSignOut,
-  requirement,
-}: {
-  onSecurity: () => void;
-  onSignOut: () => Promise<void>;
-  requirement: "setup" | "verification";
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const needsSetup = requirement === "setup";
-
-  async function signOut() {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onSignOut();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not sign out.");
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Page narrow>
-      <PageHeader
-        eyebrow="Organization security"
-        title="Two-factor authentication required"
-      />
-      <PageBody>
-        <EmptyState
-          actions={
-            <Button
-              busy={busy}
-              icon={needsSetup ? "security" : "signOut"}
-              onClick={needsSetup ? onSecurity : () => void signOut()}
-              variant="primary"
-            >
-              {needsSetup
-                ? "Set up two-factor authentication"
-                : busy
-                  ? "Signing out…"
-                  : "Sign out to verify"}
-            </Button>
-          }
-          icon="lock"
-          title={needsSetup ? "Protect your account" : "Verify your sign-in"}
-        >
-          <p>
-            {needsSetup
-              ? "This organization requires you to set up an authenticator before you can use its workspace."
-              : "This organization requires a sign-in verified with two-factor authentication. Sign out, then sign in again to continue."}
-          </p>
-          {error && <Banner tone="danger">{error}</Banner>}
-        </EmptyState>
-      </PageBody>
-    </Page>
-  );
 }
 
 function NoOrganization() {

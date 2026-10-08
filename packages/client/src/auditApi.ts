@@ -119,11 +119,13 @@ export interface AuditDetail {
 }
 
 export class AuditApiError extends Error {
+  readonly code: string | undefined;
   readonly response: Response;
 
-  constructor(message: string, response: Response) {
+  constructor(message: string, response: Response, code?: string) {
     super(message);
     this.name = "AuditApiError";
+    this.code = code;
     this.response = response;
   }
 }
@@ -300,10 +302,12 @@ async function request<T>(path: string, init?: RequestInit) {
       : (response.json() as Promise<T>);
   }
   const body = (await response.json().catch(() => null)) as {
+    code?: string;
     error?: string;
   } | null;
   throw new AuditApiError(
     body?.error ?? `Request failed with status ${response.status}.`,
     response,
+    body?.code,
   );
 }

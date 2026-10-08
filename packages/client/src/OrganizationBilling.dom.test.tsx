@@ -137,12 +137,22 @@ async function settle() {
   });
 }
 
+let planChanges = 0;
+
 async function render() {
+  planChanges = 0;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   await act(async () =>
-    root?.render(<OrganizationBilling organizationId="org-1" />),
+    root?.render(
+      <OrganizationBilling
+        onPlanChanged={async () => {
+          planChanges += 1;
+        }}
+        organizationId="org-1"
+      />,
+    ),
   );
 }
 
@@ -231,6 +241,23 @@ describe("organization billing checkout", () => {
       "Payment was not completed. Your plan has not changed.",
     );
     expect(container.querySelector(".bannerSuccess")).toBeNull();
+    expect(dom.location.search).toBe("");
+    expect(planChanges).toBe(0);
+  });
+
+  it("refreshes workspace access after a completed Checkout", async () => {
+    dom.history.replaceState(
+      null,
+      "",
+      "/organization/billing?checkout=success&session_id=cs_paid",
+    );
+    serveBilling(null, { ...freeStatus, checkout: "complete", plan: "pro" });
+    await render();
+
+    expect(container.querySelector(".bannerSuccess")?.textContent).toContain(
+      "Your Pro subscription is active.",
+    );
+    expect(planChanges).toBe(1);
     expect(dom.location.search).toBe("");
   });
 

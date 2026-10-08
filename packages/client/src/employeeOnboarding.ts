@@ -1,3 +1,4 @@
+import { UpgradeRequiredError } from "./BillingLink";
 import type {
   EmployeeRequirementKind,
   EmployeeRequirementStatus,
@@ -37,7 +38,7 @@ export async function inviteWithRequirements<TRole extends string>({
   ) => Promise<unknown>;
   invite: () => Promise<{
     data?: { id: string; role: TRole } | null;
-    error?: { message?: string } | null;
+    error?: { code?: string | undefined; message?: string } | null;
   }>;
   onInvited: () => void;
   onSent: () => Promise<void>;
@@ -45,6 +46,11 @@ export async function inviteWithRequirements<TRole extends string>({
   role: TRole;
 }) {
   const result = await invite();
+  if (result.error?.code === "INVITATION_LIMIT_REACHED") {
+    throw new UpgradeRequiredError(
+      "The Free plan includes one user. Upgrade to Pro to invite more people.",
+    );
+  }
   if (result.error) {
     throw new Error(result.error.message ?? "Could not send this invitation.");
   }

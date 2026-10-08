@@ -119,6 +119,7 @@ function OrganizationSettingsPageContent({
       <OrganizationPeople
         organization={organization}
         onAccessChanged={onAccessChanged}
+        onNavigate={onNavigate}
       />
     );
   }
@@ -134,7 +135,12 @@ function OrganizationSettingsPageContent({
     );
   }
   if (page === "billing") {
-    return <OrganizationBilling organizationId={organization.id} />;
+    return (
+      <OrganizationBilling
+        onPlanChanged={onAccessChanged}
+        organizationId={organization.id}
+      />
+    );
   }
   return (
     <OrganizationGeneral
