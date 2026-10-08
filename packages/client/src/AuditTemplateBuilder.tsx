@@ -22,6 +22,7 @@ import {
   listAuditTemplateVersions,
   updateAuditTemplate,
 } from "./auditApi";
+import { ErrorBanner, type ErrorNotice, errorNotice } from "./BillingLink";
 import { countLabel } from "./labels";
 
 interface BuilderProps {
@@ -38,7 +39,7 @@ export function AuditTemplateBuilder({
   const [template, setTemplate] = useState<AuditTemplate>();
   const [versions, setVersions] = useState<AuditTemplateVersion[]>();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<ErrorNotice>();
   const [notice, setNotice] = useState<string>();
 
   useEffect(() => {
@@ -47,7 +48,9 @@ export function AuditTemplateBuilder({
         setTemplate(nextTemplate);
         setVersions(nextVersions);
       })
-      .catch((cause: unknown) => setError(messageFrom(cause)));
+      .catch((cause: unknown) =>
+        setError(errorNotice(cause, "Could not save checklist.")),
+      );
   }, [id]);
 
   async function selectVersion(version: number) {
@@ -62,7 +65,7 @@ export function AuditTemplateBuilder({
           : await getAuditTemplateVersion(id, version);
       setTemplate(selected);
     } catch (cause) {
-      setError(messageFrom(cause));
+      setError(errorNotice(cause, "Could not save checklist."));
     } finally {
       setBusy(false);
     }
@@ -89,7 +92,7 @@ export function AuditTemplateBuilder({
       }
       setVersions(await listAuditTemplateVersions(saved.id));
     } catch (cause) {
-      setError(messageFrom(cause));
+      setError(errorNotice(cause, "Could not save checklist."));
     } finally {
       setBusy(false);
     }
@@ -97,7 +100,10 @@ export function AuditTemplateBuilder({
 
   if (!template) {
     return (
-      <BuilderLoading error={error} onBack={() => onNavigate("/audits")} />
+      <BuilderLoading
+        error={error?.message}
+        onBack={() => onNavigate("/audits")}
+      />
     );
   }
 
@@ -120,6 +126,7 @@ export function AuditTemplateBuilder({
           setTemplate(nextTemplate);
           setNotice(undefined);
         }}
+        onNavigate={onNavigate}
         template={template}
       />
     </Page>
@@ -131,12 +138,14 @@ function BuilderBody({
   manageGlobal,
   notice,
   onChange,
+  onNavigate,
   template,
 }: {
-  error: string | undefined;
+  error: ErrorNotice | undefined;
   manageGlobal: boolean;
   notice: string | undefined;
   onChange: (template: AuditTemplate) => void;
+  onNavigate: (pathname: string) => void;
   template: AuditTemplate;
 }) {
   const sections = template.definition.sections;
@@ -151,6 +160,7 @@ function BuilderBody({
         error={error}
         manageGlobal={manageGlobal}
         notice={notice}
+        onNavigate={onNavigate}
         template={template}
       />
       <fieldset className="fieldset auditBuilderFields">
@@ -201,17 +211,19 @@ function BuilderNotices({
   error,
   manageGlobal,
   notice,
+  onNavigate,
   template,
 }: {
-  error: string | undefined;
+  error: ErrorNotice | undefined;
   manageGlobal: boolean;
   notice: string | undefined;
+  onNavigate: (pathname: string) => void;
   template: AuditTemplate;
 }) {
   const isGlobal = template.scope === "global";
   return (
     <>
-      {error && <Banner tone="danger">{error}</Banner>}
+      <ErrorBanner error={error} onNavigate={onNavigate} />
       {notice && <Banner tone="success">{notice}</Banner>}
       {isGlobal && !manageGlobal && (
         <Banner announce={false} icon="copy" tone="info">
@@ -574,8 +586,4 @@ function formatVersionDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
     new Date(value),
   );
-}
-
-function messageFrom(cause: unknown) {
-  return cause instanceof Error ? cause.message : "Could not save checklist.";
 }

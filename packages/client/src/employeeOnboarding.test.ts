@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { errorNotice } from "./BillingLink";
 import {
   canCompleteRequirement,
   inviteWithRequirements,
@@ -20,6 +21,32 @@ describe("employee onboarding", () => {
       reviewRevisionForStatus("form", 2, downloadedRevision, "complete"),
     ).toBe(1);
     expect(canCompleteRequirement("form", 2, 2)).toBe(true);
+  });
+
+  it("points the Free plan's invitation limit at Billing", async () => {
+    const calls: string[] = [];
+    const sending = inviteWithRequirements({
+      assign: async () => calls.push("assign"),
+      invite: async () => ({
+        error: {
+          code: "INVITATION_LIMIT_REACHED",
+          message: "Invitation limit reached",
+        },
+      }),
+      onInvited: () => calls.push("invited"),
+      onSent: async () => {
+        calls.push("sent");
+      },
+      requirements: [],
+      role: "member",
+    });
+    const cause = await sending.catch((error: unknown) => error);
+    expect(errorNotice(cause, "fallback")).toEqual({
+      message:
+        "The Free plan includes one user. Upgrade to Pro to invite more people.",
+      upgrade: true,
+    });
+    expect(calls).toEqual([]);
   });
 
   it("keeps the invitation visible if requirement assignment fails", async () => {

@@ -36,6 +36,10 @@ import {
   useWorkspaceNavigation,
 } from "./navigationGuard";
 import { OrganizationInvitation } from "./OrganizationInvitation";
+import {
+  blockingSeatRequirement,
+  OrganizationSeatRequired,
+} from "./OrganizationSeatRequired";
 import { OrganizationSettings } from "./OrganizationSettings";
 import { getWorkspaceOrganizations } from "./organizationSettingsApi";
 import {
@@ -268,9 +272,12 @@ function AuthenticatedWorkspace({
     hasWorkspace ||
     !organizationPathRequiresAccess(pathname) ||
     pathname === "/inbox";
-  const organizationRequirement = organizationPathRequiresAccess(pathname)
-    ? access.twoFactorRequirement
-    : undefined;
+  const requirementScreen = organizationRequirementScreen(
+    access,
+    pathname,
+    navigate,
+    guardWorkspaceChange(accounts.signOutActiveAccount),
+  );
   return (
     <WorkspaceShell
       accountLoadError={accounts.loadError}
@@ -291,32 +298,56 @@ function AuthenticatedWorkspace({
       organizations={workspace.organizations}
       user={session.user}
     >
-      {organizationRequirement ? (
-        <OrganizationTwoFactorRequired
-          onSecurity={() => navigate("/account/security")}
-          onSignOut={guardWorkspaceChange(accounts.signOutActiveAccount)}
-          requirement={organizationRequirement}
-        />
-      ) : showContent ? (
-        contentForPath(
-          pathname,
-          library,
-          navigate,
-          workspace,
-          addAccount,
-          access,
-          hasRole(session.user.role, "admin"),
-          session.user.defaultOrganizationId,
-          Boolean(session.user.twoFactorEnabled),
-          async () => {
-            await onSessionChanged();
-            await access.refresh();
-          },
-        )
-      ) : (
-        <NoOrganization />
-      )}
+      {requirementScreen ??
+        (showContent ? (
+          contentForPath(
+            pathname,
+            library,
+            navigate,
+            workspace,
+            addAccount,
+            access,
+            hasRole(session.user.role, "admin"),
+            session.user.defaultOrganizationId,
+            Boolean(session.user.twoFactorEnabled),
+            async () => {
+              await onSessionChanged();
+              await access.refresh();
+            },
+          )
+        ) : (
+          <NoOrganization />
+        ))}
     </WorkspaceShell>
+  );
+}
+
+/**
+ * What the organization requires before its pages can load: two-factor
+ * authentication, or a seat on its Free plan. An owner without a seat can
+ * still open Billing to upgrade.
+ */
+function organizationRequirementScreen(
+  access: ReturnType<typeof useOrganizationAccess>,
+  pathname: string,
+  navigate: (pathname: string) => void,
+  signOut: () => Promise<void>,
+) {
+  if (!organizationPathRequiresAccess(pathname)) return undefined;
+  if (access.twoFactorRequirement) {
+    return (
+      <OrganizationTwoFactorRequired
+        onSecurity={() => navigate("/account/security")}
+        onSignOut={signOut}
+        requirement={access.twoFactorRequirement}
+      />
+    );
+  }
+  const seat = blockingSeatRequirement(access.seatRequirement, pathname);
+  return (
+    seat && (
+      <OrganizationSeatRequired onNavigate={navigate} requirement={seat} />
+    )
   );
 }
 
@@ -338,6 +369,7 @@ function blockedWorkspaceContent(
   if (
     isFinancePath(pathname) &&
     !access.twoFactorRequirement &&
+    !access.seatRequirement &&
     !access.can("finance")
   ) {
     return <FeatureAccessDenied onNavigate={() => navigate("/")} />;

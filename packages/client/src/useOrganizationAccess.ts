@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getOrganizationAccess,
   type OrganizationCapability,
+  type OrganizationSeatRequirement,
   type OrganizationTwoFactorRequirement,
+  seatRequirementFrom,
   twoFactorRequirementFrom,
 } from "./organizationGroupsApi";
 
@@ -16,7 +18,8 @@ interface AccessState {
 
 interface RequirementState {
   organizationId: string;
-  requirement: OrganizationTwoFactorRequirement;
+  seat: OrganizationSeatRequirement | undefined;
+  twoFactor: OrganizationTwoFactorRequirement | undefined;
   userId: string;
 }
 
@@ -50,9 +53,12 @@ export function useOrganizationAccess(
       });
     } catch (cause) {
       if (requestId !== requestSequence.current) return;
-      const requirement = twoFactorRequirementFrom(cause);
+      const twoFactor = twoFactorRequirementFrom(cause);
+      const seat = seatRequirementFrom(cause);
       setRequirementState(
-        requirement ? { organizationId, requirement, userId } : undefined,
+        twoFactor || seat
+          ? { organizationId, seat, twoFactor, userId }
+          : undefined,
       );
       setLoadError(
         cause instanceof Error
@@ -82,7 +88,7 @@ export function useOrganizationAccess(
     requirementState &&
     requirementState.organizationId === organizationId &&
     requirementState.userId === userId
-      ? requirementState.requirement
+      ? requirementState
       : undefined;
   return {
     can: (capability: OrganizationCapability) =>
@@ -94,6 +100,7 @@ export function useOrganizationAccess(
     memberRole: current?.memberRole || undefined,
     ownerCount: current?.ownerCount ?? 0,
     refresh,
-    twoFactorRequirement: currentRequirement,
+    seatRequirement: currentRequirement?.seat,
+    twoFactorRequirement: currentRequirement?.twoFactor,
   };
 }

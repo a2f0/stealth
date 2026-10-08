@@ -12,6 +12,7 @@ import {
 } from "@tearleads/ui/react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { authClient } from "./authClient";
+import { ErrorBanner, type ErrorNotice, errorNotice } from "./BillingLink";
 import { EmployeeForms, RequirementDraftEditor } from "./EmployeeForms";
 import {
   createEmployeeRequirements,
@@ -36,9 +37,11 @@ import {
 
 export function OrganizationPeople({
   onAccessChanged,
+  onNavigate,
   organization,
 }: {
   onAccessChanged: () => Promise<void>;
+  onNavigate: (pathname: string) => void;
   organization: WorkspaceOrganization;
 }) {
   const state = useOrganizationPeopleData(organization.id);
@@ -75,6 +78,7 @@ export function OrganizationPeople({
         <InviteMemberForm
           key={organization.id}
           memberRole={state.data.memberRole}
+          onNavigate={onNavigate}
           onSent={async () => {
             await state.load();
             setFormsVersion((version) => version + 1);
@@ -257,10 +261,12 @@ function organizationPeopleActions(
 
 function InviteMemberForm({
   memberRole,
+  onNavigate,
   onSent,
   organizationId,
 }: {
   memberRole: string;
+  onNavigate: (pathname: string) => void;
   onSent: () => Promise<void>;
   organizationId: string;
 }) {
@@ -268,7 +274,7 @@ function InviteMemberForm({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<OrganizationInvitationRole>("member");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<ErrorNotice>();
   const [notice, setNotice] = useState<string>();
   const [requirements, setRequirements] = useState<RequirementDraft[]>([]);
 
@@ -293,7 +299,7 @@ function InviteMemberForm({
         `Invitation sent to ${invitedEmail} with the ${assignedRole} role.`,
       );
     } catch (cause) {
-      setError(messageFrom(cause));
+      setError(errorNotice(cause, "Could not send this invitation."));
     } finally {
       setBusy(false);
     }
@@ -363,7 +369,7 @@ function InviteMemberForm({
           onChange={setRequirements}
         />
       </div>
-      {error && <Banner tone="danger">{error}</Banner>}
+      <ErrorBanner error={error} onNavigate={onNavigate} />
       {notice && <Banner tone="success">{notice}</Banner>}
     </Card>
   );
@@ -399,6 +405,7 @@ async function sendInvitationWithRequirements({
           : null,
         error: result.error
           ? {
+              code: result.error.code,
               message:
                 result.error.message ?? "Could not send this invitation.",
             }

@@ -250,9 +250,12 @@ async function authorizeOrganization(
       context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
     ))
   ) {
+    const owner = isOrganizationOwner(membership.role);
+    // The code tells the client whether this user can fix it on Billing.
     return context.json(
       {
-        error: isOrganizationOwner(membership.role)
+        code: owner ? "UPGRADE_REQUIRED" : "SEAT_UNAVAILABLE",
+        error: owner
           ? "This organization's Free plan includes one user. Upgrade to Pro on the Billing page to restore your access."
           : "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
       },

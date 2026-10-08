@@ -89,6 +89,7 @@ describe("organization middleware", () => {
     expect(response.status).toBe(403);
     const body: unknown = await response.json();
     expect(body).toEqual({
+      code: "SEAT_UNAVAILABLE",
       error:
         "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
     });
@@ -172,6 +173,7 @@ describe("organization middleware", () => {
     expect(auditsResponse.status).toBe(403);
     const auditsBody: unknown = await auditsResponse.json();
     expect(auditsBody).toEqual({
+      code: "UPGRADE_REQUIRED",
       error:
         "This organization's Free plan includes one user. Upgrade to Pro on the Billing page to restore your access.",
     });
@@ -208,6 +210,7 @@ describe("organization middleware", () => {
     expect(response.status).toBe(403);
     const body: unknown = await response.json();
     expect(body).toEqual({
+      code: "SEAT_UNAVAILABLE",
       error:
         "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
     });

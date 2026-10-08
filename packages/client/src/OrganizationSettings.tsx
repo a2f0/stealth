@@ -119,6 +119,7 @@ function OrganizationSettingsPageContent({
       <OrganizationPeople
         organization={organization}
         onAccessChanged={onAccessChanged}
+        onNavigate={onNavigate}
       />
     );
   }

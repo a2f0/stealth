@@ -1,7 +1,6 @@
 import {
   Badge,
   type BadgeTone,
-  Banner,
   Button,
   Card,
   EmptyState,
@@ -28,6 +27,7 @@ import {
   readAuditTemplateView,
   storeAuditTemplateView,
 } from "./auditTemplateView";
+import { ErrorBanner, type ErrorNotice, errorNotice } from "./BillingLink";
 import { countLabel, formatLabel } from "./labels";
 
 export function AuditHome({
@@ -45,7 +45,7 @@ export function AuditHome({
   const [templateView, setTemplateView] = useState(() =>
     readAuditTemplateView(),
   );
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<ErrorNotice>();
 
   const load = useCallback(async () => {
     setError(undefined);
@@ -58,7 +58,7 @@ export function AuditHome({
       setRuns(nextRuns.audits);
       setNextRunCursor(nextRuns.nextCursor);
     } catch (cause) {
-      setError(messageFrom(cause));
+      setError(errorNotice(cause, "Could not load audits."));
     }
   }, []);
 
@@ -72,7 +72,7 @@ export function AuditHome({
       const collection = scope === "global" ? "global-templates" : "templates";
       onNavigate(`/audits/${collection}/${template.id}`);
     } catch (cause) {
-      setError(messageFrom(cause));
+      setError(errorNotice(cause, "Could not load audits."));
       setBusy(false);
     }
   }
@@ -84,7 +84,7 @@ export function AuditHome({
       const auditId = await startAudit(templateId);
       onNavigate(`/audits/runs/${auditId}`);
     } catch (cause) {
-      setError(messageFrom(cause));
+      setError(errorNotice(cause, "Could not load audits."));
       setBusy(false);
     }
   }
@@ -103,7 +103,7 @@ export function AuditHome({
       setRuns((current) => [...(current ?? []), ...page.audits]);
       setNextRunCursor(page.nextCursor);
     } catch (cause) {
-      setError(messageFrom(cause));
+      setError(errorNotice(cause, "Could not load audits."));
     } finally {
       setLoadingMoreRuns(false);
     }
@@ -117,7 +117,7 @@ export function AuditHome({
         onCreate={createTemplate}
       />
       <PageBody>
-        {error && <Banner tone="danger">{error}</Banner>}
+        <ErrorBanner error={error} onNavigate={onNavigate} />
         <TemplateLibrary
           busy={busy}
           canManageGlobal={canManageGlobal}
@@ -589,8 +589,4 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
     new Date(value),
   );
-}
-
-function messageFrom(cause: unknown) {
-  return cause instanceof Error ? cause.message : "Could not load audits.";
 }

@@ -1522,6 +1522,7 @@ describe("audits", () => {
     });
     expect(limited.response.status).toBe(409);
     expect(limited.body).toEqual({
+      code: "UPGRADE_REQUIRED",
       error:
         "The Free plan is limited to 5 form templates. Upgrade to Pro for unlimited forms.",
     });
