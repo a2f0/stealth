@@ -928,11 +928,12 @@ describe("billing", () => {
       expect(
         fixture.database
           .query(
-            `SELECT stripe_status, stripe_subscription_id
+            `SELECT paid_ended_at, stripe_status, stripe_subscription_id
              FROM organization_billing WHERE organization_id = ?`,
           )
           .get(organizationId),
       ).toEqual({
+        paid_ended_at: null,
         stripe_status: "active",
         stripe_subscription_id: "sub_checkout",
       });
@@ -1727,6 +1728,238 @@ describe("billing", () => {
     ).toBe(1);
   });
 
+  it("keeps lapsed paid history until the grace period ends", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_subscription_id, stripe_status,
+          paid_ended_at, updated_at)
+         VALUES (?, 'sub_lapsed', 'canceled', '2026-08-01T00:00:00.000Z', ?)`,
+      )
+      .run(organizationId, new Date().toISOString());
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_subscription_id, stripe_status, updated_at)
+         VALUES ('org_user-2', 'sub_never_paid', 'incomplete_expired', ?)`,
+      )
+      .run(new Date().toISOString());
+    insertAudit(fixture.database, "lapsed-old", organizationId, "2026-06-01");
+    insertAudit(fixture.database, "never-paid-old", "org_user-2", "2026-06-01");
+    insertAudit(fixture.database, "no-billing-old", "org_user-3", "2026-06-01");
+
+    expect(
+      await purgeExpiredFreeAuditRuns(
+        fixture.bindings,
+        "2026-07-27",
+        "2026-08-01T00:00:00.000Z",
+      ),
+    ).toBe(2);
+    expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([
+      { id: "lapsed-old" },
+    ]);
+    expect(
+      await purgeExpiredFreeAuditRuns(
+        fixture.bindings,
+        "2026-07-27",
+        "2026-08-01T00:00:01.000Z",
+      ),
+    ).toBe(1);
+    expect(fixture.database.query("SELECT id FROM audits").all()).toEqual([]);
+  });
+
+  it("starts the grace period when a paid subscription lapses", async () => {
+    const fixture = await createFixture();
+    let subscription = subscriptionEvent("evt_paid", 100, "active", 1);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input) =>
+      Response.json(subscription.data.object)) as typeof fetch;
+    const paidEndedAt = () =>
+      (
+        fixture.database
+          .query(
+            `SELECT paid_ended_at FROM organization_billing
+             WHERE organization_id = ?`,
+          )
+          .get(organizationId) as { paid_ended_at: string | null }
+      ).paid_ended_at;
+    try {
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      expect(paidEndedAt()).toBeNull();
+
+      const beforeLapse = new Date().toISOString();
+      subscription = subscriptionEvent("evt_lapsed", 101, "canceled", 1);
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      const lapsedAt = paidEndedAt();
+      expect(lapsedAt).not.toBeNull();
+      expect(String(lapsedAt) >= beforeLapse).toBe(true);
+      insertAudit(fixture.database, "lapsed-old", organizationId, "2026-06-01");
+      expect(await purgeExpiredFreeAuditRuns(fixture.bindings)).toBe(0);
+
+      // A stale event refetches Stripe's current state, so it neither clears
+      // the marker nor moves the grace period forward.
+      const staleUpdate = subscriptionEvent("evt_stale", 99, "active", 1);
+      expect((await sendWebhook(fixture, staleUpdate)).status).toBe(200);
+      await Bun.sleep(2);
+      subscription = subscriptionEvent("evt_lapsed_again", 102, "canceled", 1);
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      expect(paidEndedAt()).toBe(lapsedAt);
+
+      subscription = subscriptionEvent("evt_resubscribed", 103, "active", 1);
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      expect(paidEndedAt()).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("ends the grace period when Checkout starts a new subscription", async () => {
+    const fixture = await createFixture();
+    let subscription = subscriptionEvent(
+      "evt_before_lapse",
+      100,
+      "active",
+      1,
+      "sub_lapsed",
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input) =>
+      Response.json(subscription.data.object)) as typeof fetch;
+    const billingRow = () =>
+      fixture.database
+        .query(
+          `SELECT paid_ended_at IS NOT NULL AS in_grace, stripe_status,
+                  stripe_subscription_id
+           FROM organization_billing WHERE organization_id = ?`,
+        )
+        .get(organizationId);
+    try {
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      subscription = subscriptionEvent(
+        "evt_lapse",
+        101,
+        "canceled",
+        1,
+        "sub_lapsed",
+      );
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      expect(billingRow()).toEqual({
+        in_grace: 1,
+        stripe_status: "canceled",
+        stripe_subscription_id: "sub_lapsed",
+      });
+
+      reserveCheckout(fixture.database, "cs_resubscribe");
+      subscription = subscriptionEvent(
+        "unused_resubscribe",
+        102,
+        "active",
+        1,
+        "sub_resubscribed",
+      );
+      const checkout = {
+        created: 102,
+        data: {
+          object: {
+            client_reference_id: organizationId,
+            id: "cs_resubscribe",
+            subscription: "sub_resubscribed",
+          },
+        },
+        id: "evt_resubscribe_checkout",
+        type: "checkout.session.completed",
+      };
+      expect((await sendWebhook(fixture, checkout)).status).toBe(200);
+      expect(billingRow()).toEqual({
+        in_grace: 0,
+        stripe_status: "active",
+        stripe_subscription_id: "sub_resubscribed",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("ignores a replaced subscription's lapse for the grace period", async () => {
+    const fixture = await createFixture();
+    fixture.database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_customer_id, stripe_subscription_id,
+          stripe_subscription_item_id, stripe_price_id, stripe_status,
+          stripe_event_created, updated_at)
+         VALUES (?, 'cus_test', 'sub_current', 'si_sub_current', ?, 'active',
+                 100, ?)`,
+      )
+      .run(organizationId, proPriceId, new Date().toISOString());
+    const replaced = subscriptionEvent(
+      "evt_replaced_lapse",
+      101,
+      "canceled",
+      1,
+      "sub_replaced",
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input) =>
+      Response.json(replaced.data.object)) as typeof fetch;
+    try {
+      expect((await sendWebhook(fixture, replaced)).status).toBe(200);
+      expect(
+        fixture.database
+          .query(
+            `SELECT stripe_subscription_id, stripe_status, paid_ended_at
+             FROM organization_billing WHERE organization_id = ?`,
+          )
+          .get(organizationId),
+      ).toEqual({
+        paid_ended_at: null,
+        stripe_status: "active",
+        stripe_subscription_id: "sub_current",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("backfills a grace period for organizations that already lapsed", async () => {
+    const database = new Database(":memory:");
+    await applyMigration(database, "0003_create_auth.sql");
+    for (const id of ["user-1", "user-2", "user-3"]) insertUser(database, id);
+    await applyMigration(database, "0004_create_organizations.sql");
+    await applyMigration(database, "0011_soft_delete_organizations.sql");
+    await applyMigration(database, "0032_create_billing.sql");
+    const now = new Date().toISOString();
+    database
+      .query(
+        `INSERT INTO organization_billing
+         (organization_id, stripe_subscription_id, stripe_status, updated_at)
+         VALUES ('org_user-1', 'sub_canceled', 'canceled', ?),
+                ('org_user-2', 'sub_active', 'active', ?)`,
+      )
+      .run(now, now);
+    database
+      .query(
+        `INSERT INTO organization_billing (organization_id, updated_at)
+         VALUES ('org_user-3', ?)`,
+      )
+      .run(now);
+    await applyMigration(database, "0053_track_paid_billing_end.sql");
+
+    const rows = database
+      .query(
+        `SELECT organization_id, paid_ended_at FROM organization_billing
+         ORDER BY organization_id`,
+      )
+      .all() as { organization_id: string; paid_ended_at: string | null }[];
+    expect(rows.map((row) => row.paid_ended_at !== null)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect(String(rows[0]?.paid_ended_at) >= now).toBe(true);
+  });
+
   it("keeps history while organization deletion is in flight", async () => {
     const fixture = await createFixture();
     fixture.database
@@ -1953,6 +2186,7 @@ async function createFixture(organizationRole = "owner") {
   await applyMigration(database, "0011_soft_delete_organizations.sql");
   await applyMigration(database, "0022_version_audit_templates.sql");
   await applyMigration(database, "0032_create_billing.sql");
+  await applyMigration(database, "0053_track_paid_billing_end.sql");
   const bindings = {
     AUTH_EMAIL_FROM: "security@auth.tearleads.test",
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
