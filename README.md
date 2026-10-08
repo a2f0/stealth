@@ -399,8 +399,11 @@ the licensed Stripe subscription quantity, and an hourly reconciliation repairs
 any quantity drift.
 
 Owners and organization admins can upgrade or manage billing at
-`/organization/billing`. Checkout and subscription management use Stripe-hosted
-pages. Add the following values to the ignored `.secrets/root.env` before local
+`/organization/billing`. Subscription management uses Stripe's hosted Billing
+Portal. Checkout uses Stripe's hosted page unless `STRIPE_PUBLISHABLE_KEY` holds
+a publishable key from the same Stripe account and mode as the secret key; then
+the billing page embeds Stripe's Payment Element, styled with the app's theme
+tokens. Add the following values to the ignored `.secrets/root.env` before local
 billing work or a production API deployment:
 
 ```sh
@@ -409,18 +412,20 @@ export STRIPE_WEBHOOK_SECRET=your-endpoint-signing-secret
 export STRIPE_PRO_LEGACY_PRICE_IDS=comma-separated-previous-pro-price-ids
 export STRIPE_PRO_PRICE_ID=your-matching-live-or-test-price-id
 export STRIPE_PORTAL_CONFIGURATION_ID=your-matching-portal-configuration-id
+export STRIPE_PUBLISHABLE_KEY=your-matching-publishable-key
 ```
 
-The current price ID is required for local billing; legacy price IDs and the
-Portal configuration are optional. Add a previous Pro price ID to the legacy
-list before rotating the current price so existing subscriptions keep their
-entitlements. Local development overrides the production IDs in Wrangler with
-these values, so test-mode keys must be paired with test-mode IDs. The public
-Stripe webhook URL is
-`https://api.tearleads.de/api/billing/webhook`. The non-secret Pro price and
-optional Billing Portal configuration IDs belong in `packages/api/wrangler.jsonc`;
-the API deployment script uploads the two secret values as encrypted Worker
-secrets and requires a live-mode API key for production.
+The current price ID is required for local billing; legacy price IDs, the
+Portal configuration, and the publishable key are optional. Add a previous Pro
+price ID to the legacy list before rotating the current price so existing
+subscriptions keep their entitlements. Local development overrides the
+production IDs in Wrangler with these values, so test-mode keys must be paired
+with test-mode IDs. The public Stripe webhook URL is
+`https://api.tearleads.de/api/billing/webhook`. The non-secret Pro price,
+optional Billing Portal configuration ID, and optional publishable key belong in
+`packages/api/wrangler.jsonc`; the API deployment script uploads the two secret
+values as encrypted Worker secrets and requires a live-mode API key for
+production.
 
 ## Provision Cloudflare resources
 
@@ -510,6 +515,7 @@ STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STAGING_STRIPE_PRO_PRICE_ID=price_...
 # Optional: STAGING_STRIPE_PORTAL_CONFIGURATION_ID=bpc_...
+# Optional, enables inline Checkout: STAGING_STRIPE_PUBLISHABLE_KEY=pk_test_...
 ```
 
 Provision the isolated database and bucket before the first Worker deployment.

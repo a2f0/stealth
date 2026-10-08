@@ -19,6 +19,7 @@ export interface Bindings {
   STRIPE_PRO_PRICE_ID?: string;
   STRIPE_PRO_LEGACY_PRICE_IDS?: string;
   STRIPE_PORTAL_CONFIGURATION_ID?: string;
+  STRIPE_PUBLISHABLE_KEY?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   STORAGE: R2Bucket;

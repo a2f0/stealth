@@ -12,7 +12,8 @@ unset TF_VAR_cloudflare_api_token TF_VAR_cloudflare_account_id
 unset BETTER_AUTH_SECRET PLAID_CLIENT_ID PLAID_SECRET \
   CHECKR_API_KEY CHECKR_BACKGROUND_PACKAGE CHECKR_CREDIT_PACKAGE \
   PLAID_TOKEN_ENCRYPTION_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
-  STAGING_STRIPE_PRO_PRICE_ID STAGING_STRIPE_PORTAL_CONFIGURATION_ID
+  STAGING_STRIPE_PRO_PRICE_ID STAGING_STRIPE_PORTAL_CONFIGURATION_ID \
+  STAGING_STRIPE_PUBLISHABLE_KEY
 source_env_file "$REPO_ROOT/.secrets/staging.env"
 validate_cloudflare_env
 validate_auth_env
@@ -25,6 +26,11 @@ if [[ "$STRIPE_SECRET_KEY" != sk_test_* && "$STRIPE_SECRET_KEY" != rk_test_* ]];
 fi
 if [[ "${STAGING_STRIPE_PRO_PRICE_ID:-}" != price_* ]]; then
   echo "ERROR: STAGING_STRIPE_PRO_PRICE_ID must be a Stripe price ID." >&2
+  exit 1
+fi
+if [[ -n "${STAGING_STRIPE_PUBLISHABLE_KEY:-}" &&
+  "$STAGING_STRIPE_PUBLISHABLE_KEY" != pk_test_* ]]; then
+  echo "ERROR: STAGING_STRIPE_PUBLISHABLE_KEY must be a test-mode key." >&2
   exit 1
 fi
 

@@ -114,6 +114,15 @@
   align-self: end;
 }
 
+.billingCheckout {
+  max-width: 40rem;
+}
+
+/* Holds Stripe's iframe; the height keeps the card steady while it loads. */
+.billingCheckoutPayment {
+  min-height: 12rem;
+}
+
 /* Invitation: a single centered column inside the workspace frame. */
 .acceptInvitePage {
   display: grid;

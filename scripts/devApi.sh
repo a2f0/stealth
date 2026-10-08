@@ -14,7 +14,8 @@ if [[ -n "${STRIPE_SECRET_KEY:-}" ||
   -n "${STRIPE_WEBHOOK_SECRET:-}" ||
   -n "${STRIPE_PRO_PRICE_ID:-}" ||
   -n "${STRIPE_PORTAL_CONFIGURATION_ID:-}" ||
-  -n "${STRIPE_PRO_LEGACY_PRICE_IDS:-}" ]]; then
+  -n "${STRIPE_PRO_LEGACY_PRICE_IDS:-}" ||
+  -n "${STRIPE_PUBLISHABLE_KEY:-}" ]]; then
   validate_stripe_env
   if [[ -z "${STRIPE_PRO_PRICE_ID:-}" ]]; then
     echo "ERROR: Missing STRIPE_PRO_PRICE_ID for local billing." >&2
@@ -61,4 +62,5 @@ bunx wrangler dev \
   --var "CHECKR_ENV:staging" \
   --var "STRIPE_PRO_LEGACY_PRICE_IDS:${STRIPE_PRO_LEGACY_PRICE_IDS:-}" \
   --var "STRIPE_PRO_PRICE_ID:${STRIPE_PRO_PRICE_ID:-}" \
-  --var "STRIPE_PORTAL_CONFIGURATION_ID:${STRIPE_PORTAL_CONFIGURATION_ID:-}"
+  --var "STRIPE_PORTAL_CONFIGURATION_ID:${STRIPE_PORTAL_CONFIGURATION_ID:-}" \
+  --var "STRIPE_PUBLISHABLE_KEY:${STRIPE_PUBLISHABLE_KEY:-}"

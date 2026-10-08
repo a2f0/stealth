@@ -65,6 +65,7 @@ interface BillingRow {
 
 interface StripeCheckoutSession {
   client_reference_id: string | null;
+  client_secret?: string | null;
   customer: StripeExpandable | null;
   expires_at?: number;
   id: string;
@@ -116,6 +117,7 @@ interface StripePayloadRecord extends Record<string, unknown> {
   cancel_at?: unknown;
   cancel_at_period_end?: unknown;
   client_reference_id?: unknown;
+  client_secret?: unknown;
   current_period_end?: unknown;
   customer?: unknown;
   data?: unknown;
@@ -149,21 +151,27 @@ billing.get("/", async (context) => {
     if (!sessionId.startsWith("cs_") || sessionId.length > 255) {
       return context.json({ error: "Checkout session is invalid." }, 400);
     }
+  }
+  let checkout: CheckoutOutcome | undefined;
+  if (sessionId) {
     try {
-      await confirmCheckoutSession(context.env, organizationId, sessionId);
+      checkout = await confirmCheckoutSession(
+        context.env,
+        organizationId,
+        sessionId,
+      );
     } catch (cause) {
       return billingError(context, cause);
     }
   }
-  return context.json(
-    await billingSummary(
-      context.env.DB,
-      organizationId,
-      context.get("organizationRole"),
-      context.env.STRIPE_PRO_PRICE_ID,
-      context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
-    ),
+  const summary = await billingSummary(
+    context.env.DB,
+    organizationId,
+    context.get("organizationRole"),
+    context.env.STRIPE_PRO_PRICE_ID,
+    context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
   );
+  return context.json(checkout ? { ...summary, checkout } : summary);
 });
 
 billing.post("/checkout", async (context) => {
@@ -192,14 +200,16 @@ billing.post("/checkout", async (context) => {
   if (checkoutDeletionInProgress(record, state.nowSeconds))
     return checkoutDisabledResponse(context);
   const claimedPending = activePendingCheckout(record, state.nowSeconds);
-  if (claimedPending) return context.json({ url: claimedPending.url });
+  if (claimedPending) return pendingCheckoutResponse(context, claimedPending);
   if (!checkoutClaim.owned || !completeCheckoutClaim(record, checkoutClaim.id))
     return checkoutInProgressResponse(context);
+  const publishableKey = checkoutPublishableKey(context.env);
   const parameters = checkoutParameters(
     context.env.CORS_ORIGIN,
     organizationId,
     record.checkout_claim_price_id,
     record,
+    publishableKey ? context.get("authSession").user.email : null,
   );
   try {
     const checkout = parseStripeCheckoutSession(
@@ -210,8 +220,13 @@ billing.post("/checkout", async (context) => {
         `checkout:${organizationId}:${checkoutClaim.id}`,
       ),
     );
-    if (!validCreatedCheckout(checkout)) {
-      throw new StripeApiError("Stripe did not return a checkout URL.", 502);
+    if (!validCreatedCheckout(checkout, publishableKey !== null)) {
+      throw new StripeApiError(
+        publishableKey
+          ? "Stripe did not return a checkout client secret."
+          : "Stripe did not return a checkout URL.",
+        502,
+      );
     }
     const stored = await storePendingCheckout(
       context.env.DB,
@@ -226,7 +241,11 @@ billing.post("/checkout", async (context) => {
         409,
       );
     }
-    return context.json({ url: checkout.url });
+    return context.json(
+      publishableKey
+        ? { clientSecret: checkout.client_secret, publishableKey }
+        : { url: checkout.url },
+    );
   } catch (cause) {
     return checkoutCreationError(
       context,
@@ -974,6 +993,13 @@ async function billingSummary(
   };
 }
 
+/**
+ * `incomplete` means the customer came back without paying: inline Checkout
+ * also returns to its success URL when a redirect-based payment is canceled,
+ * and the open session can still be resumed.
+ */
+type CheckoutOutcome = "complete" | "incomplete";
+
 async function confirmCheckoutSession(
   environment: Pick<
     Bindings,
@@ -981,7 +1007,7 @@ async function confirmCheckoutSession(
   >,
   organizationId: string,
   sessionId: string,
-) {
+): Promise<CheckoutOutcome> {
   const query = new URLSearchParams();
   query.append("expand[]", "subscription");
   const session = parseStripeCheckoutSession(
@@ -991,15 +1017,13 @@ async function confirmCheckoutSession(
       query,
     ),
   );
-  if (
-    session.client_reference_id !== organizationId ||
-    session.status !== "complete"
-  ) {
+  if (session.client_reference_id !== organizationId) {
     throw new StripeApiError(
       "Checkout is not complete for this organization.",
       409,
     );
   }
+  if (session.status !== "complete") return "incomplete";
   const subscriptionId = optionalExpandableId(session.subscription);
   if (!subscriptionId) {
     throw new StripeApiError("Checkout did not create a subscription.", 409);
@@ -1015,6 +1039,7 @@ async function confirmCheckoutSession(
   if (!persisted) {
     throw new StripeApiError("Checkout did not create a subscription.", 409);
   }
+  return "complete";
 }
 
 async function processStripeEvent(
@@ -1790,7 +1815,7 @@ async function prepareCheckoutState(
   organizationId: string,
 ) {
   let state = await checkoutState(context.env.DB, organizationId);
-  const existingResponse = checkoutStateResponse(context, state);
+  const existingResponse = await checkoutStateResponse(context, state);
   if (existingResponse) return existingResponse;
   const staleSessionId = stalePendingCheckoutId(
     state.billingRecord,
@@ -1808,10 +1833,10 @@ async function prepareCheckoutState(
     return billingError(context, cause);
   }
   state = await checkoutState(context.env.DB, organizationId);
-  return checkoutStateResponse(context, state) ?? state;
+  return (await checkoutStateResponse(context, state)) ?? state;
 }
 
-function checkoutStateResponse(
+async function checkoutStateResponse(
   context: Context<BillingEnv>,
   state: Awaited<ReturnType<typeof checkoutState>>,
 ) {
@@ -1822,7 +1847,40 @@ function checkoutStateResponse(
     return alreadyProResponse(context);
   }
   const pending = activePendingCheckout(state.billingRecord, state.nowSeconds);
-  return pending ? context.json({ url: pending.url }) : null;
+  return pending ? pendingCheckoutResponse(context, pending) : null;
+}
+
+/**
+ * Resumes the organization's open Checkout. A hosted session reuses its stored
+ * URL. An inline session has no URL, and its client secret is never stored, so
+ * it is read back from Stripe while the session is still open.
+ */
+async function pendingCheckoutResponse(
+  context: Context<BillingEnv>,
+  pending: { id: string; url: string | null },
+) {
+  if (pending.url) return context.json({ url: pending.url });
+  const publishableKey = checkoutPublishableKey(context.env);
+  if (!publishableKey) return checkoutInProgressResponse(context);
+  let session: StripeCheckoutSession;
+  try {
+    session = parseStripeCheckoutSession(
+      await stripeGet(
+        context.env,
+        `/v1/checkout/sessions/${encodeURIComponent(pending.id)}`,
+      ),
+    );
+  } catch (cause) {
+    return billingError(context, cause);
+  }
+  if (
+    session.status !== "open" ||
+    !session.client_secret ||
+    session.client_reference_id !== context.get("organizationId")
+  ) {
+    return checkoutInProgressResponse(context);
+  }
+  return context.json({ clientSecret: session.client_secret, publishableKey });
 }
 
 async function checkoutState(database: D1Database, organizationId: string) {
@@ -1894,7 +1952,6 @@ async function releaseCheckoutClaim(
 function activePendingCheckout(record: BillingRow | null, nowSeconds: number) {
   if (
     !record?.pending_checkout_session_id ||
-    !record.pending_checkout_url ||
     !record.pending_checkout_expires_at ||
     record.pending_checkout_expires_at <= nowSeconds
   ) {
@@ -1913,21 +1970,47 @@ function stalePendingCheckoutId(record: BillingRow | null, nowSeconds: number) {
     : null;
 }
 
-function validCreatedCheckout(checkout: StripeCheckoutSession) {
+function validCreatedCheckout(
+  checkout: StripeCheckoutSession,
+  inline: boolean,
+) {
   return Boolean(
     checkout.status === "open" &&
-      checkout.url &&
+      (inline ? checkout.client_secret : checkout.url) &&
       checkout.id &&
       checkout.expires_at,
   );
 }
 
+/**
+ * Inline Checkout needs a publishable key from the same Stripe mode as the
+ * secret key. Without one, Checkout stays on Stripe's hosted page.
+ */
+function checkoutPublishableKey(
+  environment: Pick<Bindings, "STRIPE_PUBLISHABLE_KEY" | "STRIPE_SECRET_KEY">,
+) {
+  const mode = /^(?:sk|rk)_(live|test)_/.exec(
+    environment.STRIPE_SECRET_KEY ?? "",
+  )?.[1];
+  const publishableKey = environment.STRIPE_PUBLISHABLE_KEY ?? "";
+  return mode && publishableKey.startsWith(`pk_${mode}_`)
+    ? publishableKey
+    : null;
+}
+
+/**
+ * Builds a hosted Checkout, or an inline one when `inlineEmail` is set. Inline
+ * Checkout returns to the same success URL but has no cancel page, and it needs
+ * an email up front because the page collects only payment details.
+ */
 function checkoutParameters(
   origin: string,
   organizationId: string,
   priceId: string,
   claim: BillingRow & { checkout_claim_id: string },
+  inlineEmail: string | null,
 ) {
+  const successUrl = `${origin}/organization/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`;
   const parameters = new URLSearchParams({
     "line_items[0][price]": priceId,
     "line_items[0][quantity]": String(claim.checkout_claim_quantity),
@@ -1935,14 +2018,24 @@ function checkoutParameters(
     "metadata[organization_id]": organizationId,
     "subscription_data[metadata][checkout_claim_id]": claim.checkout_claim_id,
     "subscription_data[metadata][organization_id]": organizationId,
-    cancel_url: `${origin}/organization/billing?checkout=canceled`,
     client_reference_id: organizationId,
     expires_at: String(claim.checkout_claim_expires_at),
     mode: "subscription",
-    success_url: `${origin}/organization/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
   });
+  if (inlineEmail === null) {
+    parameters.set(
+      "cancel_url",
+      `${origin}/organization/billing?checkout=canceled`,
+    );
+    parameters.set("success_url", successUrl);
+  } else {
+    parameters.set("return_url", successUrl);
+    parameters.set("ui_mode", "elements");
+  }
   if (claim.checkout_claim_customer_id) {
     parameters.set("customer", claim.checkout_claim_customer_id);
+  } else if (inlineEmail !== null) {
+    parameters.set("customer_email", inlineEmail);
   }
   return parameters;
 }
@@ -2139,6 +2232,10 @@ function parseStripeCheckoutSession(value: unknown): StripeCheckoutSession {
     client_reference_id: stripeNullableString(
       record.client_reference_id,
       "Checkout client reference",
+    ),
+    client_secret: stripeNullableString(
+      record.client_secret,
+      "Checkout client secret",
     ),
     customer: stripeOptionalExpandable(record.customer, "cus_"),
     id: stripeString(record.id, "Checkout session ID", "cs_"),

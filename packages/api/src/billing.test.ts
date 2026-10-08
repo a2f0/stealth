@@ -92,6 +92,164 @@ describe("billing", () => {
     }
   });
 
+  it("creates and resumes inline Checkout with a publishable key", async () => {
+    const fixture = await createFixture();
+    const bindings = {
+      ...fixture.bindings,
+      STRIPE_PUBLISHABLE_KEY: "pk_live_test",
+    };
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{
+      body: URLSearchParams;
+      method: string;
+      url: string;
+    }> = [];
+    const session = {
+      client_reference_id: organizationId,
+      client_secret: "cs_inline_test_secret_123",
+      expires_at: Math.floor(Date.now() / 1_000) + 1_800,
+      id: "cs_inline_test",
+      status: "open",
+      url: null,
+    };
+    globalThis.fetch = (async (input, init) => {
+      requests.push({
+        body: new URLSearchParams(String(init?.body ?? "")),
+        method: init?.method ?? "GET",
+        url: String(input),
+      });
+      return Response.json(session);
+    }) as typeof fetch;
+    try {
+      const response = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        bindings,
+      );
+      expect(response.status).toBe(200);
+      const createdBody: unknown = await response.json();
+      expect(createdBody).toEqual({
+        clientSecret: "cs_inline_test_secret_123",
+        publishableKey: "pk_live_test",
+      });
+      const created = requests[0]?.body;
+      expect(created?.get("ui_mode")).toBe("elements");
+      expect(created?.get("return_url")).toBe(
+        "https://app.tearleads.test/organization/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}",
+      );
+      expect(created?.get("customer_email")).toBe("user-1@example.com");
+      expect(created?.has("success_url")).toBe(false);
+      expect(created?.has("cancel_url")).toBe(false);
+      expect(
+        fixture.database
+          .query(
+            `SELECT pending_checkout_session_id, pending_checkout_url
+             FROM organization_billing`,
+          )
+          .get(),
+      ).toEqual({
+        pending_checkout_session_id: "cs_inline_test",
+        pending_checkout_url: null,
+      });
+
+      const resumed = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        bindings,
+      );
+      expect(resumed.status).toBe(200);
+      const resumedBody: unknown = await resumed.json();
+      expect(resumedBody).toEqual({
+        clientSecret: "cs_inline_test_secret_123",
+        publishableKey: "pk_live_test",
+      });
+      expect(requests.map(({ method, url }) => `${method} ${url}`)).toEqual([
+        "POST https://api.stripe.com/v1/checkout/sessions",
+        "GET https://api.stripe.com/v1/checkout/sessions/cs_inline_test",
+      ]);
+
+      session.status = "complete";
+      const finished = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        bindings,
+      );
+      expect(finished.status).toBe(409);
+      expect(requests).toHaveLength(3);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("reports a Checkout return without payment as incomplete", async () => {
+    const fixture = await createFixture();
+    const originalFetch = globalThis.fetch;
+    let reference = organizationId;
+    globalThis.fetch = (async () =>
+      Response.json({
+        client_reference_id: reference,
+        id: "cs_returned_open",
+        status: "open",
+        subscription: null,
+      })) as unknown as typeof fetch;
+    try {
+      const returned = await fixture.app.request(
+        "/?session_id=cs_returned_open",
+        undefined,
+        fixture.bindings,
+      );
+      expect(returned.status).toBe(200);
+      expect(await returned.json()).toMatchObject({
+        checkout: "incomplete",
+        plan: "free",
+      });
+
+      reference = "org_other";
+      const foreign = await fixture.app.request(
+        "/?session_id=cs_returned_open",
+        undefined,
+        fixture.bindings,
+      );
+      expect(foreign.status).toBe(409);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps hosted Checkout when the publishable key mode differs", async () => {
+    const fixture = await createFixture();
+    const originalFetch = globalThis.fetch;
+    const checkoutRequests: URLSearchParams[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      checkoutRequests.push(new URLSearchParams(String(init?.body)));
+      return Response.json({
+        client_reference_id: organizationId,
+        expires_at: Math.floor(Date.now() / 1_000) + 1_800,
+        id: "cs_hosted_test",
+        status: "open",
+        url: "https://checkout.stripe.test/hosted",
+      });
+    }) as typeof fetch;
+    try {
+      const response = await fixture.app.request(
+        "/checkout",
+        { method: "POST" },
+        { ...fixture.bindings, STRIPE_PUBLISHABLE_KEY: "pk_test_other" },
+      );
+      const hostedBody: unknown = await response.json();
+      expect(hostedBody).toEqual({
+        url: "https://checkout.stripe.test/hosted",
+      });
+      expect(checkoutRequests[0]?.has("ui_mode")).toBe(false);
+      expect(checkoutRequests[0]?.has("customer_email")).toBe(false);
+      expect(checkoutRequests[0]?.get("success_url")).toContain(
+        "checkout=success",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reconciles an expired local Checkout before replacing it", async () => {
     const fixture = await createFixture();
     insertStalePendingCheckout(fixture.database, "cs_completed_at_expiry");
@@ -1030,7 +1188,12 @@ describe("billing", () => {
       await checkoutFetched;
       releaseSubscriptionFetch();
       expect((await webhookResponse).status).toBe(200);
-      expect((await confirmationResponse).status).toBe(200);
+      const confirmation = await confirmationResponse;
+      expect(confirmation.status).toBe(200);
+      expect(await confirmation.json()).toMatchObject({
+        checkout: "complete",
+        plan: "pro",
+      });
       expect(subscriptionFetchCount).toBe(1);
     } finally {
       releaseSubscriptionFetch();
