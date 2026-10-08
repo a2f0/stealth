@@ -928,11 +928,12 @@ describe("billing", () => {
       expect(
         fixture.database
           .query(
-            `SELECT stripe_status, stripe_subscription_id
+            `SELECT paid_ended_at, stripe_status, stripe_subscription_id
              FROM organization_billing WHERE organization_id = ?`,
           )
           .get(organizationId),
       ).toEqual({
+        paid_ended_at: null,
         stripe_status: "active",
         stripe_subscription_id: "sub_checkout",
       });
@@ -1808,6 +1809,73 @@ describe("billing", () => {
       subscription = subscriptionEvent("evt_resubscribed", 103, "active", 1);
       expect((await sendWebhook(fixture, subscription)).status).toBe(200);
       expect(paidEndedAt()).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("ends the grace period when Checkout starts a new subscription", async () => {
+    const fixture = await createFixture();
+    let subscription = subscriptionEvent(
+      "evt_before_lapse",
+      100,
+      "active",
+      1,
+      "sub_lapsed",
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input) =>
+      Response.json(subscription.data.object)) as typeof fetch;
+    const billingRow = () =>
+      fixture.database
+        .query(
+          `SELECT paid_ended_at IS NOT NULL AS in_grace, stripe_status,
+                  stripe_subscription_id
+           FROM organization_billing WHERE organization_id = ?`,
+        )
+        .get(organizationId);
+    try {
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      subscription = subscriptionEvent(
+        "evt_lapse",
+        101,
+        "canceled",
+        1,
+        "sub_lapsed",
+      );
+      expect((await sendWebhook(fixture, subscription)).status).toBe(200);
+      expect(billingRow()).toEqual({
+        in_grace: 1,
+        stripe_status: "canceled",
+        stripe_subscription_id: "sub_lapsed",
+      });
+
+      reserveCheckout(fixture.database, "cs_resubscribe");
+      subscription = subscriptionEvent(
+        "unused_resubscribe",
+        102,
+        "active",
+        1,
+        "sub_resubscribed",
+      );
+      const checkout = {
+        created: 102,
+        data: {
+          object: {
+            client_reference_id: organizationId,
+            id: "cs_resubscribe",
+            subscription: "sub_resubscribed",
+          },
+        },
+        id: "evt_resubscribe_checkout",
+        type: "checkout.session.completed",
+      };
+      expect((await sendWebhook(fixture, checkout)).status).toBe(200);
+      expect(billingRow()).toEqual({
+        in_grace: 0,
+        stripe_status: "active",
+        stripe_subscription_id: "sub_resubscribed",
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
