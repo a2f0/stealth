@@ -135,7 +135,12 @@ function OrganizationSettingsPageContent({
     );
   }
   if (page === "billing") {
-    return <OrganizationBilling organizationId={organization.id} />;
+    return (
+      <OrganizationBilling
+        onPlanChanged={onAccessChanged}
+        organizationId={organization.id}
+      />
+    );
   }
   return (
     <OrganizationGeneral
