@@ -11,6 +11,7 @@ import {
   type AuthVariables,
   requireAuth,
   requireAuthOrganizationSeat,
+  requireBillingOrganization,
   requireOrganization,
   requireOrganizationPluginAccess,
   requireRole,
@@ -172,8 +173,8 @@ app.use("/api/employee-forms/*", requireAuth, requireOrganization);
 app.route("/api/employee-forms", employeeForms);
 
 app.post("/api/billing/webhook", handleStripeWebhook);
-app.use("/api/billing", requireAuth, requireOrganization);
-app.use("/api/billing/*", requireAuth, requireOrganization);
+app.use("/api/billing", requireAuth, requireBillingOrganization);
+app.use("/api/billing/*", requireAuth, requireBillingOrganization);
 app.route("/api/billing", billing);
 
 app.use("/api/inbox", requireAuth, requireOrganization);

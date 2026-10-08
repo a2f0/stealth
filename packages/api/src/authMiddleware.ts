@@ -3,6 +3,7 @@ import { createMiddleware } from "hono/factory";
 import type { AuthSession } from "./auth";
 import { createAuth } from "./auth";
 import { organizationUserHasSeat } from "./billing";
+import { isOrganizationOwner } from "./organizationMembers";
 import type { Bindings } from "./types";
 
 export interface AuthVariables {
@@ -44,15 +45,22 @@ export const requireAuth = createMiddleware<AuthEnv>(async (context, next) => {
   return next();
 });
 
-export const requireOrganization = createMiddleware<AuthEnv>(
-  async (context, next) => {
+function requireSessionOrganization(requiresSeat: (role: string) => boolean) {
+  return createMiddleware<AuthEnv>(async (context, next) => {
     const session = context.get("authSession");
     const candidates = organizationCandidates(
       session.session.activeOrganizationId,
       session.user.defaultOrganizationId,
     );
-    return authorizeOrganization(context, next, candidates, true);
-  },
+    return authorizeOrganization(context, next, candidates, requiresSeat);
+  });
+}
+
+export const requireOrganization = requireSessionOrganization(() => true);
+
+/** Every owner keeps billing access so a Free organization can upgrade. */
+export const requireBillingOrganization = requireSessionOrganization(
+  (role) => !isOrganizationOwner(role),
 );
 
 const organizationPluginAccessExemptPaths = new Set([
@@ -92,7 +100,7 @@ export const requireOrganizationPluginAccess = createMiddleware<AuthEnv>(
           session.session.activeOrganizationId,
           session.user.defaultOrganizationId,
         );
-    return authorizeOrganization(context, next, candidates, false);
+    return authorizeOrganization(context, next, candidates, () => false);
   },
 );
 
@@ -175,7 +183,7 @@ async function authorizeOrganization(
   context: Context<AuthEnv>,
   next: Next,
   candidates: string[],
-  requireSeat: boolean,
+  requiresSeat: (role: string) => boolean,
 ) {
   const session = context.get("authSession");
   if (candidates.length === 0) {
@@ -233,7 +241,7 @@ async function authorizeOrganization(
     }
   }
   if (
-    requireSeat &&
+    requiresSeat(membership.role) &&
     !(await organizationUserHasSeat(
       context.env.DB,
       membership.organizationId,
@@ -244,8 +252,9 @@ async function authorizeOrganization(
   ) {
     return context.json(
       {
-        error:
-          "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
+        error: isOrganizationOwner(membership.role)
+          ? "This organization's Free plan includes one user. Upgrade to Pro on the Billing page to restore your access."
+          : "This organization's Free plan includes one user. Ask an owner to upgrade or remove another member.",
       },
       403,
     );
