@@ -151,21 +151,27 @@ billing.get("/", async (context) => {
     if (!sessionId.startsWith("cs_") || sessionId.length > 255) {
       return context.json({ error: "Checkout session is invalid." }, 400);
     }
+  }
+  let checkout: CheckoutOutcome | undefined;
+  if (sessionId) {
     try {
-      await confirmCheckoutSession(context.env, organizationId, sessionId);
+      checkout = await confirmCheckoutSession(
+        context.env,
+        organizationId,
+        sessionId,
+      );
     } catch (cause) {
       return billingError(context, cause);
     }
   }
-  return context.json(
-    await billingSummary(
-      context.env.DB,
-      organizationId,
-      context.get("organizationRole"),
-      context.env.STRIPE_PRO_PRICE_ID,
-      context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
-    ),
+  const summary = await billingSummary(
+    context.env.DB,
+    organizationId,
+    context.get("organizationRole"),
+    context.env.STRIPE_PRO_PRICE_ID,
+    context.env.STRIPE_PRO_LEGACY_PRICE_IDS,
   );
+  return context.json(checkout ? { ...summary, checkout } : summary);
 });
 
 billing.post("/checkout", async (context) => {
@@ -987,6 +993,13 @@ async function billingSummary(
   };
 }
 
+/**
+ * `incomplete` means the customer came back without paying: inline Checkout
+ * also returns to its success URL when a redirect-based payment is canceled,
+ * and the open session can still be resumed.
+ */
+type CheckoutOutcome = "complete" | "incomplete";
+
 async function confirmCheckoutSession(
   environment: Pick<
     Bindings,
@@ -994,7 +1007,7 @@ async function confirmCheckoutSession(
   >,
   organizationId: string,
   sessionId: string,
-) {
+): Promise<CheckoutOutcome> {
   const query = new URLSearchParams();
   query.append("expand[]", "subscription");
   const session = parseStripeCheckoutSession(
@@ -1004,15 +1017,13 @@ async function confirmCheckoutSession(
       query,
     ),
   );
-  if (
-    session.client_reference_id !== organizationId ||
-    session.status !== "complete"
-  ) {
+  if (session.client_reference_id !== organizationId) {
     throw new StripeApiError(
       "Checkout is not complete for this organization.",
       409,
     );
   }
+  if (session.status !== "complete") return "incomplete";
   const subscriptionId = optionalExpandableId(session.subscription);
   if (!subscriptionId) {
     throw new StripeApiError("Checkout did not create a subscription.", 409);
@@ -1028,6 +1039,7 @@ async function confirmCheckoutSession(
   if (!persisted) {
     throw new StripeApiError("Checkout did not create a subscription.", 409);
   }
+  return "complete";
 }
 
 async function processStripeEvent(

@@ -181,6 +181,41 @@ describe("billing", () => {
     }
   });
 
+  it("reports a Checkout return without payment as incomplete", async () => {
+    const fixture = await createFixture();
+    const originalFetch = globalThis.fetch;
+    let reference = organizationId;
+    globalThis.fetch = (async () =>
+      Response.json({
+        client_reference_id: reference,
+        id: "cs_returned_open",
+        status: "open",
+        subscription: null,
+      })) as unknown as typeof fetch;
+    try {
+      const returned = await fixture.app.request(
+        "/?session_id=cs_returned_open",
+        undefined,
+        fixture.bindings,
+      );
+      expect(returned.status).toBe(200);
+      expect(await returned.json()).toMatchObject({
+        checkout: "incomplete",
+        plan: "free",
+      });
+
+      reference = "org_other";
+      const foreign = await fixture.app.request(
+        "/?session_id=cs_returned_open",
+        undefined,
+        fixture.bindings,
+      );
+      expect(foreign.status).toBe(409);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("keeps hosted Checkout when the publishable key mode differs", async () => {
     const fixture = await createFixture();
     const originalFetch = globalThis.fetch;
@@ -1153,7 +1188,12 @@ describe("billing", () => {
       await checkoutFetched;
       releaseSubscriptionFetch();
       expect((await webhookResponse).status).toBe(200);
-      expect((await confirmationResponse).status).toBe(200);
+      const confirmation = await confirmationResponse;
+      expect(confirmation.status).toBe(200);
+      expect(await confirmation.json()).toMatchObject({
+        checkout: "complete",
+        plan: "pro",
+      });
       expect(subscriptionFetchCount).toBe(1);
     } finally {
       releaseSubscriptionFetch();

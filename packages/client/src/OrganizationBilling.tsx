@@ -24,8 +24,10 @@ import { countLabel, formatLabel } from "./labels";
 
 type BillingRedirect = "checkout" | "portal";
 
-const checkoutCanceledNotice =
-  "Checkout was canceled. Your plan has not changed.";
+interface Notice {
+  message: string;
+  tone: "info" | "success";
+}
 
 export function OrganizationBilling({
   organizationId,
@@ -35,7 +37,7 @@ export function OrganizationBilling({
   const [status, setStatus] = useState<BillingStatus>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
+  const [notice, setNotice] = useState<Notice>();
   const [checkout, setCheckout] = useState<InlineCheckoutSession>();
   const loadSequence = useRef(0);
   const actionSequence = useRef(0);
@@ -59,7 +61,7 @@ export function OrganizationBilling({
       const nextStatus = await getBillingStatus(sessionId);
       if (sequence !== loadSequence.current) return;
       setStatus(nextStatus);
-      setNotice(checkoutNotice(query));
+      setNotice(checkoutNotice(query, nextStatus));
       clearCheckoutQuery(query);
     } catch (cause) {
       if (sequence === loadSequence.current) {
@@ -75,11 +77,7 @@ export function OrganizationBilling({
   return (
     <>
       {error && <Banner tone="danger">{error}</Banner>}
-      {notice && (
-        <Banner tone={notice === checkoutCanceledNotice ? "info" : "success"}>
-          {notice}
-        </Banner>
-      )}
+      {notice && <Banner tone={notice.tone}>{notice.message}</Banner>}
       {status && (
         <>
           <CurrentPlanCard status={status} />
@@ -122,7 +120,7 @@ function createBillingAction(
     setBusy: (value: boolean) => void;
     setCheckout: (value: InlineCheckoutSession) => void;
     setError: (value: string | undefined) => void;
-    setNotice: (value: string | undefined) => void;
+    setNotice: (value: Notice | undefined) => void;
   },
 ) {
   return async (action: BillingRedirect) => {
@@ -169,10 +167,26 @@ function useBillingReload(
   }, [actionSequence, load, loadSequence]);
 }
 
-function checkoutNotice(query: URLSearchParams) {
+function checkoutNotice(
+  query: URLSearchParams,
+  status: BillingStatus,
+): Notice | undefined {
   const checkout = query.get("checkout");
-  if (checkout === "success") return "Your Pro subscription is active.";
-  if (checkout === "canceled") return checkoutCanceledNotice;
+  if (checkout === "success" && status.checkout === "incomplete") {
+    return {
+      message: "Payment was not completed. Your plan has not changed.",
+      tone: "info",
+    };
+  }
+  if (checkout === "success") {
+    return { message: "Your Pro subscription is active.", tone: "success" };
+  }
+  if (checkout === "canceled") {
+    return {
+      message: "Checkout was canceled. Your plan has not changed.",
+      tone: "info",
+    };
+  }
   return undefined;
 }
 

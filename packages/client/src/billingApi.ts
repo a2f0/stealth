@@ -8,6 +8,8 @@ export interface BillingStatus {
     status: string | null;
   };
   canManage: boolean;
+  /** Present after a Checkout return; `incomplete` means nothing was paid. */
+  checkout?: "complete" | "incomplete";
   current: { formTemplates: number; members: number };
   limits: {
     formTemplates: number | null;

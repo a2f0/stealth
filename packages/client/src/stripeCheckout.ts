@@ -1,4 +1,4 @@
-import type { StripeCheckoutSession } from "@stripe/stripe-js";
+import type { Stripe, StripeCheckoutSession } from "@stripe/stripe-js";
 import type { InlineCheckoutSession } from "./billingApi";
 import { readCheckoutAppearance } from "./checkoutAppearance";
 
@@ -11,6 +11,8 @@ export interface MountedCheckout {
   /** Resolves with an error message; success leaves the page. */
   confirm: () => Promise<string | null>;
 }
+
+type LoadStripe = (publishableKey: string) => Promise<Stripe | null>;
 
 /** The iframe cannot use the app's bundled font, so it loads its own copy. */
 const checkoutFonts = [
@@ -32,9 +34,9 @@ export async function mountCheckout(
   session: InlineCheckoutSession,
   onChange: (summary: CheckoutSummary) => void,
   signal: AbortSignal,
+  load: LoadStripe = loadStripeJs,
 ): Promise<MountedCheckout> {
-  const { loadStripe } = await import("@stripe/stripe-js/pure");
-  const stripe = await loadStripe(session.publishableKey);
+  const stripe = await load(session.publishableKey);
   signal.throwIfAborted();
   if (!stripe) throw new Error("Stripe could not be loaded.");
   const checkout = stripe.initCheckoutElementsSdk({
@@ -53,17 +55,18 @@ export async function mountCheckout(
   themeObserver.observe(host.ownerDocument.documentElement, {
     attributeFilter: ["data-theme"],
   });
-  signal.addEventListener(
-    "abort",
-    () => {
-      themeObserver.disconnect();
-      paymentElement.destroy();
-    },
-    { once: true },
-  );
+  const teardown = () => {
+    themeObserver.disconnect();
+    paymentElement.destroy();
+  };
+  signal.addEventListener("abort", teardown, { once: true });
   const loaded = await checkout.loadActions();
   signal.throwIfAborted();
-  if (loaded.type === "error") throw new Error(loaded.error.message);
+  if (loaded.type === "error") {
+    signal.removeEventListener("abort", teardown);
+    teardown();
+    throw new Error(loaded.error.message);
+  }
   const { actions } = loaded;
   onChange(summarize(actions.getSession()));
   return {
@@ -72,6 +75,11 @@ export async function mountCheckout(
       return result.type === "error" ? result.error.message : null;
     },
   };
+}
+
+async function loadStripeJs(publishableKey: string) {
+  const { loadStripe } = await import("@stripe/stripe-js/pure");
+  return loadStripe(publishableKey);
 }
 
 function summarize(session: StripeCheckoutSession): CheckoutSummary {
