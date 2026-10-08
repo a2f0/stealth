@@ -1,5 +1,4 @@
 import {
-  Banner,
   Button,
   EmptyState,
   Icon,
@@ -35,11 +34,8 @@ import {
   useDismissDialogsOnWorkspaceChange,
   useWorkspaceNavigation,
 } from "./navigationGuard";
+import { OrganizationGate } from "./OrganizationGate";
 import { OrganizationInvitation } from "./OrganizationInvitation";
-import {
-  blockingSeatRequirement,
-  OrganizationSeatRequired,
-} from "./OrganizationSeatRequired";
 import { OrganizationSettings } from "./OrganizationSettings";
 import { getWorkspaceOrganizations } from "./organizationSettingsApi";
 import {
@@ -272,12 +268,6 @@ function AuthenticatedWorkspace({
     hasWorkspace ||
     !organizationPathRequiresAccess(pathname) ||
     pathname === "/inbox";
-  const requirementScreen = organizationRequirementScreen(
-    access,
-    pathname,
-    navigate,
-    guardWorkspaceChange(accounts.signOutActiveAccount),
-  );
   return (
     <WorkspaceShell
       accountLoadError={accounts.loadError}
@@ -298,8 +288,13 @@ function AuthenticatedWorkspace({
       organizations={workspace.organizations}
       user={session.user}
     >
-      {requirementScreen ??
-        (showContent ? (
+      <OrganizationGate
+        access={access}
+        navigate={navigate}
+        pathname={pathname}
+        signOut={guardWorkspaceChange(accounts.signOutActiveAccount)}
+      >
+        {showContent ? (
           contentForPath(
             pathname,
             library,
@@ -317,37 +312,9 @@ function AuthenticatedWorkspace({
           )
         ) : (
           <NoOrganization />
-        ))}
+        )}
+      </OrganizationGate>
     </WorkspaceShell>
-  );
-}
-
-/**
- * What the organization requires before its pages can load: two-factor
- * authentication, or a seat on its Free plan. An owner without a seat can
- * still open Billing to upgrade.
- */
-function organizationRequirementScreen(
-  access: ReturnType<typeof useOrganizationAccess>,
-  pathname: string,
-  navigate: (pathname: string) => void,
-  signOut: () => Promise<void>,
-) {
-  if (!organizationPathRequiresAccess(pathname)) return undefined;
-  if (access.twoFactorRequirement) {
-    return (
-      <OrganizationTwoFactorRequired
-        onSecurity={() => navigate("/account/security")}
-        onSignOut={signOut}
-        requirement={access.twoFactorRequirement}
-      />
-    );
-  }
-  const seat = blockingSeatRequirement(access.seatRequirement, pathname);
-  return (
-    seat && (
-      <OrganizationSeatRequired onNavigate={navigate} requirement={seat} />
-    )
   );
 }
 
@@ -375,67 +342,6 @@ function blockedWorkspaceContent(
     return <FeatureAccessDenied onNavigate={() => navigate("/")} />;
   }
   return undefined;
-}
-
-function OrganizationTwoFactorRequired({
-  onSecurity,
-  onSignOut,
-  requirement,
-}: {
-  onSecurity: () => void;
-  onSignOut: () => Promise<void>;
-  requirement: "setup" | "verification";
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const needsSetup = requirement === "setup";
-
-  async function signOut() {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onSignOut();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not sign out.");
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Page narrow>
-      <PageHeader
-        eyebrow="Organization security"
-        title="Two-factor authentication required"
-      />
-      <PageBody>
-        <EmptyState
-          actions={
-            <Button
-              busy={busy}
-              icon={needsSetup ? "security" : "signOut"}
-              onClick={needsSetup ? onSecurity : () => void signOut()}
-              variant="primary"
-            >
-              {needsSetup
-                ? "Set up two-factor authentication"
-                : busy
-                  ? "Signing out…"
-                  : "Sign out to verify"}
-            </Button>
-          }
-          icon="lock"
-          title={needsSetup ? "Protect your account" : "Verify your sign-in"}
-        >
-          <p>
-            {needsSetup
-              ? "This organization requires you to set up an authenticator before you can use its workspace."
-              : "This organization requires a sign-in verified with two-factor authentication. Sign out, then sign in again to continue."}
-          </p>
-          {error && <Banner tone="danger">{error}</Banner>}
-        </EmptyState>
-      </PageBody>
-    </Page>
-  );
 }
 
 function NoOrganization() {
