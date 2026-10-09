@@ -289,6 +289,44 @@ describe("reordering the audit form", () => {
     expect(container.querySelector(".auditDragging")).toBeNull();
   });
 
+  it("follows a scroll during a drag and drops where the pointer lets go", async () => {
+    stubApi();
+    await render();
+    let scrolled = 0;
+    const savedScrollY = Object.getOwnPropertyDescriptor(dom, "scrollY");
+    Object.defineProperty(dom, "scrollY", {
+      configurable: true,
+      get: () => scrolled,
+    });
+    try {
+      for (const [index, row] of questions().entries()) {
+        row.getBoundingClientRect = () =>
+          ({ height: 100, top: index * 100 - scrolled }) as DOMRect;
+      }
+      const handle = questions()[0]?.querySelector(".auditDragHandle");
+      await pointer(handle, "pointerdown", 50);
+      await pointer(handle, "pointermove", 120);
+      expect(container.querySelector(".auditDropAfter")).toBeNull();
+
+      // A wheel scroll moves the rows under the still pointer.
+      scrolled = 200;
+      await act(async () => {
+        dom.dispatchEvent(new dom.Event("scroll") as never);
+      });
+      expect(questions()[2]?.className).toContain("auditDropAfter");
+
+      // Scrolled back with no event: letting go settles where the pointer
+      // really is, not on the stale target.
+      scrolled = 0;
+      await pointer(handle, "pointerup", 120);
+      await settle();
+      expect(prompts()).toEqual(["First", "Second", "Third"]);
+    } finally {
+      if (savedScrollY) Object.defineProperty(dom, "scrollY", savedScrollY);
+      else Reflect.deleteProperty(dom, "scrollY");
+    }
+  });
+
   it("keeps scrolling at the edge while the pointer holds still", async () => {
     stubApi();
     await render();

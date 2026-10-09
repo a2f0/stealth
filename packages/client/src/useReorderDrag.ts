@@ -32,6 +32,32 @@ interface ReorderDrag {
   to: number;
 }
 
+interface DragSession {
+  /** Where the pointer was last seen, for scrolls that don't move it. */
+  clientY: number;
+  from: number;
+  items: HTMLElement[];
+  pointerId: number;
+  startY: number;
+}
+
+function reorderEntries(list: Element) {
+  return [...list.children].filter(
+    (child): child is HTMLElement =>
+      child instanceof HTMLElement && child.hasAttribute("data-reorder-item"),
+  );
+}
+
+/** How one entry should look while something is being dragged. */
+function entryStateFor(drag: ReorderDrag | undefined, index: number) {
+  if (!drag) return {};
+  if (index === drag.from) return { dragging: true, offset: drag.offset };
+  if (drag.to === drag.from || index !== drag.to) return {};
+  return {
+    drop: drag.to < drag.from ? ("before" as const) : ("after" as const),
+  };
+}
+
 /**
  * Near the viewport edge, a drag keeps scrolling the page, even while the
  * pointer holds still, so far entries are reachable.
@@ -96,6 +122,21 @@ function useEdgeScroll(onScroll: (clientY: number) => void) {
 }
 
 /**
+ * Wheel or keyboard scrolling during a drag moves the entries under a still
+ * pointer; `onScroll` refreshes the drop point and the lifted entry.
+ */
+function useScrollWhileDragging(dragging: boolean, onScroll: () => void) {
+  const latest = useRef(onScroll);
+  latest.current = onScroll;
+  useEffect(() => {
+    if (!dragging) return;
+    const refresh = () => latest.current();
+    window.addEventListener("scroll", refresh, { passive: true });
+    return () => window.removeEventListener("scroll", refresh);
+  }, [dragging]);
+}
+
+/**
  * Reorders a list by dragging each entry's handle, or by pressing the arrow
  * keys on it. Entries mark themselves with `data-reorder-item` and share one
  * parent element. Pointer events work for mouse, pen, and touch alike.
@@ -107,17 +148,18 @@ export function useReorderDrag(
   const [drag, setDrag] = useState<ReorderDrag>();
   const latest = useRef<ReorderDrag | undefined>(undefined);
   /** One drag at a time, owned by the pointer that started it. */
-  const session = useRef<
-    | { from: number; items: HTMLElement[]; pointerId: number; startY: number }
-    | undefined
-  >(undefined);
+  const session = useRef<DragSession | undefined>(undefined);
   const owns = (event: PointerEvent<HTMLElement>) =>
     session.current?.pointerId === event.pointerId;
   const edge = useEdgeScroll(track);
+  useScrollWhileDragging(drag !== undefined, () => {
+    if (session.current) track(session.current.clientY);
+  });
 
   function track(clientY: number) {
     const current = session.current;
     if (!current) return;
+    current.clientY = clientY;
     const middles = current.items.map((item) => {
       const bounds = item.getBoundingClientRect();
       return bounds.top + bounds.height / 2;
@@ -169,11 +211,8 @@ export function useReorderDrag(
         edge.begin();
         session.current = {
           from: index,
-          items: [...list.children].filter(
-            (child): child is HTMLElement =>
-              child instanceof HTMLElement &&
-              child.hasAttribute("data-reorder-item"),
-          ),
+          items: reorderEntries(list),
+          clientY: event.clientY,
           pointerId: event.pointerId,
           startY: event.clientY + window.scrollY,
         };
@@ -186,20 +225,17 @@ export function useReorderDrag(
         edge.follow(event.clientY);
       },
       onPointerUp: (event: PointerEvent<HTMLElement>) => {
-        if (owns(event)) finish(true);
+        if (!owns(event)) return;
+        // Settle the drop point where the pointer let go, after any scrolling.
+        track(event.clientY);
+        finish(true);
       },
     };
   }
 
-  /** How one entry should look while something is being dragged. */
-  function entryState(index: number) {
-    if (!drag) return {};
-    if (index === drag.from) return { dragging: true, offset: drag.offset };
-    if (drag.to === drag.from || index !== drag.to) return {};
-    return {
-      drop: drag.to < drag.from ? ("before" as const) : ("after" as const),
-    };
-  }
-
-  return { dragging: drag !== undefined, entryState, handleProps };
+  return {
+    dragging: drag !== undefined,
+    entryState: (index: number) => entryStateFor(drag, index),
+    handleProps,
+  };
 }
