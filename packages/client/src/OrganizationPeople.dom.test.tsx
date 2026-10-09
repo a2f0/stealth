@@ -103,19 +103,36 @@ function stubApi(
   people: OrganizationPeopleData,
   requirements: EmployeeRequirement[] = [],
   failedRequests = 0,
+  failedListings = 0,
 ) {
   const invited: string[] = [];
   const requested: unknown[] = [];
   let failures = failedRequests;
+  let listingFailures = failedListings;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     if (url.pathname.endsWith("/employee-forms") && init?.method === "POST") {
-      requested.push(JSON.parse(String(init.body)));
+      const body = JSON.parse(String(init.body)) as {
+        invitationId?: string;
+        requirements: Array<{ title: string }>;
+      };
+      requested.push(body);
       if (failures > 0) {
         failures -= 1;
         return Response.json(
           { error: "Requirement service unavailable." },
           { status: 503 },
+        );
+      }
+      for (const draft of body.requirements) {
+        requirements.push(
+          requirement({
+            invitationId: body.invitationId ?? null,
+            targetEmail:
+              people.invitations.find(({ id }) => id === body.invitationId)
+                ?.email ?? null,
+            title: draft.title,
+          }),
         );
       }
       return Response.json({ ids: ["new"] });
@@ -136,6 +153,13 @@ function stubApi(
       return Response.json({ id: `invitation-${invited.length}`, ...body });
     }
     if (url.pathname.endsWith("/employee-forms")) {
+      if (listingFailures > 0) {
+        listingFailures -= 1;
+        return Response.json(
+          { error: "Requirement service unavailable." },
+          { status: 503 },
+        );
+      }
       return Response.json({ requirements });
     }
     return Response.json(people);
@@ -261,6 +285,38 @@ describe("inviting people", () => {
     expect(inviteForm()).toBeUndefined();
     expect(container.textContent).toContain(
       "Invitation sent to new@example.com, with its requested forms.",
+    );
+    // The retried request has no member page, so it shows with the others.
+    expect(container.textContent).toContain("W-4 · new@example.com (invited)");
+  });
+
+  it("reports requests that could not load, and shows them after a retry", async () => {
+    stubApi(
+      {
+        currentMemberId: "owner",
+        invitations: [],
+        memberRole: "owner",
+        members: [owner],
+      },
+      [
+        requirement({
+          targetEmail: "former@example.com",
+          title: "Credit check",
+        }),
+      ],
+      0,
+      1,
+    );
+    await render();
+    expect(container.textContent).toContain(
+      "Requested forms and checks could not be loaded.",
+    );
+    expect(container.textContent).not.toContain("Invitees and former members");
+
+    await click(button(container, "Try again"));
+    expect(container.textContent).not.toContain("could not be loaded");
+    expect(container.textContent).toContain(
+      "Credit check · former@example.com",
     );
   });
 

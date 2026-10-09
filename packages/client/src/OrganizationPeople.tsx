@@ -14,6 +14,7 @@ import {
   type FormEvent,
   type ReactNode,
   type Ref,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -79,7 +80,7 @@ export function OrganizationPeople({
 }) {
   const state = useOrganizationPeopleData(organization.id);
   const [inviting, setInviting] = useState(false);
-  const requirements = useRequirementSummary(state.data);
+  const summary = useRequirementSummary(state.data);
   const canManage = canManageOrganization(state.data?.memberRole);
   const hasOthers = Boolean(
     state.data &&
@@ -129,7 +130,7 @@ export function OrganizationPeople({
       onInviteSubmitting={() => setInviting(true)}
       onNavigate={onNavigate}
       organization={organization}
-      requirements={requirements}
+      summary={summary}
       state={state}
     />
   );
@@ -146,8 +147,8 @@ function PeopleBody({
   onInviteSubmitting,
   onNavigate,
   organization,
-  requirements,
   state,
+  summary,
 }: {
   canManage: boolean;
   data: OrganizationPeopleData;
@@ -160,8 +161,8 @@ function PeopleBody({
   onInviteSubmitting: () => void;
   onNavigate: (pathname: string) => void;
   organization: WorkspaceOrganization;
-  requirements: EmployeeRequirement[];
   state: ReturnType<typeof useOrganizationPeopleData>;
+  summary: ReturnType<typeof useRequirementSummary>;
 }) {
   const actions = organizationPeopleActions(
     state,
@@ -172,6 +173,7 @@ function PeopleBody({
     kind: "unattached",
     memberIds: data.members.map(({ id }) => id),
   };
+  const { requirements } = summary;
   const openCount = (matches: (requirement: EmployeeRequirement) => boolean) =>
     requirements.filter(
       (requirement) =>
@@ -181,6 +183,7 @@ function PeopleBody({
     <>
       {state.error && <Banner tone="danger">{state.error}</Banner>}
       {state.notice && <Banner tone="success">{state.notice}</Banner>}
+      <SummaryError summary={summary} />
       {!canManage && data.currentMemberId && (
         <OwnRequestsNotice
           count={openCount(() => true)}
@@ -194,7 +197,10 @@ function PeopleBody({
           memberRole={data.memberRole}
           onCancel={onInviteCancel}
           onNavigate={onNavigate}
-          onSent={state.load}
+          onSent={async () => {
+            await state.load();
+            summary.reload();
+          }}
           onSubmitting={onInviteSubmitting}
           onSuccess={(message) => {
             state.setNotice(message);
@@ -234,7 +240,11 @@ function PeopleBody({
         requirements.some((requirement) =>
           inRequirementScope(unattached, requirement),
         ) && (
-          <EmployeeForms canManage key={peopleKey(data)} scope={unattached} />
+          <EmployeeForms
+            canManage
+            key={`${peopleKey(data)}:${summary.version}`}
+            scope={unattached}
+          />
         )}
     </>
   );
@@ -245,25 +255,63 @@ function peopleKey(data: OrganizationPeopleData) {
 }
 
 /**
- * Requested forms and checks, for the list's counts. Each member's page loads
- * and reports them in full, so a failure here only leaves the counts out.
+ * Requested forms and checks, for the list's counts and for requests without
+ * a member page. Reloads when people change, or on demand after new requests.
  */
 function useRequirementSummary(data: OrganizationPeopleData | undefined) {
-  const [requirements, setRequirements] = useState<EmployeeRequirement[]>([]);
+  const [summary, setSummary] = useState<{
+    error?: string;
+    requirements: EmployeeRequirement[];
+    /** Counts loads, so views of the same requests can start over. */
+    version: number;
+  }>({ requirements: [], version: 0 });
+  const sequence = useRef(0);
+  const load = useCallback(async () => {
+    const request = ++sequence.current;
+    try {
+      const requirements = await listEmployeeRequirements();
+      if (request !== sequence.current) return;
+      setSummary(({ version }) => ({ requirements, version: version + 1 }));
+    } catch (cause) {
+      if (request !== sequence.current) return;
+      const error =
+        cause instanceof Error
+          ? cause.message
+          : "Requested forms and checks could not be loaded.";
+      setSummary((current) => ({ ...current, error }));
+    }
+  }, []);
   const people = data ? peopleKey(data) : "";
   useEffect(() => {
-    if (!people) return;
-    let active = true;
-    listEmployeeRequirements()
-      .then((next) => {
-        if (active) setRequirements(next);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [people]);
-  return requirements;
+    if (people) void load();
+  }, [people, load]);
+  useEffect(
+    () => () => {
+      sequence.current += 1;
+    },
+    [],
+  );
+  return { ...summary, reload: () => void load() };
+}
+
+function SummaryError({
+  summary,
+}: {
+  summary: ReturnType<typeof useRequirementSummary>;
+}) {
+  if (!summary.error) return null;
+  return (
+    <Banner
+      actions={
+        <Button onClick={summary.reload} size="sm">
+          Try again
+        </Button>
+      }
+      tone="danger"
+    >
+      Requested forms and checks could not be loaded. {summary.error}
+    </Banner>
+  );
 }
 
 function OwnRequestsNotice({
