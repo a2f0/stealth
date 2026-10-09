@@ -358,6 +358,37 @@ describe("reordering the audit form", () => {
     expect(prompts()).toEqual(["Second", "First", "Third"]);
   });
 
+  it("ends a drag when another action reorders the list", async () => {
+    stubApi();
+    await render();
+    for (const [index, row] of questions().entries()) {
+      row.getBoundingClientRect = () =>
+        ({ height: 100, top: index * 100 }) as DOMRect;
+    }
+    const third = questions()[2]?.querySelector(".auditDragHandle");
+    await pointer(third, "pointerdown", 250);
+    await pointer(third, "pointermove", 120);
+    expect(questions()[1]?.className).toContain("auditDropBefore");
+
+    // Another finger moves the first question down mid-drag.
+    await act(async () =>
+      sections()[0]
+        ?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Question 1 order"]',
+        )
+        ?.click(),
+    );
+    await act(async () => menuItem("Move down")?.click());
+    await settle();
+    expect(prompts()).toEqual(["Second", "First", "Third"]);
+    expect(container.querySelector(".auditDragging")).toBeNull();
+
+    // The stale drag does not drop the third question into the new order.
+    await pointer(third, "pointerup", 120);
+    await settle();
+    expect(prompts()).toEqual(["Second", "First", "Third"]);
+  });
+
   it("keeps scrolling at the edge while the pointer holds still", async () => {
     stubApi();
     await render();

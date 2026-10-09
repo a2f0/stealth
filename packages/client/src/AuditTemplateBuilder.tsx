@@ -164,8 +164,9 @@ function BuilderBody({
     updateSections(moveEntry(sections, from, to));
     refocus(focus, moved.id);
   };
-  const sectionDrag = useReorderDrag(sections.length, (from, to) =>
-    moveSection(from, to, "handle"),
+  const sectionDrag = useReorderDrag(
+    sections.map(({ id }) => id),
+    (from, to) => moveSection(from, to, "handle"),
   );
   return (
     <PageBody>
@@ -416,8 +417,9 @@ function SectionEditor({
     onChange({ ...section, items: moveEntry(section.items, from, to) });
     refocus(focus, moved.id);
   };
-  const questionDrag = useReorderDrag(section.items.length, (from, to) =>
-    moveQuestion(from, to, "handle"),
+  const questionDrag = useReorderDrag(
+    section.items.map(({ id }) => id),
+    (from, to) => moveQuestion(from, to, "handle"),
   );
   const label = `Section ${index + 1}`;
   return (

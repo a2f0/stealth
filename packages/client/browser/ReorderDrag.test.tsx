@@ -16,7 +16,7 @@ import { moveEntry, useReorderDrag } from ${JSON.stringify(hook)};
 
 function App() {
   const [entries, setEntries] = useState(["a", "b", "c"]);
-  const drag = useReorderDrag(entries.length, (from, to) =>
+  const drag = useReorderDrag(entries, (from, to) =>
     setEntries(moveEntry(entries, from, to)),
   );
   return (
