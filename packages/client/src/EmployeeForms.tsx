@@ -137,14 +137,37 @@ export function RequirementDraftEditor({
   );
 }
 
-/** One member's requested forms and checks, and requests for new ones. */
+/**
+ * Requests either belong to one current member, or have no member page: they
+ * target a pending invitation, or a member who has since left.
+ */
+export type RequirementScope =
+  | { kind: "member"; memberId: string }
+  | { kind: "unattached"; memberIds: string[] };
+
+export function inRequirementScope(
+  scope: RequirementScope,
+  requirement: EmployeeRequirement,
+) {
+  if (scope.kind === "member") return requirement.memberId === scope.memberId;
+  return (
+    !requirement.memberId || !scope.memberIds.includes(requirement.memberId)
+  );
+}
+
+/**
+ * Requested forms and checks in one scope. On a member's page, managers also
+ * request new ones; requests without a member page keep every other control.
+ */
 export function EmployeeForms({
   canManage,
-  memberId,
+  scope,
 }: {
   canManage: boolean;
-  memberId: string;
+  scope: RequirementScope;
 }) {
+  // Compared by value, so a new scope object for the same people is no change.
+  const scopeKey = JSON.stringify(scope);
   const [requirements, setRequirements] = useState<EmployeeRequirement[]>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -153,15 +176,16 @@ export function EmployeeForms({
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      const current = JSON.parse(scopeKey) as RequirementScope;
       const all = await listEmployeeRequirements();
-      setRequirements(all.filter((item) => item.memberId === memberId));
+      setRequirements(all.filter((item) => inRequirementScope(current, item)));
       setError(undefined);
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
       setLoading(false);
     }
-  }, [memberId]);
+  }, [scopeKey]);
   useEffect(() => {
     setRequirements(undefined);
     void load();
@@ -187,20 +211,20 @@ export function EmployeeForms({
 
   return (
     <Card
-      description={
-        canManage
-          ? "Request tax forms, set due dates, and start or track background and credit checks."
-          : "Forms and checks your organization has requested from you."
+      description={scopeDescription(scope, canManage)}
+      title={
+        scope.kind === "member"
+          ? "Forms and checks"
+          : "Invitees and former members"
       }
-      title="Forms and checks"
     >
       {error && <Banner tone="danger">{error}</Banner>}
       {notice && <Banner tone="success">{notice}</Banner>}
-      {canManage && (
+      {canManage && scope.kind === "member" && (
         <RequirementAssignmentForm
           action={action}
           busy={busy}
-          memberId={memberId}
+          memberId={scope.memberId}
         />
       )}
       {!requirements && loading ? (
@@ -220,6 +244,7 @@ export function EmployeeForms({
               canManage={canManage}
               key={requirement.id}
               requirement={requirement}
+              showTarget={scope.kind === "unattached"}
             />
           ))}
         </ul>
@@ -276,11 +301,14 @@ function RequirementItem({
   busy,
   canManage,
   requirement,
+  showTarget,
 }: {
   action: RequirementAction;
   busy: boolean;
   canManage: boolean;
   requirement: EmployeeRequirement;
+  /** Name the person when the list is not already one person's page. */
+  showTarget: boolean;
 }) {
   const [reviewedRevision, setReviewedRevision] = useState<number | null>(null);
   return (
@@ -288,6 +316,13 @@ function RequirementItem({
       <div className="requirementItemHeader">
         <div>
           <strong>{requirement.title}</strong>
+          {showTarget && (
+            <span className="rowMeta">
+              {" "}
+              · {requirement.targetName ?? requirement.targetEmail}
+              {requirement.invitationId ? " (invited)" : ""}
+            </span>
+          )}
           <span className="rowMeta">
             {" "}
             · Due {formatDate(requirement.dueDate)}
@@ -624,6 +659,15 @@ function RequirementStatusControl({
       </option>
     </select>
   );
+}
+
+function scopeDescription(scope: RequirementScope, canManage: boolean) {
+  if (scope.kind === "unattached") {
+    return "Requests for people who haven’t accepted their invitation yet, or who have left the organization.";
+  }
+  return canManage
+    ? "Request tax forms, set due dates, and start or track background and credit checks."
+    : "Forms and checks your organization has requested from you.";
 }
 
 function statusTone(status: EmployeeRequirementStatus) {

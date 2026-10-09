@@ -123,7 +123,7 @@ export function OrganizationMemberDetail({
         <EmployeeForms
           canManage={canManage}
           key={member.id}
-          memberId={member.id}
+          scope={{ kind: "member", memberId: member.id }}
         />
       )}
     </>

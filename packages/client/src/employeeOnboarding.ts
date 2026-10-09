@@ -24,6 +24,17 @@ export function reviewRevisionForStatus(
     : documentRevision;
 }
 
+/** The invitation went out, but its requests did not; they can be retried. */
+export class RequirementAssignmentError extends Error {
+  readonly invitationId: string | undefined;
+
+  constructor(message: string, invitationId: string | undefined) {
+    super(message);
+    this.name = "RequirementAssignmentError";
+    this.invitationId = invitationId;
+  }
+}
+
 export async function inviteWithRequirements<TRole extends string>({
   assign,
   invite,
@@ -55,16 +66,17 @@ export async function inviteWithRequirements<TRole extends string>({
     throw new Error(result.error.message ?? "Could not send this invitation.");
   }
   onInvited();
+  const invitationId = result.data?.id;
   try {
     if (requirements.length) {
-      const invitationId = result.data?.id;
       if (!invitationId) throw new Error("Invitation ID unavailable.");
       await assign(invitationId, requirements);
     }
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "Unknown error.";
-    throw new Error(
+    throw new RequirementAssignmentError(
       `Invitation sent, but requirements could not be assigned: ${message}`,
+      invitationId,
     );
   } finally {
     await onSent();

@@ -20,14 +20,22 @@ import {
 } from "react";
 import { authClient } from "./authClient";
 import { ErrorBanner, type ErrorNotice, errorNotice } from "./BillingLink";
-import { RequirementDraftEditor } from "./EmployeeForms";
+import {
+  EmployeeForms,
+  inRequirementScope,
+  RequirementDraftEditor,
+  type RequirementScope,
+} from "./EmployeeForms";
 import {
   createEmployeeRequirements,
   type EmployeeRequirement,
   listEmployeeRequirements,
   type RequirementDraft,
 } from "./employeeFormsApi";
-import { inviteWithRequirements } from "./employeeOnboarding";
+import {
+  inviteWithRequirements,
+  RequirementAssignmentError,
+} from "./employeeOnboarding";
 import {
   MemberRoleControl,
   MemberTwoFactorControl,
@@ -116,7 +124,9 @@ export function OrganizationPeople({
         ) : null
       }
       onAccessChanged={onAccessChanged}
-      onInviteClosed={hasOthers ? () => setInviting(false) : undefined}
+      onInviteCancel={hasOthers ? () => setInviting(false) : undefined}
+      onInviteDone={() => setInviting(false)}
+      onInviteSubmitting={() => setInviting(true)}
       onNavigate={onNavigate}
       organization={organization}
       requirements={requirements}
@@ -131,7 +141,9 @@ function PeopleBody({
   formOpen,
   inviteAction,
   onAccessChanged,
-  onInviteClosed,
+  onInviteCancel,
+  onInviteDone,
+  onInviteSubmitting,
   onNavigate,
   organization,
   requirements,
@@ -142,7 +154,10 @@ function PeopleBody({
   formOpen: boolean;
   inviteAction: ReactNode;
   onAccessChanged: () => Promise<void>;
-  onInviteClosed: (() => void) | undefined;
+  onInviteCancel: (() => void) | undefined;
+  onInviteDone: () => void;
+  /** Keeps the form open while it works, even as people reload around it. */
+  onInviteSubmitting: () => void;
   onNavigate: (pathname: string) => void;
   organization: WorkspaceOrganization;
   requirements: EmployeeRequirement[];
@@ -153,6 +168,10 @@ function PeopleBody({
     organization,
     onAccessChanged,
   );
+  const unattached: RequirementScope = {
+    kind: "unattached",
+    memberIds: data.members.map(({ id }) => id),
+  };
   const openCount = (matches: (requirement: EmployeeRequirement) => boolean) =>
     requirements.filter(
       (requirement) =>
@@ -173,12 +192,13 @@ function PeopleBody({
         <InviteMemberForm
           key={organization.id}
           memberRole={data.memberRole}
-          onCancel={onInviteClosed}
+          onCancel={onInviteCancel}
           onNavigate={onNavigate}
           onSent={state.load}
+          onSubmitting={onInviteSubmitting}
           onSuccess={(message) => {
             state.setNotice(message);
-            onInviteClosed?.();
+            onInviteDone();
           }}
           organizationId={organization.id}
         />
@@ -208,15 +228,20 @@ function PeopleBody({
           busy={state.busy}
           invitations={data.invitations}
           onCancel={actions.cancelInvitation}
-          requested={(invitation) =>
-            requirements.filter(
-              (requirement) => requirement.invitationId === invitation.id,
-            )
-          }
         />
       )}
+      {canManage &&
+        requirements.some((requirement) =>
+          inRequirementScope(unattached, requirement),
+        ) && (
+          <EmployeeForms canManage key={peopleKey(data)} scope={unattached} />
+        )}
     </>
   );
+}
+
+function peopleKey(data: OrganizationPeopleData) {
+  return [...data.members, ...data.invitations].map(({ id }) => id).join(",");
 }
 
 /**
@@ -225,9 +250,7 @@ function PeopleBody({
  */
 function useRequirementSummary(data: OrganizationPeopleData | undefined) {
   const [requirements, setRequirements] = useState<EmployeeRequirement[]>([]);
-  const people = data
-    ? [...data.members, ...data.invitations].map(({ id }) => id).join(",")
-    : "";
+  const people = data ? peopleKey(data) : "";
   useEffect(() => {
     if (!people) return;
     let active = true;
@@ -279,14 +302,92 @@ function InviteMemberForm({
   onCancel,
   onNavigate,
   onSent,
+  onSubmitting,
   onSuccess,
   organizationId,
 }: {
   memberRole: string;
-  /** Present when the form was opened on demand and can fold away again. */
+  /** Present when the form can fold away again. */
   onCancel: (() => void) | undefined;
   onNavigate: (pathname: string) => void;
   onSent: () => Promise<void>;
+  onSubmitting: () => void;
+  onSuccess: (message: string) => void;
+  organizationId: string;
+}) {
+  const form = useInviteSubmission({
+    onSent,
+    onSubmitting,
+    onSuccess,
+    organizationId,
+  });
+  const emailField = useRef<HTMLInputElement>(null);
+  // Opened from the header button, which is now gone; move focus into the
+  // form. Decided once, so a later reload does not pull focus here.
+  const [openedOnDemand] = useState(Boolean(onCancel));
+  useEffect(() => {
+    if (openedOnDemand) emailField.current?.focus();
+  }, [openedOnDemand]);
+
+  return (
+    <Card
+      description="They’ll receive a single-use invitation that expires in 48 hours."
+      footer={
+        <>
+          {onCancel && (
+            <Button disabled={form.busy} onClick={onCancel} variant="ghost">
+              Cancel
+            </Button>
+          )}
+          <Button
+            busy={form.busy}
+            disabled={!form.email.trim()}
+            icon="mail"
+            type="submit"
+            variant="primary"
+          >
+            {form.busy ? "Sending…" : "Send invitation"}
+          </Button>
+        </>
+      }
+      onSubmit={(event) => void form.invite(event)}
+      title="Invite a member"
+    >
+      <InviteFields
+        busy={form.busy}
+        email={form.email}
+        emailField={emailField}
+        memberRole={memberRole}
+        onEmail={form.setEmail}
+        onRole={form.setRole}
+        role={form.role}
+      />
+      <div className="inviteRequirements">
+        <h3>Onboarding requirements</h3>
+        <p className="muted">
+          Choose any forms or checks needed from this person and set each due
+          date.
+        </p>
+        <RequirementDraftEditor
+          drafts={form.requirements}
+          disabled={form.busy}
+          onChange={form.setRequirements}
+        />
+      </div>
+      <InviteError form={form} onNavigate={onNavigate} />
+    </Card>
+  );
+}
+
+/** Sends an invitation with its requests, and retries requests that failed. */
+function useInviteSubmission({
+  onSent,
+  onSubmitting,
+  onSuccess,
+  organizationId,
+}: {
+  onSent: () => Promise<void>;
+  onSubmitting: () => void;
   onSuccess: (message: string) => void;
   organizationId: string;
 }) {
@@ -295,12 +396,7 @@ function InviteMemberForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorNotice>();
   const [requirements, setRequirements] = useState<RequirementDraft[]>([]);
-  const emailField = useRef<HTMLInputElement>(null);
-  const openedOnDemand = Boolean(onCancel);
-  // The header button that opened the form is gone; move focus into the form.
-  useEffect(() => {
-    if (openedOnDemand) emailField.current?.focus();
-  }, [openedOnDemand]);
+  const [retry, setRetry] = useState<{ email: string; invitationId: string }>();
 
   async function invite(event: FormEvent) {
     event.preventDefault();
@@ -308,6 +404,8 @@ function InviteMemberForm({
     if (!invitedEmail) return;
     setBusy(true);
     setError(undefined);
+    setRetry(undefined);
+    onSubmitting();
     try {
       const assignedRole = await sendInvitationWithRequirements({
         email: invitedEmail,
@@ -322,59 +420,78 @@ function InviteMemberForm({
         `Invitation sent to ${invitedEmail} with the ${assignedRole} role.`,
       );
     } catch (cause) {
+      // The invitation went out but its requests did not: keep the drafts
+      // and offer to send them to that invitation again.
+      if (cause instanceof RequirementAssignmentError && cause.invitationId) {
+        setRetry({ email: invitedEmail, invitationId: cause.invitationId });
+      }
       setError(errorNotice(cause, "Could not send this invitation."));
     } finally {
       setBusy(false);
     }
   }
 
+  async function retryRequests() {
+    if (!retry) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await createEmployeeRequirements(
+        { invitationId: retry.invitationId },
+        requirements,
+      );
+      setRequirements([]);
+      setRetry(undefined);
+      await onSent();
+      onSuccess(`Invitation sent to ${retry.email}, with its requested forms.`);
+    } catch (cause) {
+      setError(errorNotice(cause, "Could not request these forms."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return {
+    busy,
+    email,
+    error,
+    invite,
+    requirements,
+    retry,
+    retryRequests,
+    role,
+    setEmail,
+    setRequirements,
+    setRole,
+  };
+}
+
+function InviteError({
+  form,
+  onNavigate,
+}: {
+  form: ReturnType<typeof useInviteSubmission>;
+  onNavigate: (pathname: string) => void;
+}) {
+  if (!form.retry || !form.error) {
+    return <ErrorBanner error={form.error} onNavigate={onNavigate} />;
+  }
   return (
-    <Card
-      description="They’ll receive a single-use invitation that expires in 48 hours."
-      footer={
-        <>
-          {onCancel && (
-            <Button disabled={busy} onClick={onCancel} variant="ghost">
-              Cancel
-            </Button>
-          )}
-          <Button
-            busy={busy}
-            disabled={!email.trim()}
-            icon="mail"
-            type="submit"
-            variant="primary"
-          >
-            {busy ? "Sending…" : "Send invitation"}
-          </Button>
-        </>
+    <Banner
+      actions={
+        <Button
+          busy={form.busy}
+          disabled={!form.requirements.length}
+          onClick={() => void form.retryRequests()}
+          size="sm"
+        >
+          Retry requests
+        </Button>
       }
-      onSubmit={(event) => void invite(event)}
-      title="Invite a member"
+      tone="danger"
     >
-      <InviteFields
-        busy={busy}
-        email={email}
-        emailField={emailField}
-        memberRole={memberRole}
-        onEmail={setEmail}
-        onRole={setRole}
-        role={role}
-      />
-      <div className="inviteRequirements">
-        <h3>Onboarding requirements</h3>
-        <p className="muted">
-          Choose any forms or checks needed from this person and set each due
-          date.
-        </p>
-        <RequirementDraftEditor
-          drafts={requirements}
-          disabled={busy}
-          onChange={setRequirements}
-        />
-      </div>
-      <ErrorBanner error={error} onNavigate={onNavigate} />
-    </Card>
+      {form.error.message}
+    </Banner>
   );
 }
 
@@ -615,53 +732,42 @@ function PendingInvitations({
   busy,
   invitations,
   onCancel,
-  requested,
 }: {
   busy: boolean;
   invitations: OrganizationInvitation[];
   onCancel: (invitationId: string) => Promise<void>;
-  requested: (invitation: OrganizationInvitation) => EmployeeRequirement[];
 }) {
   return (
     <Card
-      description="Invitations that have not been accepted yet. Requested forms move to the member’s page when they join."
+      description="Invitations that have not been accepted yet. Forms requested with an invitation move to the member’s page when they join."
       flush
       title="Pending invitations"
     >
       <ul className="rowList">
-        {invitations.map((invitation) => {
-          const forms = requested(invitation);
-          return (
-            <li className="row" key={invitation.id}>
-              <div className="memberIdentity">
-                <span aria-hidden="true" className="invitationMark">
-                  <Icon name="mail" size={16} />
+        {invitations.map((invitation) => (
+          <li className="row" key={invitation.id}>
+            <div className="memberIdentity">
+              <span aria-hidden="true" className="invitationMark">
+                <Icon name="mail" size={16} />
+              </span>
+              <div className="rowMain">
+                <span className="rowTitle truncate">{invitation.email}</span>
+                <span className="rowMeta">
+                  {formatRole(invitation.role)} · Expires{" "}
+                  {formatDate(invitation.expiresAt)}
                 </span>
-                <div className="rowMain">
-                  <span className="rowTitle truncate">{invitation.email}</span>
-                  <span className="rowMeta">
-                    {formatRole(invitation.role)} · Expires{" "}
-                    {formatDate(invitation.expiresAt)}
-                  </span>
-                  {forms.length > 0 && (
-                    <span className="rowMeta">
-                      Requested:{" "}
-                      {forms.map((requirement) => requirement.title).join(", ")}
-                    </span>
-                  )}
-                </div>
               </div>
-              <Button
-                disabled={busy}
-                onClick={() => void onCancel(invitation.id)}
-                size="sm"
-                variant="danger"
-              >
-                Revoke
-              </Button>
-            </li>
-          );
-        })}
+            </div>
+            <Button
+              disabled={busy}
+              onClick={() => void onCancel(invitation.id)}
+              size="sm"
+              variant="danger"
+            >
+              Revoke
+            </Button>
+          </li>
+        ))}
       </ul>
     </Card>
   );

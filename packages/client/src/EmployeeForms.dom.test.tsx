@@ -82,7 +82,12 @@ async function render(requirements: EmployeeRequirement[], canManage = true) {
   document.body.append(container);
   root = createRoot(container);
   await act(async () =>
-    root?.render(<EmployeeForms canManage={canManage} memberId="member" />),
+    root?.render(
+      <EmployeeForms
+        canManage={canManage}
+        scope={{ kind: "member", memberId: "member" }}
+      />,
+    ),
   );
 }
 
@@ -117,7 +122,12 @@ describe("requesting forms on a member's page", () => {
     document.body.append(container);
     root = createRoot(container);
     await act(async () =>
-      root?.render(<EmployeeForms canManage memberId="member" />),
+      root?.render(
+        <EmployeeForms
+          canManage
+          scope={{ kind: "member", memberId: "member" }}
+        />,
+      ),
     );
     expect(item("Own check")).toBeTruthy();
     expect(container.textContent).not.toContain("Their check");

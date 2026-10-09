@@ -95,14 +95,31 @@ function requirement(
 
 const owner = member("owner", "Olivia Owner", "owner");
 
-/** Serves people and requirements; an invitation joins the pending list. */
+/**
+ * Serves people and requirements; an invitation joins the pending list, and
+ * the first `failedRequests` request posts fail.
+ */
 function stubApi(
   people: OrganizationPeopleData,
   requirements: EmployeeRequirement[] = [],
+  failedRequests = 0,
 ) {
   const invited: string[] = [];
+  const requested: unknown[] = [];
+  let failures = failedRequests;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(String(input instanceof Request ? input.url : input));
+    if (url.pathname.endsWith("/employee-forms") && init?.method === "POST") {
+      requested.push(JSON.parse(String(init.body)));
+      if (failures > 0) {
+        failures -= 1;
+        return Response.json(
+          { error: "Requirement service unavailable." },
+          { status: 503 },
+        );
+      }
+      return Response.json({ ids: ["new"] });
+    }
     if (url.pathname.endsWith("/organization/invite-member")) {
       const body = JSON.parse(String(init?.body)) as {
         email: string;
@@ -123,7 +140,7 @@ function stubApi(
     }
     return Response.json(people);
   }) as typeof fetch;
-  return invited;
+  return { invited, requested };
 }
 
 async function settle() {
@@ -184,7 +201,7 @@ async function type(field: HTMLInputElement | null, value: string) {
 
 describe("inviting people", () => {
   it("keeps the form open while the owner is alone, then folds it after the first invitation", async () => {
-    const invited = stubApi({
+    const { invited } = stubApi({
       currentMemberId: "owner",
       invitations: [],
       memberRole: "owner",
@@ -205,6 +222,46 @@ describe("inviting people", () => {
     );
     expect(container.textContent).toContain("Pending invitations");
     expect(document.activeElement).toBe(inviteButton());
+  });
+
+  it("keeps the form and its requests when only the requests fail, then retries them", async () => {
+    const { invited, requested } = stubApi(
+      {
+        currentMemberId: "owner",
+        invitations: [],
+        memberRole: "owner",
+        members: [owner],
+      },
+      [],
+      1,
+    );
+    await render();
+    await type(emailField(), "new@example.com");
+    await type(
+      inviteForm()?.querySelector<HTMLInputElement>("input[type=date]") ?? null,
+      "2026-11-15",
+    );
+    await click(button(inviteForm(), "Add"));
+    await click(button(inviteForm(), "Send invitation"));
+
+    expect(invited).toEqual(["new@example.com"]);
+    expect(inviteForm()?.textContent).toContain(
+      "Invitation sent, but requirements could not be assigned",
+    );
+    expect(
+      inviteForm()?.querySelector(".requirementDrafts")?.textContent,
+    ).toContain("W-4");
+
+    await click(button(inviteForm(), "Retry requests"));
+    expect(requested).toHaveLength(2);
+    expect(requested[1]).toMatchObject({
+      invitationId: "invitation-1",
+      requirements: [expect.objectContaining({ title: "W-4" })],
+    });
+    expect(inviteForm()).toBeUndefined();
+    expect(container.textContent).toContain(
+      "Invitation sent to new@example.com, with its requested forms.",
+    );
   });
 
   it("opens on demand with focus on the address, and returns focus on cancel", async () => {
@@ -247,7 +304,16 @@ describe("the member list", () => {
         requirement({ memberId: "mark" }),
         requirement({ memberId: "mark", title: "W-9" }),
         requirement({ memberId: "mark", status: "complete", title: "I-9" }),
-        requirement({ invitationId: "invite-1", title: "Background check" }),
+        requirement({
+          invitationId: "invite-1",
+          targetEmail: "invitee@example.com",
+          title: "Background check",
+        }),
+        requirement({
+          kind: "credit_check",
+          targetEmail: "former@example.com",
+          title: "Credit check",
+        }),
       ],
     );
     await render((path) => paths.push(path));
@@ -257,8 +323,23 @@ describe("the member list", () => {
     );
     expect(mark?.getAttribute("href")).toBe("/organization/people/mark");
     expect(mark?.textContent).toContain("2 open requests");
-    expect(container.textContent).toContain("Requested: Background check");
-    expect(container.textContent).not.toContain("Forms and checks");
+    const unattached = [...container.querySelectorAll(".card")].find((card) =>
+      card.textContent?.includes("Invitees and former members"),
+    );
+    expect(unattached?.textContent).toContain(
+      "Background check · invitee@example.com (invited)",
+    );
+    expect(unattached?.textContent).toContain(
+      "Credit check · former@example.com",
+    );
+    expect(unattached?.textContent).not.toContain("W-9");
+    // Managers keep every control for requests without a member page.
+    expect(
+      [...(unattached?.querySelectorAll("button") ?? [])].filter(
+        (element) => element.textContent?.trim() === "Remove",
+      ),
+    ).toHaveLength(2);
+    expect(container.textContent).not.toContain("Send requests");
     await click(mark);
     expect(paths).toEqual(["/organization/people/mark"]);
   });
