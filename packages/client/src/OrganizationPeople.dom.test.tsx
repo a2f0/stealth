@@ -400,6 +400,77 @@ describe("the member list", () => {
     expect(paths).toEqual(["/organization/people/mark"]);
   });
 
+  it("drops organization-wide counts when the viewer stops managing", async () => {
+    const people: OrganizationPeopleData = {
+      currentMemberId: "adam",
+      invitations: [],
+      memberRole: "admin",
+      members: [
+        owner,
+        member("adam", "Adam Admin", "admin"),
+        member("mark", "Mark Member"),
+      ],
+    };
+    const all = [
+      requirement({ memberId: "mark" }),
+      requirement({ memberId: "mark", title: "W-9" }),
+      requirement({ memberId: "adam", title: "I-9" }),
+    ];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      if (url.pathname.endsWith("/organization/update-member-role")) {
+        const body = JSON.parse(String(init?.body)) as {
+          memberId: string;
+          role: string;
+        };
+        people.memberRole = body.role;
+        people.members = people.members.map((item) =>
+          item.id === body.memberId ? { ...item, role: body.role } : item,
+        );
+        return Response.json({
+          member: { id: body.memberId, role: body.role },
+        });
+      }
+      if (url.pathname.endsWith("/employee-forms")) {
+        // Like the API: managers get every request, members only their own.
+        return Response.json({
+          requirements:
+            people.memberRole === "admin"
+              ? all
+              : all.filter((item) => item.memberId === "adam"),
+        });
+      }
+      return Response.json(people);
+    }) as typeof fetch;
+    await render();
+    const row = (name: string) =>
+      [...container.querySelectorAll("a")].find((link) =>
+        link.textContent?.includes(name),
+      );
+    expect(row("Mark Member")?.textContent).toContain("2 open requests");
+
+    const roleSelect = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Role for Adam Admin"]',
+    );
+    const setValue = Object.getOwnPropertyDescriptor(
+      dom.HTMLSelectElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      setValue?.call(roleSelect, "member");
+      roleSelect?.dispatchEvent(
+        new dom.Event("change", { bubbles: true }) as never,
+      );
+    });
+    await settle();
+    await settle();
+
+    expect(row("Mark Member")?.textContent).not.toContain("open request");
+    expect(container.textContent).toContain(
+      "Your organization has requested a form or check from you.",
+    );
+  });
+
   it("points a member to the forms requested from them", async () => {
     const paths: string[] = [];
     stubApi(

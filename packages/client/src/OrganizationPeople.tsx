@@ -256,22 +256,29 @@ function peopleKey(data: OrganizationPeopleData) {
 
 /**
  * Requested forms and checks, for the list's counts and for requests without
- * a member page. Reloads when people change, or on demand after new requests.
+ * a member page. Reloads when people or the viewer's access change, or on
+ * demand after new requests. Managers see every request and members only
+ * their own, so requests loaded for other access are never shown.
  */
 function useRequirementSummary(data: OrganizationPeopleData | undefined) {
   const [summary, setSummary] = useState<{
+    access: string;
     error?: string;
     requirements: EmployeeRequirement[];
     /** Counts loads, so views of the same requests can start over. */
     version: number;
-  }>({ requirements: [], version: 0 });
+  }>({ access: "", requirements: [], version: 0 });
   const sequence = useRef(0);
-  const load = useCallback(async () => {
+  const load = useCallback(async (access: string) => {
     const request = ++sequence.current;
     try {
       const requirements = await listEmployeeRequirements();
       if (request !== sequence.current) return;
-      setSummary(({ version }) => ({ requirements, version: version + 1 }));
+      setSummary(({ version }) => ({
+        access,
+        requirements,
+        version: version + 1,
+      }));
     } catch (cause) {
       if (request !== sequence.current) return;
       const error =
@@ -281,17 +288,23 @@ function useRequirementSummary(data: OrganizationPeopleData | undefined) {
       setSummary((current) => ({ ...current, error }));
     }
   }, []);
-  const people = data ? peopleKey(data) : "";
+  const access = data ? `${data.memberRole}:${data.currentMemberId ?? ""}` : "";
+  const reloadKey = data ? `${access}|${peopleKey(data)}` : "";
   useEffect(() => {
-    if (people) void load();
-  }, [people, load]);
+    if (reloadKey) void load(access);
+  }, [access, load, reloadKey]);
   useEffect(
     () => () => {
       sequence.current += 1;
     },
     [],
   );
-  return { ...summary, reload: () => void load() };
+  return {
+    error: summary.error,
+    reload: () => void load(access),
+    requirements: summary.access === access ? summary.requirements : [],
+    version: summary.version,
+  };
 }
 
 function SummaryError({
