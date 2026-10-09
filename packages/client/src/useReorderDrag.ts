@@ -106,9 +106,13 @@ export function useReorderDrag(
 ) {
   const [drag, setDrag] = useState<ReorderDrag>();
   const latest = useRef<ReorderDrag | undefined>(undefined);
+  /** One drag at a time, owned by the pointer that started it. */
   const session = useRef<
-    { from: number; items: HTMLElement[]; startY: number } | undefined
+    | { from: number; items: HTMLElement[]; pointerId: number; startY: number }
+    | undefined
   >(undefined);
+  const owns = (event: PointerEvent<HTMLElement>) =>
+    session.current?.pointerId === event.pointerId;
   const edge = useEdgeScroll(track);
 
   function track(clientY: number) {
@@ -147,12 +151,15 @@ export function useReorderDrag(
         const to = index + step;
         if (to >= 0 && to < count) onMove(index, to);
       },
-      onLostPointerCapture: () => {
-        if (session.current) finish(false);
+      onLostPointerCapture: (event: PointerEvent<HTMLElement>) => {
+        if (owns(event)) finish(false);
       },
-      onPointerCancel: () => finish(false),
+      onPointerCancel: (event: PointerEvent<HTMLElement>) => {
+        if (owns(event)) finish(false);
+      },
       onPointerDown: (event: PointerEvent<HTMLElement>) => {
-        if (event.button !== 0) return;
+        // A second finger or pen cannot take over a drag in progress.
+        if (event.button !== 0 || session.current) return;
         const item = event.currentTarget.closest("[data-reorder-item]");
         const list = item?.parentElement;
         if (!list) return;
@@ -167,17 +174,20 @@ export function useReorderDrag(
               child instanceof HTMLElement &&
               child.hasAttribute("data-reorder-item"),
           ),
+          pointerId: event.pointerId,
           startY: event.clientY + window.scrollY,
         };
         latest.current = { from: index, offset: 0, to: index };
         setDrag(latest.current);
       },
       onPointerMove: (event: PointerEvent<HTMLElement>) => {
-        if (!session.current) return;
+        if (!owns(event)) return;
         track(event.clientY);
         edge.follow(event.clientY);
       },
-      onPointerUp: () => finish(true),
+      onPointerUp: (event: PointerEvent<HTMLElement>) => {
+        if (owns(event)) finish(true);
+      },
     };
   }
 

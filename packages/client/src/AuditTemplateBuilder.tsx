@@ -456,7 +456,7 @@ function SectionEditor({
         />
       </header>
       {section.items.length > 0 ? (
-        <div>
+        <div className="auditQuestionList">
           {section.items.map((item, itemIndex) => (
             <QuestionEditor
               count={section.items.length}

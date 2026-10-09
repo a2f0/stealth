@@ -266,6 +266,14 @@
 
 .auditSectionCard {
   overflow: hidden;
+}
+
+/*
+ * The question list, not the card, is the query container: containment makes
+ * its element a stacking context, and a card that were one would hide the
+ * section drop line beneath a lifted card.
+ */
+.auditQuestionList {
   container-type: inline-size;
 }
 
@@ -335,11 +343,11 @@
   position: relative;
 }
 
+/* Solid, so nothing it passes over shows through; the drop line draws above it. */
 .auditDragging {
   z-index: 2;
   background: var(--color-surface);
   box-shadow: var(--shadow-lg);
-  opacity: 0.85;
 }
 
 /* Drawn above the lifted entry, which often hovers right over the drop point. */

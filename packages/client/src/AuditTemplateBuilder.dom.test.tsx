@@ -164,8 +164,9 @@ async function press(element: Element | null | undefined, key: string) {
 
 async function pointer(
   element: Element | null | undefined,
-  type: "pointerdown" | "pointermove" | "pointerup",
+  type: "pointercancel" | "pointerdown" | "pointermove" | "pointerup",
   clientY: number,
+  pointerId = 1,
 ) {
   await act(async () => {
     element?.dispatchEvent(
@@ -174,7 +175,7 @@ async function pointer(
         button: 0,
         cancelable: true,
         clientY,
-        pointerId: 1,
+        pointerId,
       }) as never,
     );
   });
@@ -258,6 +259,34 @@ describe("reordering the audit form", () => {
     expect(prompts()).toEqual(["Second", "Third", "First"]);
     expect(container.querySelector(".auditDragging")).toBeNull();
     expect(prompts(1)).toEqual(["Other"]);
+  });
+
+  it("lets only the pointer that started a drag move or drop it", async () => {
+    stubApi();
+    await render();
+    for (const [index, row] of questions().entries()) {
+      row.getBoundingClientRect = () =>
+        ({ height: 100, top: index * 100 }) as DOMRect;
+    }
+    const firstHandle = questions()[0]?.querySelector(".auditDragHandle");
+    const thirdHandle = questions()[2]?.querySelector(".auditDragHandle");
+    await pointer(firstHandle, "pointerdown", 50, 1);
+
+    // A second finger on another handle neither starts its own drag nor
+    // moves, drops, or cancels the first one.
+    await pointer(thirdHandle, "pointerdown", 250, 2);
+    await pointer(thirdHandle, "pointermove", 10, 2);
+    await pointer(thirdHandle, "pointerup", 10, 2);
+    await pointer(thirdHandle, "pointercancel", 10, 2);
+    expect(questions()[0]?.className).toContain("auditDragging");
+    expect(questions()[2]?.className).not.toContain("auditDragging");
+    expect(prompts()).toEqual(["First", "Second", "Third"]);
+
+    await pointer(firstHandle, "pointermove", 160, 1);
+    await pointer(firstHandle, "pointerup", 160, 1);
+    await settle();
+    expect(prompts()).toEqual(["Second", "First", "Third"]);
+    expect(container.querySelector(".auditDragging")).toBeNull();
   });
 
   it("keeps scrolling at the edge while the pointer holds still", async () => {
