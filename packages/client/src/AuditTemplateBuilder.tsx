@@ -2,14 +2,17 @@ import {
   Banner,
   Button,
   Card,
+  ContextMenu,
+  cx,
   EmptyState,
   Field,
+  Icon,
   LoadingState,
   Page,
   PageBody,
   PageHeader,
 } from "@tearleads/ui/react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { ActivityFeed } from "./ActivityFeed";
 import {
   type AuditTemplate,
@@ -24,6 +27,7 @@ import {
 } from "./auditApi";
 import { ErrorBanner, type ErrorNotice, errorNotice } from "./BillingLink";
 import { countLabel } from "./labels";
+import { moveEntry, useReorderDrag } from "./useReorderDrag";
 
 interface BuilderProps {
   id: string;
@@ -154,6 +158,15 @@ function BuilderBody({
       ...template,
       definition: { ...template.definition, sections: nextSections },
     });
+  const moveSection = (from: number, to: number, focus: FocusTarget) => {
+    const moved = sections[from];
+    if (!moved || to < 0 || to >= sections.length) return;
+    updateSections(moveEntry(sections, from, to));
+    refocus(focus, moved.id);
+  };
+  const sectionDrag = useReorderDrag(sections.length, (from, to) =>
+    moveSection(from, to, "handle"),
+  );
   return (
     <PageBody>
       <BuilderNotices
@@ -176,8 +189,12 @@ function BuilderBody({
           {sections.map((section, index) => (
             <SectionEditor
               canRemove={sections.length > 1}
+              count={sections.length}
+              entry={sectionDrag.entryState(index)}
+              handle={sectionDrag.handleProps(index)}
               index={index}
               key={section.id}
+              onShift={(step) => moveSection(index, index + step, "number")}
               onChange={(nextSection) =>
                 updateSections(replaceById(sections, nextSection))
               }
@@ -377,25 +394,46 @@ function TemplateDetails({
 
 function SectionEditor({
   canRemove,
+  count,
+  entry,
+  handle,
   index,
   onChange,
   onRemove,
+  onShift,
   section,
-}: {
+}: ReorderableProps & {
   canRemove: boolean;
-  index: number;
   onChange: (section: AuditTemplateSection) => void;
   onRemove: () => void;
   section: AuditTemplateSection;
 }) {
   const updateItem = (item: AuditTemplateItem) =>
     onChange({ ...section, items: replaceById(section.items, item) });
+  const moveQuestion = (from: number, to: number, focus: FocusTarget) => {
+    const moved = section.items[from];
+    if (!moved || to < 0 || to >= section.items.length) return;
+    onChange({ ...section, items: moveEntry(section.items, from, to) });
+    refocus(focus, moved.id);
+  };
+  const questionDrag = useReorderDrag(section.items.length, (from, to) =>
+    moveQuestion(from, to, "handle"),
+  );
+  const label = `Section ${index + 1}`;
   return (
-    <article className="card auditSectionCard">
+    <article {...entryProps(entry, "card auditSectionCard")}>
       <header className="auditSectionHeader">
-        <span aria-hidden="true" className="auditSectionNumber">
+        <ReorderHandle entryId={section.id} handle={handle} label={label} />
+        <PositionMenu
+          className="auditSectionNumber"
+          count={count}
+          entryId={section.id}
+          index={index}
+          label={label}
+          onShift={onShift}
+        >
           {String(index + 1).padStart(2, "0")}
-        </span>
+        </PositionMenu>
         <input
           aria-label={`Section ${index + 1} title`}
           className="input auditSectionTitle"
@@ -421,10 +459,16 @@ function SectionEditor({
         <div>
           {section.items.map((item, itemIndex) => (
             <QuestionEditor
+              count={section.items.length}
+              entry={questionDrag.entryState(itemIndex)}
+              handle={questionDrag.handleProps(itemIndex)}
               index={itemIndex}
               item={item}
               key={item.id}
               onChange={updateItem}
+              onShift={(step) =>
+                moveQuestion(itemIndex, itemIndex + step, "number")
+              }
               onRemove={() =>
                 onChange({
                   ...section,
@@ -463,21 +507,33 @@ function SectionEditor({
 }
 
 function QuestionEditor({
+  count,
+  entry,
+  handle,
   index,
   item,
   onChange,
   onRemove,
-}: {
-  index: number;
+  onShift,
+}: ReorderableProps & {
   item: AuditTemplateItem;
   onChange: (item: AuditTemplateItem) => void;
   onRemove: () => void;
 }) {
+  const label = `Question ${index + 1}`;
   return (
-    <div className="auditQuestion">
-      <span aria-hidden="true" className="auditQuestionNumber">
+    <div {...entryProps(entry, "auditQuestion")}>
+      <ReorderHandle entryId={item.id} handle={handle} label={label} />
+      <PositionMenu
+        className="auditQuestionNumber"
+        count={count}
+        entryId={item.id}
+        index={index}
+        label={label}
+        onShift={onShift}
+      >
         {index + 1}
-      </span>
+      </PositionMenu>
       <textarea
         aria-label={`Question ${index + 1}`}
         className="textarea auditQuestionPrompt"
@@ -523,6 +579,130 @@ function QuestionEditor({
         variant="ghost"
       />
     </div>
+  );
+}
+
+type ReorderDrag = ReturnType<typeof useReorderDrag>;
+
+interface ReorderableProps {
+  count: number;
+  entry: ReturnType<ReorderDrag["entryState"]>;
+  handle: ReturnType<ReorderDrag["handleProps"]>;
+  index: number;
+  /** Moves the entry one place up (-1) or down (1). */
+  onShift: (step: -1 | 1) => void;
+}
+
+type FocusTarget = "handle" | "number";
+
+/**
+ * Moving an entry re-inserts its element, which drops focus. Put focus back
+ * on the control that moved it once the new order is drawn.
+ */
+function refocus(target: FocusTarget, entryId: string) {
+  requestAnimationFrame(() =>
+    document
+      .querySelector<HTMLElement>(`[data-reorder-focus="${target}-${entryId}"]`)
+      ?.focus(),
+  );
+}
+
+/** Marks a reorderable entry, and shows it lifted or as the drop point. */
+function entryProps(
+  entry: ReturnType<ReorderDrag["entryState"]>,
+  className: string,
+) {
+  return {
+    className: cx(
+      className,
+      "auditReorderEntry",
+      entry.dragging && "auditDragging",
+      entry.drop === "before" && "auditDropBefore",
+      entry.drop === "after" && "auditDropAfter",
+    ),
+    "data-reorder-item": "",
+    style: entry.dragging
+      ? { transform: `translateY(${entry.offset}px)` }
+      : undefined,
+  };
+}
+
+/** Drags the entry; the arrow keys move it one place at a time too. */
+function ReorderHandle({
+  entryId,
+  handle,
+  label,
+}: {
+  entryId: string;
+  handle: ReturnType<ReorderDrag["handleProps"]>;
+  label: string;
+}) {
+  return (
+    <button
+      {...handle}
+      aria-label={`Reorder ${label.toLowerCase()}`}
+      className="auditDragHandle"
+      data-reorder-focus={`handle-${entryId}`}
+      title="Drag, or use the arrow keys, to reorder"
+      type="button"
+    >
+      <Icon name="drag" size={16} />
+    </button>
+  );
+}
+
+/** The entry's number, which opens Move up and Move down. */
+function PositionMenu({
+  children,
+  className,
+  count,
+  entryId,
+  index,
+  label,
+  onShift,
+}: {
+  children: ReactNode;
+  className: string;
+  count: number;
+  entryId: string;
+  index: number;
+  label: string;
+  onShift: (step: -1 | 1) => void;
+}) {
+  return (
+    <ContextMenu
+      items={[
+        {
+          disabled: index === 0,
+          icon: "arrowUp",
+          id: "up",
+          label: "Move up",
+          onSelect: () => onShift(-1),
+        },
+        {
+          disabled: index === count - 1,
+          icon: "arrowDown",
+          id: "down",
+          label: "Move down",
+          onSelect: () => onShift(1),
+        },
+      ]}
+      label={`${label} order`}
+      openOnClick
+    >
+      {(props) => (
+        <button
+          {...props}
+          aria-haspopup="menu"
+          aria-label={`${label} order`}
+          className={className}
+          data-reorder-focus={`number-${entryId}`}
+          type="button"
+        >
+          {children}
+        </button>
+      )}
+    </ContextMenu>
   );
 }
 
