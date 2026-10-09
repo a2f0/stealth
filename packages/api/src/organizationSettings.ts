@@ -56,12 +56,19 @@ organizationSettings.get("/people", async (context) => {
       ? listPendingInvitations(context.env.DB, organizationId)
       : Promise.resolve([]),
   ]);
+  const userId = context.get("authSession").user.id;
   return context.json({
+    currentMemberId: members.find(({ user }) => user.id === userId)?.id ?? null,
     invitations,
     memberRole,
     members: canManage
       ? members
-      : members.map(({ id, role, user }) => ({ id, role, user })),
+      : members.map(({ id, joinedAt, role, user }) => ({
+          id,
+          joinedAt,
+          role,
+          user,
+        })),
   });
 });
 

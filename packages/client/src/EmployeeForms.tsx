@@ -26,10 +26,6 @@ import {
   canCompleteRequirement,
   reviewRevisionForStatus,
 } from "./employeeOnboarding";
-import type {
-  OrganizationInvitation,
-  OrganizationMember,
-} from "./organizationSettingsApi";
 
 const options: Array<{ kind: EmployeeRequirementKind; title: string }> = [
   { kind: "form", title: "W-4" },
@@ -141,14 +137,13 @@ export function RequirementDraftEditor({
   );
 }
 
+/** One member's requested forms and checks, and requests for new ones. */
 export function EmployeeForms({
   canManage,
-  invitations,
-  members,
+  memberId,
 }: {
   canManage: boolean;
-  invitations: OrganizationInvitation[];
-  members: OrganizationMember[];
+  memberId: string;
 }) {
   const [requirements, setRequirements] = useState<EmployeeRequirement[]>();
   const [error, setError] = useState<string>();
@@ -158,14 +153,15 @@ export function EmployeeForms({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setRequirements(await listEmployeeRequirements());
+      const all = await listEmployeeRequirements();
+      setRequirements(all.filter((item) => item.memberId === memberId));
       setError(undefined);
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [memberId]);
   useEffect(() => {
     setRequirements(undefined);
     void load();
@@ -191,8 +187,12 @@ export function EmployeeForms({
 
   return (
     <Card
-      description="Request tax forms, set due dates, and start or track background and credit checks."
-      title="Employee forms and checks"
+      description={
+        canManage
+          ? "Request tax forms, set due dates, and start or track background and credit checks."
+          : "Forms and checks your organization has requested from you."
+      }
+      title="Forms and checks"
     >
       {error && <Banner tone="danger">{error}</Banner>}
       {notice && <Banner tone="success">{notice}</Banner>}
@@ -200,8 +200,7 @@ export function EmployeeForms({
         <RequirementAssignmentForm
           action={action}
           busy={busy}
-          invitations={invitations}
-          members={members}
+          memberId={memberId}
         />
       )}
       {!requirements && loading ? (
@@ -211,7 +210,7 @@ export function EmployeeForms({
           Retry loading requirements
         </Button>
       ) : requirements.length === 0 ? (
-        <p className="muted">No requirements assigned yet.</p>
+        <p className="muted">No forms or checks have been requested.</p>
       ) : (
         <ul className="requirementList">
           {requirements.map((requirement) => (
@@ -232,52 +231,24 @@ export function EmployeeForms({
 function RequirementAssignmentForm({
   action,
   busy,
-  invitations,
-  members,
+  memberId,
 }: {
   action: RequirementAction;
   busy: boolean;
-  invitations: OrganizationInvitation[];
-  members: OrganizationMember[];
+  memberId: string;
 }) {
-  const [target, setTarget] = useState("");
   const [drafts, setDrafts] = useState<RequirementDraft[]>([]);
   function assign(event: FormEvent) {
     event.preventDefault();
-    if (!target || !drafts.length) return;
-    const [type, id] = target.split(":");
-    if (!id) return;
+    if (!drafts.length) return;
     void action(async () => {
-      await createEmployeeRequirements(
-        type === "member" ? { memberId: id } : { invitationId: id },
-        drafts,
-      );
+      await createEmployeeRequirements({ memberId }, drafts);
       setDrafts([]);
-    }, "Requirements assigned.");
+    }, "Requests sent.");
   }
 
   return (
     <form className="requirementAssignment" onSubmit={assign}>
-      <Field label="Assign to">
-        <select
-          className="select"
-          disabled={busy}
-          onChange={(event) => setTarget(event.target.value)}
-          value={target}
-        >
-          <option value="">Choose a person</option>
-          {members.map((member) => (
-            <option key={member.id} value={`member:${member.id}`}>
-              {member.user.name} ({member.user.email})
-            </option>
-          ))}
-          {invitations.map((invitation) => (
-            <option key={invitation.id} value={`invitation:${invitation.id}`}>
-              {invitation.email} (invited)
-            </option>
-          ))}
-        </select>
-      </Field>
       <RequirementDraftEditor
         drafts={drafts}
         disabled={busy}
@@ -285,11 +256,11 @@ function RequirementAssignmentForm({
       />
       <Button
         busy={busy}
-        disabled={!target || !drafts.length}
+        disabled={!drafts.length}
         type="submit"
         variant="primary"
       >
-        Assign requirements
+        Send requests
       </Button>
     </form>
   );
@@ -317,12 +288,6 @@ function RequirementItem({
       <div className="requirementItemHeader">
         <div>
           <strong>{requirement.title}</strong>
-          {canManage && (
-            <span className="rowMeta">
-              {" "}
-              · {requirement.targetName ?? requirement.targetEmail}
-            </span>
-          )}
           <span className="rowMeta">
             {" "}
             · Due {formatDate(requirement.dueDate)}

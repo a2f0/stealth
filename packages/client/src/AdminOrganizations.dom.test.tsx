@@ -65,6 +65,7 @@ function detail(id = "other/org"): AdminOrganizationDetail {
     members: [
       {
         id: "member-1",
+        joinedAt: "2026-10-07T11:00:00.000Z",
         role: "owner",
         twoFactorEnabled: true,
         user: { id: "user-1", email: "pat@example.com", name: "Pat Person" },
