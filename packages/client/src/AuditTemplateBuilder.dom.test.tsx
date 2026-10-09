@@ -327,6 +327,37 @@ describe("reordering the audit form", () => {
     }
   });
 
+  it("ignores the arrow keys mid-drag, and cancels on Escape", async () => {
+    stubApi();
+    await render();
+    for (const [index, row] of questions().entries()) {
+      row.getBoundingClientRect = () =>
+        ({ height: 100, top: index * 100 }) as DOMRect;
+    }
+    const third = questions()[2]?.querySelector(".auditDragHandle");
+    await pointer(third, "pointerdown", 250);
+    await press(third, "ArrowUp");
+    expect(prompts()).toEqual(["First", "Second", "Third"]);
+    expect(questions()[2]?.className).toContain("auditDragging");
+    await pointer(third, "pointerup", 250);
+    await settle();
+    expect(prompts()).toEqual(["First", "Second", "Third"]);
+
+    const first = questions()[0]?.querySelector(".auditDragHandle");
+    await pointer(first, "pointerdown", 50);
+    await pointer(first, "pointermove", 260);
+    expect(questions()[2]?.className).toContain("auditDropAfter");
+    await press(first, "Escape");
+    expect(container.querySelector(".auditDragging")).toBeNull();
+    await pointer(first, "pointerup", 260);
+    await settle();
+    expect(prompts()).toEqual(["First", "Second", "Third"]);
+
+    // Once nothing is being dragged, the arrow keys move entries again.
+    await press(questions()[0]?.querySelector(".auditDragHandle"), "ArrowDown");
+    expect(prompts()).toEqual(["Second", "First", "Third"]);
+  });
+
   it("keeps scrolling at the edge while the pointer holds still", async () => {
     stubApi();
     await render();

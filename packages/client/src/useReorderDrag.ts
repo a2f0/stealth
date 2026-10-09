@@ -48,6 +48,12 @@ function reorderEntries(list: Element) {
   );
 }
 
+/** ArrowUp moves an entry one place up, ArrowDown one place down. */
+function arrowStep(key: string) {
+  if (key === "ArrowUp") return -1;
+  return key === "ArrowDown" ? 1 : 0;
+}
+
 /** How one entry should look while something is being dragged. */
 function entryStateFor(drag: ReorderDrag | undefined, index: number) {
   if (!drag) return {};
@@ -183,16 +189,24 @@ export function useReorderDrag(
     }
   }
 
+  function keyDown(event: KeyboardEvent<HTMLElement>, index: number) {
+    // Mid-drag, Escape cancels it, and the arrow keys wait: moving entries
+    // now would leave the drag's positions stale.
+    const step = arrowStep(event.key);
+    if (session.current) {
+      if (event.key === "Escape") finish(false);
+      if (event.key === "Escape" || step !== 0) event.preventDefault();
+      return;
+    }
+    if (step === 0) return;
+    event.preventDefault();
+    const to = index + step;
+    if (to >= 0 && to < count) onMove(index, to);
+  }
+
   function handleProps(index: number) {
     return {
-      onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
-        const step =
-          event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
-        if (step === 0) return;
-        event.preventDefault();
-        const to = index + step;
-        if (to >= 0 && to < count) onMove(index, to);
-      },
+      onKeyDown: (event: KeyboardEvent<HTMLElement>) => keyDown(event, index),
       onLostPointerCapture: (event: PointerEvent<HTMLElement>) => {
         if (owns(event)) finish(false);
       },
