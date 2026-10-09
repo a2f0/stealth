@@ -22,6 +22,7 @@ interface ContextMenuAction {
 }
 
 interface ContextMenuTargetProps {
+  onClick?: (event: MouseEvent<HTMLElement>) => void;
   onContextMenu: (event: MouseEvent<HTMLElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }
@@ -32,17 +33,26 @@ interface MenuLocation {
   y: number;
 }
 
-/** Attach the supplied handlers to an existing element, preserving its layout. */
+/**
+ * Attach the supplied handlers to an existing element, preserving its layout.
+ * With `openOnClick`, a plain click opens the menu too, below the element,
+ * for a control whose only job is to offer these actions.
+ */
 export function ContextMenu({
   children,
   items,
   label,
+  openOnClick = false,
 }: {
   children: (props: ContextMenuTargetProps) => ReactNode;
   items: readonly ContextMenuAction[];
   label: string;
+  openOnClick?: boolean;
 }) {
-  const { close, location, targetProps } = useContextMenu(items.length > 0);
+  const { close, location, targetProps } = useContextMenu(
+    items.length > 0,
+    openOnClick,
+  );
   return (
     <>
       {children(targetProps)}
@@ -60,7 +70,7 @@ export function ContextMenu({
   );
 }
 
-function useContextMenu(enabled: boolean) {
+function useContextMenu(enabled: boolean, openOnClick: boolean) {
   const [location, setLocation] = useState<MenuLocation>();
   const close = useCallback(
     (restoreFocus = false) => {
@@ -84,22 +94,22 @@ function useContextMenu(enabled: boolean) {
       y: point?.y ?? bounds.bottom,
     });
   };
-  return {
-    close,
-    location,
-    targetProps: {
-      onContextMenu: (event: MouseEvent<HTMLElement>) =>
-        open(event, { x: event.clientX, y: event.clientY }),
-      onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
-        if (
-          event.key === "ContextMenu" ||
-          (event.shiftKey && event.key === "F10")
-        ) {
-          open(event);
-        }
-      },
+  const targetProps: ContextMenuTargetProps = {
+    onContextMenu: (event: MouseEvent<HTMLElement>) =>
+      open(event, { x: event.clientX, y: event.clientY }),
+    onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
+      if (
+        event.key === "ContextMenu" ||
+        (event.shiftKey && event.key === "F10")
+      ) {
+        open(event);
+      }
     },
   };
+  if (openOnClick) {
+    targetProps.onClick = (event: MouseEvent<HTMLElement>) => open(event);
+  }
+  return { close, location, targetProps };
 }
 
 function isEditable(target: EventTarget) {

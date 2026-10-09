@@ -5,8 +5,10 @@
  */
 import {
   ArchiveRestore,
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
   ArrowUpRight,
   Ban,
   Bell,
@@ -30,6 +32,7 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
+  GripVertical,
   type IconNode,
   Image,
   Inbox,
@@ -73,8 +76,10 @@ import {
 export const icons = {
   add: Plus,
   alert: TriangleAlert,
+  arrowDown: ArrowDown,
   arrowLeft: ArrowLeft,
   arrowRight: ArrowRight,
+  arrowUp: ArrowUp,
   attachment: Paperclip,
   audits: ClipboardCheck,
   businesses: Building,
@@ -91,6 +96,7 @@ export const icons = {
   copy: Copy,
   document: FileText,
   download: Download,
+  drag: GripVertical,
   eraser: Eraser,
   edit: Pencil,
   equipment: MonitorSmartphone,

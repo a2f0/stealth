@@ -266,15 +266,23 @@
 
 .auditSectionCard {
   overflow: hidden;
+}
+
+/*
+ * The question list, not the card, is the query container: containment makes
+ * its element a stacking context, and a card that were one would hide the
+ * section drop line beneath a lifted card.
+ */
+.auditQuestionList {
   container-type: inline-size;
 }
 
 .auditSectionHeader {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-6);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-surface-sunken);
 }
@@ -289,8 +297,79 @@
   place-items: center;
   color: var(--color-text-muted);
   background: var(--color-surface);
+  cursor: pointer;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+}
+
+.auditSectionNumber:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+/* The grip moves an entry: drag it, or focus it and press the arrow keys. */
+.auditDragHandle {
+  display: inline-grid;
+  width: 1.5rem;
+  min-height: var(--control-height-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  place-items: center;
+  color: var(--color-text-subtle);
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+}
+
+.auditDragHandle:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.auditDragHandle:active {
+  cursor: grabbing;
+}
+
+.auditDragHandle:focus-visible,
+.auditSectionNumber:focus-visible,
+.auditQuestionNumber:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* While dragging, the entry lifts and follows the pointer; a line marks where it lands. */
+.auditReorderEntry {
+  position: relative;
+}
+
+/* Solid, so nothing it passes over shows through; the drop line draws above it. */
+.auditDragging {
+  z-index: 2;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Drawn above the lifted entry, which often hovers right over the drop point. */
+.auditDropBefore::before,
+.auditDropAfter::after {
+  position: absolute;
+  z-index: 3;
+  right: var(--space-4);
+  left: var(--space-4);
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-emphasis);
+  content: "";
+  pointer-events: none;
+}
+
+.auditDropBefore::before {
+  top: 0;
+}
+
+.auditDropAfter::after {
+  bottom: 0;
 }
 
 .auditSectionTitle {
@@ -309,11 +388,16 @@
 
 .auditQuestion {
   display: grid;
-  grid-template-areas: "number prompt controls remove";
-  grid-template-columns: 1.5rem minmax(0, 1fr) auto auto;
+  grid-template-areas: "handle number prompt controls remove";
+  grid-template-columns: auto 1.5rem minmax(0, 1fr) auto auto;
   align-items: start;
   gap: var(--space-3) var(--space-4);
-  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-6);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-3);
+}
+
+.auditQuestion > .auditDragHandle {
+  grid-area: handle;
+  min-height: var(--control-height-md);
 }
 
 .auditQuestionNumber {
@@ -322,10 +406,20 @@
   align-items: center;
   justify-content: flex-end;
   min-height: var(--control-height-md);
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
   color: var(--color-text-subtle);
+  background: transparent;
+  cursor: pointer;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
+}
+
+.auditQuestionNumber:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .auditQuestionPrompt {
@@ -428,11 +522,11 @@
   }
 
   .auditSectionHeader {
-    padding-left: var(--space-4);
+    padding-left: var(--space-2);
   }
 
   .auditQuestion {
-    padding-left: var(--space-4);
+    padding-left: var(--space-2);
   }
 
   /* 16px keeps iOS Safari from zooming when the title is edited. */
@@ -449,9 +543,9 @@
 @container (max-width: 48rem) {
   .auditQuestion {
     grid-template-areas:
-      "number prompt remove"
-      ". controls controls";
-    grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+      "handle number prompt remove"
+      ". . controls controls";
+    grid-template-columns: auto 1.25rem minmax(0, 1fr) auto;
     gap: var(--space-2) var(--space-3);
   }
 

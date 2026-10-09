@@ -241,6 +241,37 @@ describe("shared context menu", () => {
     }
   });
 
+  it("opens from a plain click only when asked to", async () => {
+    const { control } = await mount();
+    await act(async () => control?.click());
+    expect(menu()).toBeNull();
+
+    await act(async () => root?.unmount());
+    container.remove();
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <ContextMenu
+          items={[{ id: "only", label: "Only", onSelect: () => {} }]}
+          label="Number actions"
+          openOnClick
+        >
+          {(props) => (
+            <button {...props} type="button">
+              01
+            </button>
+          )}
+        </ContextMenu>,
+      ),
+    );
+    const trigger = container.querySelector("button");
+    await act(async () => trigger?.click());
+    expect(menu()?.getAttribute("aria-label")).toBe("Number actions");
+    expect(document.activeElement).toBe(items()[0] ?? null);
+  });
+
   it("removes an open portal when its target unmounts", async () => {
     const view = await mount();
     await contextClick(view.link);
