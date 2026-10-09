@@ -4,6 +4,7 @@ import type { WorkspaceOrganization } from "./organizationState";
 
 export interface OrganizationMember {
   id: string;
+  joinedAt: string;
   role: string;
   twoFactorEnabled?: boolean;
   twoFactorRequired?: boolean;
@@ -19,6 +20,8 @@ export interface OrganizationInvitation {
 }
 
 export interface OrganizationPeopleData {
+  /** The signed-in user's membership, when they belong to the organization. */
+  currentMemberId: string | null;
   invitations: OrganizationInvitation[];
   memberRole: string;
   members: OrganizationMember[];

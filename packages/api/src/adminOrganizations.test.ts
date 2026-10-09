@@ -38,6 +38,7 @@ describe("admin organizations", () => {
     expect(body.members).toEqual([
       {
         id: "member_member-user",
+        joinedAt: expect.any(String),
         role: "owner",
         twoFactorEnabled: false,
         twoFactorRequired: false,

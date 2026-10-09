@@ -1,5 +1,6 @@
 interface OrganizationMember {
   id: string;
+  joinedAt: string;
   role: string;
   twoFactorEnabled: boolean;
   twoFactorRequired: boolean;
@@ -11,6 +12,7 @@ interface OrganizationMember {
 }
 
 interface OrganizationMemberRow {
+  created_at: string;
   email: string;
   id: string;
   name: string;
@@ -26,7 +28,7 @@ export async function listOrganizationMembers(
 ) {
   const result = await database
     .prepare(
-      `SELECT member.id, member.role,
+      `SELECT member.id, member.role, member.createdAt AS created_at,
               member.twoFactorRequired AS two_factor_required,
               user.id AS user_id, user.name, user.email,
               user.twoFactorEnabled AS two_factor_enabled
@@ -39,6 +41,7 @@ export async function listOrganizationMembers(
     .all<OrganizationMemberRow>();
   return result.results.map(
     ({
+      created_at: joinedAt,
       email,
       id,
       name,
@@ -48,6 +51,7 @@ export async function listOrganizationMembers(
       user_id: userId,
     }): OrganizationMember => ({
       id,
+      joinedAt,
       role,
       twoFactorEnabled: Boolean(twoFactorEnabled),
       twoFactorRequired: Boolean(twoFactorRequired),

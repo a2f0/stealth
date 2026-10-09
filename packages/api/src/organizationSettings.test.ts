@@ -367,6 +367,36 @@ describe("organization member security", () => {
     );
   });
 
+  it("identifies the signed-in member and when each member joined", async () => {
+    const fixture = await createFixture();
+    const listing = await fixture
+      .app("member-user", "member")
+      .request("/people");
+    expect(listing.status).toBe(200);
+    const body = (await listing.json()) as {
+      currentMemberId: string | null;
+      members: Array<Record<string, unknown>>;
+    };
+    expect(body.currentMemberId).toBe("target-member");
+    expect(body.members).toContainEqual({
+      id: "target-member",
+      joinedAt: "2026-08-20T12:00:00.000Z",
+      role: "member",
+      user: {
+        email: "member-user@example.com",
+        id: "member-user",
+        name: "member-user",
+      },
+    });
+    const ownerListing = await fixture
+      .app("owner-user", "owner")
+      .request("/people");
+    const ownerBody = (await ownerListing.json()) as {
+      currentMemberId: string | null;
+    };
+    expect(ownerBody.currentMemberId).toBe("member_owner-user");
+  });
+
   it("rejects member changes from non-managers", async () => {
     const fixture = await createFixture();
     const response = await fixture

@@ -78,9 +78,11 @@ describe("employee onboarding", () => {
         requirements,
         role: "member",
       }),
-    ).rejects.toThrow(
-      "Invitation sent, but requirements could not be assigned: Requirement service unavailable.",
-    );
+    ).rejects.toMatchObject({
+      invitationId: "invite-1",
+      message:
+        "Invitation sent, but requirements could not be assigned: Requirement service unavailable.",
+    });
     expect(calls).toEqual(["invite", "invited", "assign", "reload"]);
   });
 });

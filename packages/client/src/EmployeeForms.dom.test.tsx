@@ -83,7 +83,10 @@ async function render(requirements: EmployeeRequirement[], canManage = true) {
   root = createRoot(container);
   await act(async () =>
     root?.render(
-      <EmployeeForms canManage={canManage} invitations={[]} members={[]} />,
+      <EmployeeForms
+        canManage={canManage}
+        scope={{ kind: "member", memberId: "member" }}
+      />,
     ),
   );
 }
@@ -95,6 +98,74 @@ function item(title: string) {
   if (!match) throw new Error(`No requirement titled ${title}`);
   return match;
 }
+
+describe("requesting forms on a member's page", () => {
+  it("lists only that member's requests and sends new ones to them", async () => {
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      if (init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        return Response.json({ ids: ["new"] });
+      }
+      return Response.json({
+        requirements: [
+          screening({ id: "own", title: "Own check" }),
+          screening({
+            id: "other",
+            memberId: "someone-else",
+            title: "Their check",
+          }),
+        ],
+      });
+    }) as typeof fetch;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <EmployeeForms
+          canManage
+          scope={{ kind: "member", memberId: "member" }}
+        />,
+      ),
+    );
+    expect(item("Own check")).toBeTruthy();
+    expect(container.textContent).not.toContain("Their check");
+
+    const date = container.querySelector<HTMLInputElement>(
+      ".requirementEditor input[type=date]",
+    );
+    const setValue = Object.getOwnPropertyDescriptor(
+      dom.HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      setValue?.call(date, "2026-11-15");
+      date?.dispatchEvent(new dom.Event("input", { bubbles: true }) as never);
+    });
+    const press = async (label: string) => {
+      const target = [...container.querySelectorAll("button")].find(
+        (element) => element.textContent?.trim() === label,
+      );
+      await act(async () => target?.click());
+    };
+    await press("Add");
+    await press("Send requests");
+
+    expect(posted).toEqual([
+      {
+        memberId: "member",
+        requirements: [
+          expect.objectContaining({
+            dueDate: "2026-11-15",
+            kind: "form",
+            title: "W-4",
+          }),
+        ],
+      },
+    ]);
+  });
+});
 
 describe("Checkr screening results", () => {
   it("shows the result, completion date, and review guidance", async () => {

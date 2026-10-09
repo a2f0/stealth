@@ -26,10 +26,6 @@ import {
   canCompleteRequirement,
   reviewRevisionForStatus,
 } from "./employeeOnboarding";
-import type {
-  OrganizationInvitation,
-  OrganizationMember,
-} from "./organizationSettingsApi";
 
 const options: Array<{ kind: EmployeeRequirementKind; title: string }> = [
   { kind: "form", title: "W-4" },
@@ -141,15 +137,37 @@ export function RequirementDraftEditor({
   );
 }
 
+/**
+ * Requests either belong to one current member, or have no member page: they
+ * target a pending invitation, or a member who has since left.
+ */
+export type RequirementScope =
+  | { kind: "member"; memberId: string }
+  | { kind: "unattached"; memberIds: string[] };
+
+export function inRequirementScope(
+  scope: RequirementScope,
+  requirement: EmployeeRequirement,
+) {
+  if (scope.kind === "member") return requirement.memberId === scope.memberId;
+  return (
+    !requirement.memberId || !scope.memberIds.includes(requirement.memberId)
+  );
+}
+
+/**
+ * Requested forms and checks in one scope. On a member's page, managers also
+ * request new ones; requests without a member page keep every other control.
+ */
 export function EmployeeForms({
   canManage,
-  invitations,
-  members,
+  scope,
 }: {
   canManage: boolean;
-  invitations: OrganizationInvitation[];
-  members: OrganizationMember[];
+  scope: RequirementScope;
 }) {
+  // Compared by value, so a new scope object for the same people is no change.
+  const scopeKey = JSON.stringify(scope);
   const [requirements, setRequirements] = useState<EmployeeRequirement[]>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -158,14 +176,16 @@ export function EmployeeForms({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setRequirements(await listEmployeeRequirements());
+      const current = JSON.parse(scopeKey) as RequirementScope;
+      const all = await listEmployeeRequirements();
+      setRequirements(all.filter((item) => inRequirementScope(current, item)));
       setError(undefined);
     } catch (cause) {
       setError(messageFrom(cause));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [scopeKey]);
   useEffect(() => {
     setRequirements(undefined);
     void load();
@@ -191,17 +211,20 @@ export function EmployeeForms({
 
   return (
     <Card
-      description="Request tax forms, set due dates, and start or track background and credit checks."
-      title="Employee forms and checks"
+      description={scopeDescription(scope, canManage)}
+      title={
+        scope.kind === "member"
+          ? "Forms and checks"
+          : "Invitees and former members"
+      }
     >
       {error && <Banner tone="danger">{error}</Banner>}
       {notice && <Banner tone="success">{notice}</Banner>}
-      {canManage && (
+      {canManage && scope.kind === "member" && (
         <RequirementAssignmentForm
           action={action}
           busy={busy}
-          invitations={invitations}
-          members={members}
+          memberId={scope.memberId}
         />
       )}
       {!requirements && loading ? (
@@ -211,7 +234,7 @@ export function EmployeeForms({
           Retry loading requirements
         </Button>
       ) : requirements.length === 0 ? (
-        <p className="muted">No requirements assigned yet.</p>
+        <p className="muted">No forms or checks have been requested.</p>
       ) : (
         <ul className="requirementList">
           {requirements.map((requirement) => (
@@ -221,6 +244,7 @@ export function EmployeeForms({
               canManage={canManage}
               key={requirement.id}
               requirement={requirement}
+              showTarget={scope.kind === "unattached"}
             />
           ))}
         </ul>
@@ -232,52 +256,24 @@ export function EmployeeForms({
 function RequirementAssignmentForm({
   action,
   busy,
-  invitations,
-  members,
+  memberId,
 }: {
   action: RequirementAction;
   busy: boolean;
-  invitations: OrganizationInvitation[];
-  members: OrganizationMember[];
+  memberId: string;
 }) {
-  const [target, setTarget] = useState("");
   const [drafts, setDrafts] = useState<RequirementDraft[]>([]);
   function assign(event: FormEvent) {
     event.preventDefault();
-    if (!target || !drafts.length) return;
-    const [type, id] = target.split(":");
-    if (!id) return;
+    if (!drafts.length) return;
     void action(async () => {
-      await createEmployeeRequirements(
-        type === "member" ? { memberId: id } : { invitationId: id },
-        drafts,
-      );
+      await createEmployeeRequirements({ memberId }, drafts);
       setDrafts([]);
-    }, "Requirements assigned.");
+    }, "Requests sent.");
   }
 
   return (
     <form className="requirementAssignment" onSubmit={assign}>
-      <Field label="Assign to">
-        <select
-          className="select"
-          disabled={busy}
-          onChange={(event) => setTarget(event.target.value)}
-          value={target}
-        >
-          <option value="">Choose a person</option>
-          {members.map((member) => (
-            <option key={member.id} value={`member:${member.id}`}>
-              {member.user.name} ({member.user.email})
-            </option>
-          ))}
-          {invitations.map((invitation) => (
-            <option key={invitation.id} value={`invitation:${invitation.id}`}>
-              {invitation.email} (invited)
-            </option>
-          ))}
-        </select>
-      </Field>
       <RequirementDraftEditor
         drafts={drafts}
         disabled={busy}
@@ -285,11 +281,11 @@ function RequirementAssignmentForm({
       />
       <Button
         busy={busy}
-        disabled={!target || !drafts.length}
+        disabled={!drafts.length}
         type="submit"
         variant="primary"
       >
-        Assign requirements
+        Send requests
       </Button>
     </form>
   );
@@ -305,11 +301,14 @@ function RequirementItem({
   busy,
   canManage,
   requirement,
+  showTarget,
 }: {
   action: RequirementAction;
   busy: boolean;
   canManage: boolean;
   requirement: EmployeeRequirement;
+  /** Name the person when the list is not already one person's page. */
+  showTarget: boolean;
 }) {
   const [reviewedRevision, setReviewedRevision] = useState<number | null>(null);
   return (
@@ -317,10 +316,11 @@ function RequirementItem({
       <div className="requirementItemHeader">
         <div>
           <strong>{requirement.title}</strong>
-          {canManage && (
+          {showTarget && (
             <span className="rowMeta">
               {" "}
               · {requirement.targetName ?? requirement.targetEmail}
+              {requirement.invitationId ? " (invited)" : ""}
             </span>
           )}
           <span className="rowMeta">
@@ -659,6 +659,15 @@ function RequirementStatusControl({
       </option>
     </select>
   );
+}
+
+function scopeDescription(scope: RequirementScope, canManage: boolean) {
+  if (scope.kind === "unattached") {
+    return "Requests for people who haven’t accepted their invitation yet, or who have left the organization.";
+  }
+  return canManage
+    ? "Request tax forms, set due dates, and start or track background and credit checks."
+    : "Forms and checks your organization has requested from you.";
 }
 
 function statusTone(status: EmployeeRequirementStatus) {

@@ -8,7 +8,9 @@ import {
   createOrganizationSlug,
   editableOrganizationRoles,
   isRootAdminPath,
+  organizationMemberIdForPath,
   organizationPathRequiresAccess,
+  organizationPeoplePath,
   organizationRoleValue,
   organizationSettingsPage,
   resolveActiveOrganizationId,
@@ -50,6 +52,19 @@ describe("organization state", () => {
   it("routes organization settings to focused sub-pages", () => {
     expect(organizationSettingsPage("/organization")).toBe("general");
     expect(organizationSettingsPage("/organization/people")).toBe("people");
+    expect(organizationSettingsPage("/organization/people/member%2F1")).toBe(
+      "people",
+    );
+    expect(organizationMemberIdForPath("/organization/people/member%2F1")).toBe(
+      "member/1",
+    );
+    expect(organizationMemberIdForPath("/organization/people")).toBeUndefined();
+    expect(organizationMemberIdForPath("/organization/people/%E0%A4%A")).toBe(
+      undefined,
+    );
+    expect(organizationPeoplePath("member/1")).toBe(
+      "/organization/people/member%2F1",
+    );
     expect(organizationSettingsPage("/organization/access")).toBe("access");
     expect(organizationSettingsPage("/organization/unknown")).toBe("general");
   });

@@ -3,38 +3,72 @@ import {
   Badge,
   Banner,
   Button,
+  ButtonLink,
   Card,
-  confirmDialog,
   cx,
   Field,
   Icon,
   LoadingState,
 } from "@tearleads/ui/react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { authClient } from "./authClient";
 import { ErrorBanner, type ErrorNotice, errorNotice } from "./BillingLink";
-import { EmployeeForms, RequirementDraftEditor } from "./EmployeeForms";
+import {
+  EmployeeForms,
+  inRequirementScope,
+  RequirementDraftEditor,
+  type RequirementScope,
+} from "./EmployeeForms";
 import {
   createEmployeeRequirements,
+  type EmployeeRequirement,
+  listEmployeeRequirements,
   type RequirementDraft,
 } from "./employeeFormsApi";
-import { inviteWithRequirements } from "./employeeOnboarding";
 import {
-  getOrganizationPeople,
-  type OrganizationInvitation,
-  type OrganizationMember,
-  type OrganizationPeopleData,
-  updateMemberTwoFactorRequirement,
+  inviteWithRequirements,
+  RequirementAssignmentError,
+} from "./employeeOnboarding";
+import {
+  MemberRoleControl,
+  MemberTwoFactorControl,
+  TwoFactorStatus,
+} from "./memberControls";
+import {
+  formatRole,
+  organizationPeopleActions,
+  removeOrganizationMember,
+  useOrganizationPeopleData,
+} from "./organizationPeopleState";
+import type {
+  OrganizationInvitation,
+  OrganizationMember,
+  OrganizationPeopleData,
 } from "./organizationSettingsApi";
 import {
   assignableOrganizationRoles,
   canManageOrganization,
   editableOrganizationRoles,
   type OrganizationInvitationRole,
-  organizationRoleValue,
+  organizationPeoplePath,
   type WorkspaceOrganization,
 } from "./organizationState";
+import { useFocusWhenFolded } from "./useFocusWhenFolded";
+import { handleNavigation } from "./workspacePaths";
 
+/**
+ * The first invitation is sent from an open form. Once anyone else has joined
+ * or been invited, the form folds behind an "Invite member" action so the
+ * member list leads the page.
+ */
 export function OrganizationPeople({
   onAccessChanged,
   onNavigate,
@@ -45,13 +79,15 @@ export function OrganizationPeople({
   organization: WorkspaceOrganization;
 }) {
   const state = useOrganizationPeopleData(organization.id);
-  const [formsVersion, setFormsVersion] = useState(0);
+  const [inviting, setInviting] = useState(false);
+  const summary = useRequirementSummary(state.data);
   const canManage = canManageOrganization(state.data?.memberRole);
-  const actions = organizationPeopleActions(
-    state,
-    organization,
-    onAccessChanged,
+  const hasOthers = Boolean(
+    state.data &&
+      (state.data.members.length > 1 || state.data.invitations.length > 0),
   );
+  const formOpen = canManage && (inviting || !hasOthers);
+  const inviteButton = useFocusWhenFolded(formOpen);
 
   if (!state.data) {
     return state.error ? (
@@ -71,212 +107,357 @@ export function OrganizationPeople({
   }
 
   return (
+    <PeopleBody
+      canManage={canManage}
+      data={state.data}
+      formOpen={formOpen}
+      inviteAction={
+        canManage && hasOthers && !inviting ? (
+          <Button
+            icon="userAdd"
+            onClick={() => setInviting(true)}
+            ref={inviteButton}
+            size="sm"
+            variant="primary"
+          >
+            Invite member
+          </Button>
+        ) : null
+      }
+      onAccessChanged={onAccessChanged}
+      onInviteCancel={hasOthers ? () => setInviting(false) : undefined}
+      onInviteDone={() => setInviting(false)}
+      onInviteSubmitting={() => setInviting(true)}
+      onNavigate={onNavigate}
+      organization={organization}
+      summary={summary}
+      state={state}
+    />
+  );
+}
+
+function PeopleBody({
+  canManage,
+  data,
+  formOpen,
+  inviteAction,
+  onAccessChanged,
+  onInviteCancel,
+  onInviteDone,
+  onInviteSubmitting,
+  onNavigate,
+  organization,
+  state,
+  summary,
+}: {
+  canManage: boolean;
+  data: OrganizationPeopleData;
+  formOpen: boolean;
+  inviteAction: ReactNode;
+  onAccessChanged: () => Promise<void>;
+  onInviteCancel: (() => void) | undefined;
+  onInviteDone: () => void;
+  /** Keeps the form open while it works, even as people reload around it. */
+  onInviteSubmitting: () => void;
+  onNavigate: (pathname: string) => void;
+  organization: WorkspaceOrganization;
+  state: ReturnType<typeof useOrganizationPeopleData>;
+  summary: ReturnType<typeof useRequirementSummary>;
+}) {
+  const actions = organizationPeopleActions(
+    state,
+    organization,
+    onAccessChanged,
+  );
+  const unattached: RequirementScope = {
+    kind: "unattached",
+    memberIds: data.members.map(({ id }) => id),
+  };
+  const { requirements } = summary;
+  const openCount = (matches: (requirement: EmployeeRequirement) => boolean) =>
+    requirements.filter(
+      (requirement) =>
+        requirement.status !== "complete" && matches(requirement),
+    ).length;
+  return (
     <>
       {state.error && <Banner tone="danger">{state.error}</Banner>}
       {state.notice && <Banner tone="success">{state.notice}</Banner>}
-      {canManage && (
+      <SummaryError summary={summary} />
+      {!canManage && data.currentMemberId && (
+        <OwnRequestsNotice
+          count={openCount(() => true)}
+          memberId={data.currentMemberId}
+          onNavigate={onNavigate}
+        />
+      )}
+      {formOpen && (
         <InviteMemberForm
           key={organization.id}
-          memberRole={state.data.memberRole}
+          memberRole={data.memberRole}
+          onCancel={onInviteCancel}
           onNavigate={onNavigate}
           onSent={async () => {
             await state.load();
-            setFormsVersion((version) => version + 1);
+            summary.reload();
+          }}
+          onSubmitting={onInviteSubmitting}
+          onSuccess={(message) => {
+            state.setNotice(message);
+            onInviteDone();
           }}
           organizationId={organization.id}
         />
       )}
       <OrganizationMembers
+        action={inviteAction}
         busy={state.busy}
-        managerRole={state.data.memberRole}
-        members={state.data.members}
-        onRemove={(member) =>
-          removeOrganizationMember(member, organization, state, onAccessChanged)
-        }
+        managerRole={data.memberRole}
+        members={data.members}
+        onNavigate={onNavigate}
+        onRemove={async (member) => {
+          await removeOrganizationMember(
+            member,
+            organization,
+            state,
+            onAccessChanged,
+          );
+        }}
         onRoleChange={actions.updateMemberRole}
         onTwoFactorRequiredChange={actions.updateTwoFactorRequirement}
+        openRequests={(member) =>
+          openCount((requirement) => requirement.memberId === member.id)
+        }
       />
-      <EmployeeForms
-        canManage={canManage}
-        invitations={state.data.invitations}
-        key={`${organization.id}-${formsVersion}-${state.data.members
-          .map((member) => member.id)
-          .join(",")}-${state.data.invitations
-          .map((invitation) => `${invitation.id}:${invitation.status}`)
-          .join(",")}`}
-        members={state.data.members}
-      />
-      {canManage && state.data.invitations.length > 0 && (
+      {canManage && data.invitations.length > 0 && (
         <PendingInvitations
           busy={state.busy}
-          invitations={state.data.invitations}
+          invitations={data.invitations}
           onCancel={actions.cancelInvitation}
         />
       )}
+      {canManage &&
+        requirements.some((requirement) =>
+          inRequirementScope(unattached, requirement),
+        ) && (
+          <EmployeeForms
+            canManage
+            key={`${peopleKey(data)}:${summary.version}`}
+            scope={unattached}
+          />
+        )}
     </>
   );
 }
 
-async function removeOrganizationMember(
-  member: OrganizationMember,
-  organization: WorkspaceOrganization,
-  state: ReturnType<typeof useOrganizationPeopleData>,
-  onAccessChanged: () => Promise<void>,
-) {
-  if (!(await confirmMemberRemoval(member, organization))) return;
-  state.startAction();
-  try {
-    const result = await authClient.organization.removeMember({
-      memberIdOrEmail: member.id,
-      organizationId: organization.id,
-    });
-    if (result.error) {
-      throw new Error(
-        result.error.message ?? "Could not remove this organization member.",
-      );
-    }
-    state.setNotice(`${member.user.name} was removed from the organization.`);
-    await Promise.all([state.load(), onAccessChanged()]);
-  } catch (cause) {
-    state.setError(messageFrom(cause));
-  } finally {
-    state.setBusy(false);
-  }
+function peopleKey(data: OrganizationPeopleData) {
+  return [...data.members, ...data.invitations].map(({ id }) => id).join(",");
 }
 
-function useOrganizationPeopleData(organizationId: string) {
-  const [data, setData] = useState<OrganizationPeopleData>();
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
-  const load = useCallback(async () => {
-    if (!organizationId) return;
-    setBusy(true);
-    setError(undefined);
+/**
+ * Requested forms and checks, for the list's counts and for requests without
+ * a member page. Reloads when people or the viewer's access change, or on
+ * demand after new requests. Managers see every request and members only
+ * their own, so requests loaded for other access are never shown.
+ */
+function useRequirementSummary(data: OrganizationPeopleData | undefined) {
+  const [summary, setSummary] = useState<{
+    access: string;
+    error?: string;
+    requirements: EmployeeRequirement[];
+    /** Counts loads, so views of the same requests can start over. */
+    version: number;
+  }>({ access: "", requirements: [], version: 0 });
+  const sequence = useRef(0);
+  const load = useCallback(async (access: string) => {
+    const request = ++sequence.current;
     try {
-      setData(await getOrganizationPeople());
+      const requirements = await listEmployeeRequirements();
+      if (request !== sequence.current) return;
+      setSummary(({ version }) => ({
+        access,
+        requirements,
+        version: version + 1,
+      }));
     } catch (cause) {
-      setError(messageFrom(cause));
-    } finally {
-      setBusy(false);
+      if (request !== sequence.current) return;
+      const error =
+        cause instanceof Error
+          ? cause.message
+          : "Requested forms and checks could not be loaded.";
+      setSummary((current) => ({ ...current, error }));
     }
-  }, [organizationId]);
-  useEffect(() => void load(), [load]);
-  const startAction = () => {
-    setBusy(true);
-    setError(undefined);
-    setNotice(undefined);
-  };
+  }, []);
+  const access = data ? `${data.memberRole}:${data.currentMemberId ?? ""}` : "";
+  const reloadKey = data ? `${access}|${peopleKey(data)}` : "";
+  useEffect(() => {
+    if (reloadKey) void load(access);
+  }, [access, load, reloadKey]);
+  useEffect(
+    () => () => {
+      sequence.current += 1;
+    },
+    [],
+  );
   return {
-    busy,
-    data,
-    error,
-    load,
-    notice,
-    setBusy,
-    setError,
-    setNotice,
-    startAction,
+    error: summary.error,
+    reload: () => void load(access),
+    requirements: summary.access === access ? summary.requirements : [],
+    version: summary.version,
   };
 }
 
-function organizationPeopleActions(
-  state: ReturnType<typeof useOrganizationPeopleData>,
-  organization: WorkspaceOrganization,
-  onAccessChanged: () => Promise<void>,
-) {
-  async function cancelInvitation(invitationId: string) {
-    state.startAction();
-    try {
-      const result = await authClient.organization.cancelInvitation({
-        invitationId,
-      });
-      if (result.error) {
-        throw new Error(
-          result.error.message ?? "Could not revoke this invitation.",
-        );
+function SummaryError({
+  summary,
+}: {
+  summary: ReturnType<typeof useRequirementSummary>;
+}) {
+  if (!summary.error) return null;
+  return (
+    <Banner
+      actions={
+        <Button onClick={summary.reload} size="sm">
+          Try again
+        </Button>
       }
-      state.setNotice("Invitation revoked.");
-      await state.load();
-    } catch (cause) {
-      state.setError(messageFrom(cause));
-    } finally {
-      state.setBusy(false);
-    }
-  }
+      tone="danger"
+    >
+      Requested forms and checks could not be loaded. {summary.error}
+    </Banner>
+  );
+}
 
-  async function updateMemberRole(
-    member: OrganizationMember,
-    role: OrganizationInvitationRole,
-  ) {
-    if (organizationRoleValue(member.role) === role) return;
-    state.startAction();
-    try {
-      const result = await authClient.organization.updateMemberRole({
-        memberId: member.id,
-        organizationId: organization.id,
-        role,
-      });
-      if (result.error) {
-        throw new Error(
-          result.error.message ?? "Could not update this member’s role.",
-        );
+function OwnRequestsNotice({
+  count,
+  memberId,
+  onNavigate,
+}: {
+  count: number;
+  memberId: string;
+  onNavigate: (pathname: string) => void;
+}) {
+  if (count === 0) return null;
+  const path = organizationPeoplePath(memberId);
+  return (
+    <Banner
+      actions={
+        <ButtonLink
+          href={path}
+          onClick={(event) => handleNavigation(event, path, onNavigate)}
+          size="sm"
+        >
+          View your forms
+        </ButtonLink>
       }
-      state.setNotice(`${member.user.name} is now an organization ${role}.`);
-      await Promise.all([state.load(), onAccessChanged()]);
-    } catch (cause) {
-      state.setError(messageFrom(cause));
-    } finally {
-      state.setBusy(false);
-    }
-  }
-
-  async function updateTwoFactorRequirement(
-    member: OrganizationMember,
-    required: boolean,
-  ) {
-    if (member.twoFactorRequired === required) return;
-    state.startAction();
-    try {
-      await updateMemberTwoFactorRequirement(member.id, required);
-      state.setNotice(
-        required
-          ? `${member.user.name} must use two-factor authentication for this organization.`
-          : `${member.user.name} is no longer required to use two-factor authentication for this organization.`,
-      );
-      await Promise.all([state.load(), onAccessChanged()]);
-    } catch (cause) {
-      state.setError(messageFrom(cause));
-    } finally {
-      state.setBusy(false);
-    }
-  }
-
-  return {
-    cancelInvitation,
-    updateMemberRole,
-    updateTwoFactorRequirement,
-  };
+      tone="info"
+    >
+      {count === 1
+        ? "Your organization has requested a form or check from you."
+        : `Your organization has requested ${count} forms or checks from you.`}
+    </Banner>
+  );
 }
 
 function InviteMemberForm({
   memberRole,
+  onCancel,
   onNavigate,
   onSent,
+  onSubmitting,
+  onSuccess,
   organizationId,
 }: {
   memberRole: string;
+  /** Present when the form can fold away again. */
+  onCancel: (() => void) | undefined;
   onNavigate: (pathname: string) => void;
   onSent: () => Promise<void>;
+  onSubmitting: () => void;
+  onSuccess: (message: string) => void;
   organizationId: string;
 }) {
-  const assignableRoles = assignableOrganizationRoles(memberRole);
+  const form = useInviteSubmission({
+    onSent,
+    onSubmitting,
+    onSuccess,
+    organizationId,
+  });
+  const emailField = useRef<HTMLInputElement>(null);
+  // Opened from the header button, which is now gone; move focus into the
+  // form. Decided once, so a later reload does not pull focus here.
+  const [openedOnDemand] = useState(Boolean(onCancel));
+  useEffect(() => {
+    if (openedOnDemand) emailField.current?.focus();
+  }, [openedOnDemand]);
+
+  return (
+    <Card
+      description="They’ll receive a single-use invitation that expires in 48 hours."
+      footer={
+        <>
+          {onCancel && (
+            <Button disabled={form.busy} onClick={onCancel} variant="ghost">
+              Cancel
+            </Button>
+          )}
+          <Button
+            busy={form.busy}
+            disabled={!form.email.trim()}
+            icon="mail"
+            type="submit"
+            variant="primary"
+          >
+            {form.busy ? "Sending…" : "Send invitation"}
+          </Button>
+        </>
+      }
+      onSubmit={(event) => void form.invite(event)}
+      title="Invite a member"
+    >
+      <InviteFields
+        busy={form.busy}
+        email={form.email}
+        emailField={emailField}
+        memberRole={memberRole}
+        onEmail={form.setEmail}
+        onRole={form.setRole}
+        role={form.role}
+      />
+      <div className="inviteRequirements">
+        <h3>Onboarding requirements</h3>
+        <p className="muted">
+          Choose any forms or checks needed from this person and set each due
+          date.
+        </p>
+        <RequirementDraftEditor
+          drafts={form.requirements}
+          disabled={form.busy}
+          onChange={form.setRequirements}
+        />
+      </div>
+      <InviteError form={form} onNavigate={onNavigate} />
+    </Card>
+  );
+}
+
+/** Sends an invitation with its requests, and retries requests that failed. */
+function useInviteSubmission({
+  onSent,
+  onSubmitting,
+  onSuccess,
+  organizationId,
+}: {
+  onSent: () => Promise<void>;
+  onSubmitting: () => void;
+  onSuccess: (message: string) => void;
+  organizationId: string;
+}) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<OrganizationInvitationRole>("member");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorNotice>();
-  const [notice, setNotice] = useState<string>();
   const [requirements, setRequirements] = useState<RequirementDraft[]>([]);
+  const [retry, setRetry] = useState<{ email: string; invitationId: string }>();
 
   async function invite(event: FormEvent) {
     event.preventDefault();
@@ -284,7 +465,8 @@ function InviteMemberForm({
     if (!invitedEmail) return;
     setBusy(true);
     setError(undefined);
-    setNotice(undefined);
+    setRetry(undefined);
+    onSubmitting();
     try {
       const assignedRole = await sendInvitationWithRequirements({
         email: invitedEmail,
@@ -295,83 +477,139 @@ function InviteMemberForm({
         role,
       });
       setRequirements([]);
-      setNotice(
+      onSuccess(
         `Invitation sent to ${invitedEmail} with the ${assignedRole} role.`,
       );
     } catch (cause) {
+      // The invitation went out but its requests did not: keep the drafts
+      // and offer to send them to that invitation again.
+      if (cause instanceof RequirementAssignmentError && cause.invitationId) {
+        setRetry({ email: invitedEmail, invitationId: cause.invitationId });
+      }
       setError(errorNotice(cause, "Could not send this invitation."));
     } finally {
       setBusy(false);
     }
   }
 
+  async function retryRequests() {
+    if (!retry) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await createEmployeeRequirements(
+        { invitationId: retry.invitationId },
+        requirements,
+      );
+      setRequirements([]);
+      setRetry(undefined);
+      await onSent();
+      onSuccess(`Invitation sent to ${retry.email}, with its requested forms.`);
+    } catch (cause) {
+      setError(errorNotice(cause, "Could not request these forms."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return {
+    busy,
+    email,
+    error,
+    invite,
+    requirements,
+    retry,
+    retryRequests,
+    role,
+    setEmail,
+    setRequirements,
+    setRole,
+  };
+}
+
+function InviteError({
+  form,
+  onNavigate,
+}: {
+  form: ReturnType<typeof useInviteSubmission>;
+  onNavigate: (pathname: string) => void;
+}) {
+  if (!form.retry || !form.error) {
+    return <ErrorBanner error={form.error} onNavigate={onNavigate} />;
+  }
   return (
-    <Card
-      description="They’ll receive a single-use invitation that expires in 48 hours."
-      footer={
+    <Banner
+      actions={
         <Button
-          busy={busy}
-          disabled={!email.trim()}
-          icon="mail"
-          type="submit"
-          variant="primary"
+          busy={form.busy}
+          disabled={!form.requirements.length}
+          onClick={() => void form.retryRequests()}
+          size="sm"
         >
-          {busy ? "Sending…" : "Send invitation"}
+          Retry requests
         </Button>
       }
-      onSubmit={(event) => void invite(event)}
-      title="Invite a member"
+      tone="danger"
     >
-      <div className="inviteFields">
-        <Field label="Email address">
-          <input
-            autoCapitalize="none"
-            autoComplete="email"
-            className="input"
-            disabled={busy}
-            inputMode="email"
-            name="invite-email"
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="name@company.com"
-            required
-            spellCheck={false}
-            type="email"
-            value={email}
-          />
-        </Field>
-        <Field hint={roleDescription(role)} label="Organization role">
-          <select
-            className="select"
-            disabled={busy}
-            name="invite-role"
-            onChange={(event) =>
-              setRole(event.target.value as OrganizationInvitationRole)
-            }
-            value={role}
-          >
-            {assignableRoles.map((assignableRole) => (
-              <option key={assignableRole} value={assignableRole}>
-                {formatRole(assignableRole)}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <div className="inviteRequirements">
-        <h3>Onboarding requirements</h3>
-        <p className="muted">
-          Choose any forms or checks needed from this person and set each due
-          date.
-        </p>
-        <RequirementDraftEditor
-          drafts={requirements}
+      {form.error.message}
+    </Banner>
+  );
+}
+
+function InviteFields({
+  busy,
+  email,
+  emailField,
+  memberRole,
+  onEmail,
+  onRole,
+  role,
+}: {
+  busy: boolean;
+  email: string;
+  emailField: Ref<HTMLInputElement>;
+  memberRole: string;
+  onEmail: (email: string) => void;
+  onRole: (role: OrganizationInvitationRole) => void;
+  role: OrganizationInvitationRole;
+}) {
+  return (
+    <div className="inviteFields">
+      <Field label="Email address">
+        <input
+          autoCapitalize="none"
+          autoComplete="email"
+          className="input"
           disabled={busy}
-          onChange={setRequirements}
+          inputMode="email"
+          name="invite-email"
+          onChange={(event) => onEmail(event.target.value)}
+          placeholder="name@company.com"
+          ref={emailField}
+          required
+          spellCheck={false}
+          type="email"
+          value={email}
         />
-      </div>
-      <ErrorBanner error={error} onNavigate={onNavigate} />
-      {notice && <Banner tone="success">{notice}</Banner>}
-    </Card>
+      </Field>
+      <Field hint={roleDescription(role)} label="Organization role">
+        <select
+          className="select"
+          disabled={busy}
+          name="invite-role"
+          onChange={(event) =>
+            onRole(event.target.value as OrganizationInvitationRole)
+          }
+          value={role}
+        >
+          {assignableOrganizationRoles(memberRole).map((assignableRole) => (
+            <option key={assignableRole} value={assignableRole}>
+              {formatRole(assignableRole)}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </div>
   );
 }
 
@@ -421,6 +659,7 @@ async function sendInvitationWithRequirements({
 
 interface MemberControlsProps {
   busy: boolean;
+  onNavigate: (pathname: string) => void;
   onRoleChange: (
     member: OrganizationMember,
     role: OrganizationInvitationRole,
@@ -430,13 +669,16 @@ interface MemberControlsProps {
     member: OrganizationMember,
     required: boolean,
   ) => Promise<void>;
+  openRequests: (member: OrganizationMember) => number;
 }
 
 function OrganizationMembers({
+  action,
   managerRole,
   members,
   ...controls
 }: MemberControlsProps & {
+  action: ReactNode;
   managerRole: string;
   members: OrganizationMember[];
 }) {
@@ -444,6 +686,7 @@ function OrganizationMembers({
   const canManage = canManageOrganization(managerRole);
   return (
     <Card
+      actions={action}
       description={`${members.length} ${
         members.length === 1 ? "person has" : "people have"
       } access to this organization.`}
@@ -480,69 +723,55 @@ function MemberRow({
   busy,
   canManage,
   member,
+  onNavigate,
   onRemove,
   onRoleChange,
   onTwoFactorRequiredChange,
+  openRequests,
   roles,
 }: MemberControlsProps & {
   canManage: boolean;
   member: OrganizationMember;
   roles: OrganizationInvitationRole[];
 }) {
-  const role = organizationRoleValue(member.role);
+  const path = organizationPeoplePath(member.id);
+  const open = openRequests(member);
   return (
     <li className="row memberRow">
-      <div className="memberIdentity">
+      <a
+        className="memberIdentity memberLink"
+        href={path}
+        onClick={(event) => handleNavigation(event, path, onNavigate)}
+      >
         <Avatar name={member.user.name} />
         <div className="rowMain">
           <span className="memberName">
             <span className="rowTitle truncate">{member.user.name}</span>
             {canManage && <TwoFactorStatus member={member} />}
+            {open > 0 && (
+              <Badge tone="info">
+                {open} open {open === 1 ? "request" : "requests"}
+              </Badge>
+            )}
           </span>
           <span className="rowMeta truncate">{member.user.email}</span>
         </div>
-      </div>
+      </a>
       <div className="memberTwoFactor">
-        {canManage ? (
-          <label className="check">
-            <input
-              aria-label={`Require two-factor authentication for ${member.user.name}`}
-              checked={member.twoFactorRequired}
-              disabled={busy}
-              onChange={(event) =>
-                void onTwoFactorRequiredChange(member, event.target.checked)
-              }
-              type="checkbox"
-            />
-            <span>Require 2FA</span>
-          </label>
-        ) : (
-          member.twoFactorRequired && <Badge tone="info">2FA required</Badge>
-        )}
+        <MemberTwoFactorControl
+          busy={busy}
+          canManage={canManage}
+          member={member}
+          onChange={onTwoFactorRequiredChange}
+        />
       </div>
       <div className="memberRole">
-        {roles.length > 1 ? (
-          <select
-            aria-label={`Role for ${member.user.name}`}
-            className="select inputSm memberRoleSelect"
-            disabled={busy}
-            onChange={(event) =>
-              void onRoleChange(
-                member,
-                event.target.value as OrganizationInvitationRole,
-              )
-            }
-            value={role}
-          >
-            {roles.map((assignableRole) => (
-              <option key={assignableRole} value={assignableRole}>
-                {formatRole(assignableRole)}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <Badge>{formatRole(role)}</Badge>
-        )}
+        <MemberRoleControl
+          busy={busy}
+          member={member}
+          onChange={onRoleChange}
+          roles={roles}
+        />
       </div>
       <div className="memberActions">
         {roles.length > 1 && (
@@ -560,17 +789,6 @@ function MemberRow({
   );
 }
 
-function TwoFactorStatus({ member }: { member: OrganizationMember }) {
-  if (member.twoFactorEnabled) {
-    return <Badge tone="success">2FA enabled</Badge>;
-  }
-  return (
-    <Badge tone={member.twoFactorRequired ? "warning" : "neutral"}>
-      2FA not set up
-    </Badge>
-  );
-}
-
 function PendingInvitations({
   busy,
   invitations,
@@ -582,7 +800,7 @@ function PendingInvitations({
 }) {
   return (
     <Card
-      description="Invitations that have not been accepted yet."
+      description="Invitations that have not been accepted yet. Forms requested with an invitation move to the member’s page when they join."
       flush
       title="Pending invitations"
     >
@@ -622,29 +840,8 @@ function formatDate(value: string) {
   );
 }
 
-function formatRole(role: string) {
-  return role.charAt(0).toUpperCase() + role.slice(1);
-}
-
 function roleDescription(role: OrganizationInvitationRole) {
   if (role === "owner") return "Full access, including ownership controls.";
   if (role === "admin") return "Can manage people, groups, and settings.";
   return "Standard access to the organization workspace.";
-}
-
-function messageFrom(cause: unknown) {
-  return cause instanceof Error
-    ? cause.message
-    : "Could not update organization people.";
-}
-
-function confirmMemberRemoval(
-  member: OrganizationMember,
-  organization: WorkspaceOrganization,
-) {
-  return confirmDialog({
-    confirmLabel: "Remove member",
-    title: `Remove ${member.user.name} from ${organization.name}?`,
-    tone: "danger",
-  });
 }

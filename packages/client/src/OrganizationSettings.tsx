@@ -14,12 +14,14 @@ import { type FormEvent, type MouseEvent, useEffect, useState } from "react";
 import { authClient } from "./authClient";
 import { OrganizationBilling } from "./OrganizationBilling";
 import { OrganizationAccessSettings } from "./OrganizationGroups";
+import { OrganizationMemberDetail } from "./OrganizationMemberDetail";
 import { OrganizationPeople } from "./OrganizationPeople";
 import { deleteCurrentOrganization } from "./organizationSettingsApi";
 import {
   canDeleteOrganization,
   canLeaveOrganizationWithOwnerCount,
   canManageOrganization,
+  organizationMemberIdForPath,
   organizationSettingsPage,
   type WorkspaceOrganization,
 } from "./organizationState";
@@ -76,6 +78,7 @@ export function OrganizationSettings({
         <OrganizationSettingsPageContent
           accessError={accessError}
           canManage={canManage}
+          memberId={organizationMemberIdForPath(pathname)}
           memberRole={memberRole}
           onAccessChanged={onAccessChanged}
           onNavigate={onNavigate}
@@ -93,6 +96,7 @@ export function OrganizationSettings({
 function OrganizationSettingsPageContent({
   accessError,
   canManage,
+  memberId,
   memberRole,
   onAccessChanged,
   onNavigate,
@@ -104,6 +108,7 @@ function OrganizationSettingsPageContent({
 }: {
   accessError: string | undefined;
   canManage: boolean;
+  memberId: string | undefined;
   memberRole: string | undefined;
   onAccessChanged: () => Promise<void>;
   onNavigate: (pathname: string) => void;
@@ -114,6 +119,17 @@ function OrganizationSettingsPageContent({
   page: ReturnType<typeof organizationSettingsPage>;
 }) {
   if (!organization) return <LoadingState label="Loading organization…" />;
+  if (page === "people" && memberId) {
+    return (
+      <OrganizationMemberDetail
+        key={memberId}
+        memberId={memberId}
+        onAccessChanged={onAccessChanged}
+        onNavigate={onNavigate}
+        organization={organization}
+      />
+    );
+  }
   if (page === "people") {
     return (
       <OrganizationPeople

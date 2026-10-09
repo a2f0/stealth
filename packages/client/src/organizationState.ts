@@ -41,10 +41,32 @@ export function organizationPathRequiresAccess(pathname: string) {
   );
 }
 
+/** The People list, or one member's page. */
+export function organizationPeoplePath(memberId?: string) {
+  return memberId
+    ? `/organization/people/${encodeURIComponent(memberId)}`
+    : "/organization/people";
+}
+
+export function organizationMemberIdForPath(pathname: string) {
+  const segment = /^\/organization\/people\/([^/]+)\/?$/.exec(pathname)?.[1];
+  if (!segment) return undefined;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return undefined;
+  }
+}
+
 export function organizationSettingsPage(
   pathname: string,
 ): OrganizationSettingsPage {
-  if (pathname === "/organization/people") return "people";
+  if (
+    pathname === "/organization/people" ||
+    organizationMemberIdForPath(pathname)
+  ) {
+    return "people";
+  }
   if (pathname === "/organization/access") return "access";
   if (pathname === "/organization/billing") return "billing";
   return "general";
