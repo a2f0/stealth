@@ -47,11 +47,15 @@ function edgeStep(clientY: number) {
 
 /**
  * Scrolls a frame at a time while the pointer rests near a viewport edge,
- * calling `onScroll` with the pointer's position after each step.
+ * calling `onScroll` with the pointer's position after each step. It never
+ * scrolls past where the page ended when the drag began: the lifted entry's
+ * transform grows the page as it follows the pointer, and would otherwise
+ * let the scroll run on into empty space.
  */
 function useEdgeScroll(onScroll: (clientY: number) => void) {
   const pointerY = useRef(0);
   const frame = useRef<number | undefined>(undefined);
+  const limit = useRef(0);
   const scrolled = useRef(onScroll);
   scrolled.current = onScroll;
   const stop = useCallback(() => {
@@ -62,7 +66,12 @@ function useEdgeScroll(onScroll: (clientY: number) => void) {
 
   function step() {
     frame.current = undefined;
-    const distance = edgeStep(pointerY.current);
+    const target = Math.min(
+      limit.current,
+      Math.max(0, window.scrollY + edgeStep(pointerY.current)),
+    );
+    const distance = target - window.scrollY;
+    // Out of the edge zone, or already at the end of the page.
     if (distance === 0) return;
     window.scrollBy(0, distance);
     scrolled.current(pointerY.current);
@@ -70,6 +79,12 @@ function useEdgeScroll(onScroll: (clientY: number) => void) {
   }
 
   return {
+    begin() {
+      limit.current = Math.max(
+        0,
+        document.documentElement.scrollHeight - window.innerHeight,
+      );
+    },
     follow(clientY: number) {
       pointerY.current = clientY;
       if (frame.current === undefined && edgeStep(clientY) !== 0) {
@@ -144,6 +159,7 @@ export function useReorderDrag(
         event.preventDefault();
         event.currentTarget.focus();
         event.currentTarget.setPointerCapture?.(event.pointerId);
+        edge.begin();
         session.current = {
           from: index,
           items: [...list.children].filter(

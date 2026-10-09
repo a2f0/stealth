@@ -283,6 +283,12 @@ describe("reordering the audit form", () => {
     const savedScroll = ["scrollBy", "scrollY"].map(
       (key) => [key, Object.getOwnPropertyDescriptor(dom, key)] as const,
     );
+    // The page can scroll 300px when the drag begins, and no further.
+    const page = dom.document.documentElement;
+    Object.defineProperty(page, "scrollHeight", {
+      configurable: true,
+      get: () => dom.innerHeight + 300,
+    });
     for (const [key, value] of Object.entries(replaced)) {
       Object.defineProperty(globalThis, key, { configurable: true, value });
     }
@@ -322,10 +328,14 @@ describe("reordering the audit form", () => {
       expect(scrolled).toBe(12 * 16);
       expect(questions()[1]?.className).toContain("auditDropAfter");
 
+      // It stops at the end of the page as it was, however long it waits.
+      await runFrames(30);
+      expect(scrolled).toBe(300);
+
       // Dropping stops the scrolling; the next frames only restore focus.
       await pointer(handle, "pointerup", edge);
       await runFrames(3);
-      expect(scrolled).toBe(12 * 16);
+      expect(scrolled).toBe(300);
       expect(prompts()).toEqual(["Second", "First", "Third"]);
     } finally {
       for (const [key, descriptor] of saved) {
@@ -336,6 +346,7 @@ describe("reordering the audit form", () => {
         if (descriptor) Object.defineProperty(dom, key, descriptor);
         else Reflect.deleteProperty(dom, key);
       }
+      Reflect.deleteProperty(page, "scrollHeight");
     }
   });
 });
