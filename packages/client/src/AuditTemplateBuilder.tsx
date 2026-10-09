@@ -600,11 +600,15 @@ type FocusTarget = "handle" | "number";
  * on the control that moved it once the new order is drawn.
  */
 function refocus(target: FocusTarget, entryId: string) {
-  requestAnimationFrame(() =>
-    document
-      .querySelector<HTMLElement>(`[data-reorder-focus="${target}-${entryId}"]`)
-      ?.focus(),
-  );
+  const key = `${target}-${entryId}`;
+  requestAnimationFrame(() => {
+    // Compared, not interpolated into a selector, so any ID is safe.
+    for (const element of document.querySelectorAll<HTMLElement>(
+      "[data-reorder-focus]",
+    )) {
+      if (element.getAttribute("data-reorder-focus") === key) element.focus();
+    }
+  });
 }
 
 /** Marks a reorderable entry, and shows it lifted or as the drop point. */

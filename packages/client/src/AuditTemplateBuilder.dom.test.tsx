@@ -6,6 +6,7 @@ import type { AuditTemplate } from "./auditApi";
 
 const dom = new Window({ url: "http://localhost:5173/audits/templates/t1" });
 const domGlobals = {
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   document: dom.document,
   Element: dom.Element,
   HTMLElement: dom.HTMLElement,
@@ -257,5 +258,84 @@ describe("reordering the audit form", () => {
     expect(prompts()).toEqual(["Second", "Third", "First"]);
     expect(container.querySelector(".auditDragging")).toBeNull();
     expect(prompts(1)).toEqual(["Other"]);
+  });
+
+  it("keeps scrolling at the edge while the pointer holds still", async () => {
+    stubApi();
+    await render();
+    let scrolled = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    const replaced = {
+      cancelAnimationFrame: (id: number) => frames.delete(id),
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        nextFrame += 1;
+        frames.set(nextFrame, callback);
+        return nextFrame;
+      },
+    };
+    const saved = new Map(
+      Object.keys(replaced).map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(globalThis, key),
+      ]),
+    );
+    const savedScroll = ["scrollBy", "scrollY"].map(
+      (key) => [key, Object.getOwnPropertyDescriptor(dom, key)] as const,
+    );
+    for (const [key, value] of Object.entries(replaced)) {
+      Object.defineProperty(globalThis, key, { configurable: true, value });
+    }
+    Object.defineProperty(dom, "scrollBy", {
+      configurable: true,
+      value: (_x: number, y: number) => {
+        scrolled += y;
+      },
+    });
+    Object.defineProperty(dom, "scrollY", {
+      configurable: true,
+      get: () => scrolled,
+    });
+    /** Runs `count` animation frames, as the browser would while still. */
+    const runFrames = async (count: number) => {
+      for (let frame = 0; frame < count; frame += 1) {
+        const pending = [...frames.values()];
+        frames.clear();
+        await act(async () => {
+          for (const callback of pending) callback(0);
+        });
+      }
+    };
+    try {
+      // Tall questions, so reaching the next one needs the page to scroll.
+      for (const [index, row] of questions().entries()) {
+        row.getBoundingClientRect = () =>
+          ({ height: 600, top: index * 600 - scrolled }) as DOMRect;
+      }
+      const edge = dom.innerHeight - 10;
+      const handle = questions()[0]?.querySelector(".auditDragHandle");
+      await pointer(handle, "pointerdown", 50);
+      await pointer(handle, "pointermove", edge);
+      expect(questions()[1]?.className).not.toContain("auditDropAfter");
+
+      await runFrames(12);
+      expect(scrolled).toBe(12 * 16);
+      expect(questions()[1]?.className).toContain("auditDropAfter");
+
+      // Dropping stops the scrolling; the next frames only restore focus.
+      await pointer(handle, "pointerup", edge);
+      await runFrames(3);
+      expect(scrolled).toBe(12 * 16);
+      expect(prompts()).toEqual(["Second", "First", "Third"]);
+    } finally {
+      for (const [key, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+        else Reflect.deleteProperty(globalThis, key);
+      }
+      for (const [key, descriptor] of savedScroll) {
+        if (descriptor) Object.defineProperty(dom, key, descriptor);
+        else Reflect.deleteProperty(dom, key);
+      }
+    }
   });
 });

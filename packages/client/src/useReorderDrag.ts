@@ -1,4 +1,11 @@
-import { type KeyboardEvent, type PointerEvent, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type PointerEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 /** Returns `entries` with the one at `from` moved to `to`. */
 export function moveEntry<T>(entries: readonly T[], from: number, to: number) {
@@ -25,8 +32,53 @@ interface ReorderDrag {
   to: number;
 }
 
-/** Near the viewport edge, a drag scrolls the page so far entries are reachable. */
+/**
+ * Near the viewport edge, a drag keeps scrolling the page, even while the
+ * pointer holds still, so far entries are reachable.
+ */
 const edgeScroll = { distance: 48, step: 16 };
+
+function edgeStep(clientY: number) {
+  if (clientY < edgeScroll.distance) return -edgeScroll.step;
+  if (clientY > window.innerHeight - edgeScroll.distance)
+    return edgeScroll.step;
+  return 0;
+}
+
+/**
+ * Scrolls a frame at a time while the pointer rests near a viewport edge,
+ * calling `onScroll` with the pointer's position after each step.
+ */
+function useEdgeScroll(onScroll: (clientY: number) => void) {
+  const pointerY = useRef(0);
+  const frame = useRef<number | undefined>(undefined);
+  const scrolled = useRef(onScroll);
+  scrolled.current = onScroll;
+  const stop = useCallback(() => {
+    if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+    frame.current = undefined;
+  }, []);
+  useEffect(() => stop, [stop]);
+
+  function step() {
+    frame.current = undefined;
+    const distance = edgeStep(pointerY.current);
+    if (distance === 0) return;
+    window.scrollBy(0, distance);
+    scrolled.current(pointerY.current);
+    frame.current = requestAnimationFrame(step);
+  }
+
+  return {
+    follow(clientY: number) {
+      pointerY.current = clientY;
+      if (frame.current === undefined && edgeStep(clientY) !== 0) {
+        frame.current = requestAnimationFrame(step);
+      }
+    },
+    stop,
+  };
+}
 
 /**
  * Reorders a list by dragging each entry's handle, or by pressing the arrow
@@ -42,6 +94,7 @@ export function useReorderDrag(
   const session = useRef<
     { from: number; items: HTMLElement[]; startY: number } | undefined
   >(undefined);
+  const edge = useEdgeScroll(track);
 
   function track(clientY: number) {
     const current = session.current;
@@ -59,6 +112,7 @@ export function useReorderDrag(
   }
 
   function finish(commit: boolean) {
+    edge.stop();
     const result = latest.current;
     session.current = undefined;
     latest.current = undefined;
@@ -104,8 +158,8 @@ export function useReorderDrag(
       },
       onPointerMove: (event: PointerEvent<HTMLElement>) => {
         if (!session.current) return;
-        scrollNearEdge(event.clientY);
         track(event.clientY);
+        edge.follow(event.clientY);
       },
       onPointerUp: () => finish(true),
     };
@@ -122,12 +176,4 @@ export function useReorderDrag(
   }
 
   return { dragging: drag !== undefined, entryState, handleProps };
-}
-
-function scrollNearEdge(clientY: number) {
-  if (clientY < edgeScroll.distance) {
-    window.scrollBy?.(0, -edgeScroll.step);
-  } else if (clientY > window.innerHeight - edgeScroll.distance) {
-    window.scrollBy?.(0, edgeScroll.step);
-  }
 }
