@@ -117,9 +117,7 @@ async function mountPage() {
   document.body.append(container);
   const root = createRoot(container);
   mounted.push({ container, root });
-  await act(async () =>
-    root.render(<AuditHome canManageGlobal onNavigate={() => {}} />),
-  );
+  await act(async () => root.render(<AuditHome onNavigate={() => {}} />));
   await settle();
   return page(container);
 }
@@ -140,6 +138,7 @@ function page(container: HTMLElement) {
       [...container.querySelectorAll(".auditTemplateRow")].map(
         (element) => element.textContent ?? "",
       ),
+    text: () => container.textContent ?? "",
   };
 }
 
@@ -180,10 +179,20 @@ describe("audit template layout, mounted", () => {
     }
     expect(globalRow).toContain("Fire safety");
     expect(globalRow).toContain("Customize");
-    expect(globalRow).toContain("Manage global");
     expect(organizationRow).toContain("Kitchen close");
     expect(organizationRow).toContain("Edit");
-    expect(organizationRow).not.toContain("Manage global");
+    for (const text of [globalRow, organizationRow]) {
+      expect(text).not.toContain("Manage");
+    }
+  });
+
+  it("leaves global form management to Global Audits", async () => {
+    stubApi(templates);
+    const view = await mountPage();
+    expect(view.text()).toContain("New organization checklist");
+    expect(view.text()).toContain("Global forms");
+    expect(view.text()).not.toContain("New global checklist");
+    expect(view.text()).not.toContain("Manage global");
   });
 
   it("remembers the chosen layout on the next visit", async () => {

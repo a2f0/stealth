@@ -2,6 +2,7 @@ import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import { activity } from "./activity";
+import { adminAuditTemplates } from "./adminAuditTemplates";
 import type { AuditDefinition } from "./auditDefinition";
 import {
   ImageUploadReadTimeoutError,
@@ -1543,19 +1544,25 @@ describe("audits", () => {
 
   it("shares global templates without exposing organization templates", async () => {
     const fixture = await createFixture();
-    const denied = await jsonRequest(fixture, "/templates", "POST", {
-      name: "Unauthorized global form",
-      scope: "global",
-    });
-    expect(denied.response.status).toBe(403);
+    for (const role of ["user", "admin"]) {
+      const denied = await jsonRequest(
+        fixture,
+        "/templates",
+        "POST",
+        { name: "Organization-created global form", scope: "global" },
+        { role },
+      );
+      expect(denied.response.status).toBe(400);
+    }
 
     const global = await jsonRequest<TemplateResponse>(
       fixture,
-      "/templates",
+      "/admin/audit-templates",
       "POST",
-      { name: "Shared safety form", scope: "global" },
+      { name: "Shared safety form" },
       { role: "admin" },
     );
+    expect(global.response.status).toBe(201);
     expect(global.body.template.scope).toBe("global");
 
     const local = await jsonRequest<TemplateResponse>(
@@ -1585,17 +1592,20 @@ describe("audits", () => {
       otherOrganization.body.templates.map(({ name }) => name),
     ).not.toContain("Private form");
 
-    const deniedUpdate = await jsonRequest(
-      fixture,
-      `/templates/${global.body.template.id}`,
-      "PUT",
-      {
-        definition: global.body.template.definition,
-        expectedCurrentVersion: 1,
-        name: "Organization safety form",
-      },
-    );
-    expect(deniedUpdate.response.status).toBe(403);
+    for (const role of ["user", "admin"]) {
+      const deniedUpdate = await jsonRequest(
+        fixture,
+        `/templates/${global.body.template.id}`,
+        "PUT",
+        {
+          definition: global.body.template.definition,
+          expectedCurrentVersion: 1,
+          name: "Organization safety form",
+        },
+        { role },
+      );
+      expect(deniedUpdate.response.status).toBe(403);
+    }
 
     const organizationCopy = await jsonRequest<TemplateResponse>(
       fixture,
@@ -1630,7 +1640,7 @@ describe("audits", () => {
 
     const adminUpdate = await jsonRequest<TemplateResponse>(
       fixture,
-      `/templates/${global.body.template.id}`,
+      `/admin/audit-templates/${global.body.template.id}`,
       "PUT",
       {
         definition: global.body.template.definition,
@@ -1686,6 +1696,163 @@ describe("audits", () => {
         templateVersion: 2,
       },
     });
+  });
+
+  it("manages global templates from root admin without organization templates", async () => {
+    const fixture = await createFixture();
+    const admin = { role: "admin" };
+    const local = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/templates",
+      "POST",
+      { name: "Private form" },
+    );
+    expect(local.body.template.scope).toBe("organization");
+
+    const created = await jsonRequest<TemplateResponse>(
+      fixture,
+      "/admin/audit-templates",
+      "POST",
+      { name: "  Shared ladder form  " },
+      admin,
+    );
+    expect(created.response.status).toBe(201);
+    expect(created.body.template).toMatchObject({
+      currentVersion: 1,
+      name: "Shared ladder form",
+      scope: "global",
+      version: 1,
+    });
+    const id = created.body.template.id;
+    const invalid = await jsonRequest(
+      fixture,
+      "/admin/audit-templates",
+      "POST",
+      { name: " " },
+      admin,
+    );
+    expect(invalid.response.status).toBe(400);
+
+    const listed = await jsonRequest<TemplateListResponse>(
+      fixture,
+      "/admin/audit-templates",
+      "GET",
+      undefined,
+      admin,
+    );
+    expect(listed.body.templates.map((template) => template.id)).toEqual(
+      expect.arrayContaining([
+        id,
+        "nfpa70e_global",
+        "us_residential_core_global",
+      ]),
+    );
+    expect(listed.body.templates.every(({ scope }) => scope === "global")).toBe(
+      true,
+    );
+
+    for (const [path, method] of [
+      [`/admin/audit-templates/${local.body.template.id}`, "GET"],
+      [`/admin/audit-templates/${local.body.template.id}`, "PUT"],
+      [`/admin/audit-templates/${local.body.template.id}/versions`, "GET"],
+      [`/admin/audit-templates/${local.body.template.id}/versions/1`, "GET"],
+      [`/admin/audit-templates/${local.body.template.id}/activity`, "GET"],
+    ] as const) {
+      const hidden = await jsonRequest(
+        fixture,
+        path,
+        method,
+        method === "PUT"
+          ? {
+              definition: local.body.template.definition,
+              name: "Taken over",
+            }
+          : undefined,
+        admin,
+      );
+      expect(hidden.response.status).toBe(404);
+    }
+
+    const stale = await jsonRequest(
+      fixture,
+      `/admin/audit-templates/${id}`,
+      "PUT",
+      {
+        definition: created.body.template.definition,
+        expectedCurrentVersion: 2,
+        name: "Shared ladder form v2",
+      },
+      admin,
+    );
+    expect(stale.response.status).toBe(409);
+    const saved = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/admin/audit-templates/${id}`,
+      "PUT",
+      {
+        definition: created.body.template.definition,
+        expectedCurrentVersion: 1,
+        name: "Shared ladder form v2",
+      },
+      admin,
+    );
+    expect(saved.body.template).toMatchObject({
+      currentVersion: 2,
+      name: "Shared ladder form v2",
+      scope: "global",
+      version: 2,
+    });
+
+    const versions = await jsonRequest<TemplateVersionsResponse>(
+      fixture,
+      `/admin/audit-templates/${id}/versions`,
+      "GET",
+      undefined,
+      admin,
+    );
+    expect(versions.body.versions.map(({ version }) => version)).toEqual([
+      2, 1,
+    ]);
+    const first = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/admin/audit-templates/${id}/versions/1`,
+      "GET",
+      undefined,
+      admin,
+    );
+    expect(first.body.template).toMatchObject({
+      currentVersion: 2,
+      name: "Shared ladder form",
+      version: 1,
+    });
+    const badVersion = await jsonRequest(
+      fixture,
+      `/admin/audit-templates/${id}/versions/zero`,
+      "GET",
+      undefined,
+      admin,
+    );
+    expect(badVersion.response.status).toBe(400);
+
+    const history = await jsonRequest<ActivityResponse>(
+      fixture,
+      `/admin/audit-templates/${id}/activity`,
+      "GET",
+      undefined,
+      admin,
+    );
+    expect(history.body.events.map(({ action }) => action)).toEqual([
+      "audit.template_version_saved",
+      "audit.template_created",
+    ]);
+    const organizationView = await jsonRequest<TemplateResponse>(
+      fixture,
+      `/templates/${id}`,
+      "GET",
+      undefined,
+      { organizationId: "org_user-2", userId: "user-2" },
+    );
+    expect(organizationView.body.template.name).toBe("Shared ladder form v2");
   });
 
   it("attributes built-in templates to a durable system actor", async () => {
@@ -2282,9 +2449,9 @@ describe("audit activity", () => {
     expect(otherFeed.body.events).toEqual([]);
     const global = await jsonRequest<TemplateResponse>(
       fixture,
-      "/templates",
+      "/admin/audit-templates",
       "POST",
-      { name: "Shared form", scope: "global" },
+      { name: "Shared form" },
       { role: "admin" },
     );
     const globalHistory = await jsonRequest<ActivityResponse>(
@@ -2613,6 +2780,7 @@ function testApp() {
     await next();
   });
   app.route("/activity", activity);
+  app.route("/admin/audit-templates", adminAuditTemplates);
   app.route("/", audits);
   return app;
 }

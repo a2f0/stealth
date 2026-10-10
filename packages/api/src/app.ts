@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { version as apiVersion } from "../package.json";
 import { accountSettings } from "./accountSettings";
 import { activity } from "./activity";
+import { adminAuditTemplates } from "./adminAuditTemplates";
 import { adminJobs } from "./adminJobs";
 import { adminOrganizations } from "./adminOrganizations";
 import { audits } from "./audits";
@@ -99,6 +100,7 @@ app.get("/health", (context) =>
 app.get("/api", (context) =>
   context.json({
     endpoints: {
+      adminAuditTemplates: "/api/admin/audit-templates",
       adminJobs: "/api/admin/jobs",
       adminOrganizations: "/api/admin/organizations",
       accountSettings: "/api/account-settings",
@@ -137,6 +139,10 @@ app.route("/api/account-settings/deletion", userDeletion);
 app.use("/api/admin/jobs", requireAuth);
 app.use("/api/admin/jobs/*", requireAuth);
 app.route("/api/admin/jobs", adminJobs);
+
+app.use("/api/admin/audit-templates", requireAuth, requireRole("admin"));
+app.use("/api/admin/audit-templates/*", requireAuth, requireRole("admin"));
+app.route("/api/admin/audit-templates", adminAuditTemplates);
 
 app.use("/api/admin/organizations", requireAuth, requireRole("admin"));
 app.use("/api/admin/organizations/*", requireAuth, requireRole("admin"));

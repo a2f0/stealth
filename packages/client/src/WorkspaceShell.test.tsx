@@ -57,8 +57,11 @@ describe("workspace navigation", () => {
     expect(admin).toContain('href="/organization"');
     expect(admin).not.toContain('href="/root/users"');
     expect(admin).not.toContain('href="/root/organizations"');
+    expect(admin).not.toContain('href="/root/global-audits"');
     expect(rootAdmin).toContain('href="/root/users"');
     expect(rootAdmin).toContain('href="/root/organizations"');
+    expect(rootAdmin).toContain('href="/root/global-audits"');
+    expect(rootAdmin).toContain("Global Audits");
     expect(rootAdmin).toContain('href="/root/jobs"');
     expect(rootAdmin).not.toContain('href="/organization"');
     expect(rootAdmin).not.toContain('href="/admin"');

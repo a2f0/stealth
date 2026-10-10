@@ -13,11 +13,36 @@ export function isRootAdminPath(pathname: string) {
   return (
     pathname === "/root/users" ||
     isAdminOrganizationPath(pathname) ||
+    isGlobalAuditsPath(pathname) ||
     pathname === "/root/jobs"
   );
 }
 
-export function isAdminOrganizationPath(pathname: string) {
+/** Global Audits, or one global form being managed there. */
+export function globalAuditsPath(templateId?: string) {
+  return templateId
+    ? `/root/global-audits/${encodeURIComponent(templateId)}`
+    : "/root/global-audits";
+}
+
+export function isGlobalAuditsPath(pathname: string) {
+  return (
+    pathname === "/root/global-audits" ||
+    pathname.startsWith("/root/global-audits/")
+  );
+}
+
+export function globalAuditTemplateIdForPath(pathname: string) {
+  const segment = /^\/root\/global-audits\/([^/]+)\/?$/.exec(pathname)?.[1];
+  if (!segment) return undefined;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return undefined;
+  }
+}
+
+function isAdminOrganizationPath(pathname: string) {
   return (
     pathname === "/root/organizations" ||
     pathname.startsWith("/root/organizations/")

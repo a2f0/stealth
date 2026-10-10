@@ -44,13 +44,14 @@ export interface ActivityPage {
 }
 
 export type ActivitySource =
-  | { id: string; type: "audit_run" | "audit_template" }
+  | {
+      id: string;
+      type: "audit_run" | "audit_template" | "global_audit_template";
+    }
   | undefined;
 
 export async function listActivity(source?: ActivitySource, cursor?: string) {
-  const base = source
-    ? `/api/audits/${source.type === "audit_run" ? "runs" : "templates"}/${encodeURIComponent(source.id)}/activity`
-    : "/api/activity";
+  const base = activityPath(source);
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
   const response = await fetchApi(`${apiUrl}${base}${query}`, {
     credentials: "include",
@@ -62,4 +63,15 @@ export async function listActivity(source?: ActivitySource, cursor?: string) {
     throw new Error(body?.error ?? "Could not load activity.");
   }
   return response.json() as Promise<ActivityPage>;
+}
+
+/** A global form's history is read through Global Audits, when managing it. */
+function activityPath(source: ActivitySource) {
+  if (!source) return "/api/activity";
+  const id = encodeURIComponent(source.id);
+  if (source.type === "audit_run") return `/api/audits/runs/${id}/activity`;
+  if (source.type === "global_audit_template") {
+    return `/api/admin/audit-templates/${id}/activity`;
+  }
+  return `/api/audits/templates/${id}/activity`;
 }
