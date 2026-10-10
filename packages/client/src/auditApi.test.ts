@@ -3,6 +3,7 @@ import {
   appendIssueImageSelection,
   uploadIssueImagesSequentially,
 } from "./AuditRunPage";
+import { listActivity } from "./activityApi";
 import {
   AuditApiError,
   type AuditTemplate,
@@ -10,8 +11,10 @@ import {
   copyAuditTemplate,
   createAuditTemplate,
   deleteAuditIssueImage,
+  getAuditTemplate,
   getAuditTemplateVersion,
   listAuditRuns,
+  listAuditTemplates,
   listAuditTemplateVersions,
   updateAuditIssue,
   updateAuditTemplate,
@@ -20,7 +23,7 @@ import {
 import { apiUrl } from "./config";
 
 describe("audit template API", () => {
-  it("sends scope and version information through the template lifecycle", async () => {
+  it("sends version information through the organization template lifecycle", async () => {
     const originalFetch = globalThis.fetch;
     const requests: Array<{ body?: string; method: string; url: string }> = [];
     const template = exampleTemplate();
@@ -39,14 +42,14 @@ describe("audit template API", () => {
     }) as typeof fetch;
 
     try {
-      await createAuditTemplate("Shared form", "global");
+      await createAuditTemplate("Private form");
       await getAuditTemplateVersion("template/id", 2);
       await listAuditTemplateVersions("template/id");
       await updateAuditTemplate(template);
       await copyAuditTemplate(template);
       expect(requests).toEqual([
         {
-          body: JSON.stringify({ name: "Shared form", scope: "global" }),
+          body: JSON.stringify({ name: "Private form" }),
           method: "POST",
           url: `${apiUrl}/api/audits/templates`,
         },
@@ -79,6 +82,57 @@ describe("audit template API", () => {
           url: `${apiUrl}/api/audits/templates/template%2Fid/copies`,
         },
       ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("manages global forms only through the root admin API", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ body?: string; method: string; url: string }> = [];
+    const template = exampleTemplate();
+    globalThis.fetch = (async (input, init) => {
+      const request: { body?: string; method: string; url: string } = {
+        method: init?.method ?? "GET",
+        url: input.toString(),
+      };
+      if (init?.body) request.body = init.body.toString();
+      requests.push(request);
+      expect(init?.credentials).toBe("include");
+      if (input.toString().endsWith("/activity")) {
+        return Response.json({ events: [], nextCursor: null });
+      }
+      if (input.toString().endsWith("/versions")) {
+        return Response.json({ versions: [] });
+      }
+      if (input.toString().endsWith("/audit-templates") && !init?.method) {
+        return Response.json({ templates: [template] });
+      }
+      return Response.json({ template });
+    }) as typeof fetch;
+
+    try {
+      expect(await listAuditTemplates(true)).toEqual([template]);
+      await createAuditTemplate("Shared form", true);
+      await getAuditTemplate("template/id", true);
+      await getAuditTemplateVersion("template/id", 2, true);
+      await listAuditTemplateVersions("template/id", true);
+      await updateAuditTemplate(template, true);
+      await listActivity(
+        { id: "template/id", type: "global_audit_template" },
+        "42",
+      );
+      const admin = `${apiUrl}/api/admin/audit-templates`;
+      expect(requests.map(({ method, url }) => `${method} ${url}`)).toEqual([
+        `GET ${admin}`,
+        `POST ${admin}`,
+        `GET ${admin}/template%2Fid`,
+        `GET ${admin}/template%2Fid/versions/2`,
+        `GET ${admin}/template%2Fid/versions`,
+        `PUT ${admin}/template%2Fid`,
+        `GET ${admin}/template%2Fid/activity?cursor=42`,
+      ]);
+      expect(requests[1]?.body).toBe(JSON.stringify({ name: "Shared form" }));
     } finally {
       globalThis.fetch = originalFetch;
     }

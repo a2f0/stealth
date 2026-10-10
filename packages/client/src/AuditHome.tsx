@@ -31,10 +31,8 @@ import { ErrorBanner, type ErrorNotice, errorNotice } from "./BillingLink";
 import { countLabel, formatLabel } from "./labels";
 
 export function AuditHome({
-  canManageGlobal,
   onNavigate,
 }: {
-  canManageGlobal: boolean;
   onNavigate: (pathname: string) => void;
 }) {
   const [templates, setTemplates] = useState<AuditTemplate[]>();
@@ -64,13 +62,12 @@ export function AuditHome({
 
   useEffect(() => void load(), [load]);
 
-  async function createTemplate(scope: AuditTemplateScope) {
+  async function createTemplate() {
     setBusy(true);
     setError(undefined);
     try {
-      const template = await createAuditTemplate("Untitled checklist", scope);
-      const collection = scope === "global" ? "global-templates" : "templates";
-      onNavigate(`/audits/${collection}/${template.id}`);
+      const template = await createAuditTemplate("Untitled checklist");
+      onNavigate(`/audits/templates/${template.id}`);
     } catch (cause) {
       setError(errorNotice(cause, "Could not load audits."));
       setBusy(false);
@@ -111,19 +108,13 @@ export function AuditHome({
 
   return (
     <Page>
-      <AuditHomeHeader
-        busy={busy}
-        canManageGlobal={canManageGlobal}
-        onCreate={createTemplate}
-      />
+      <AuditHomeHeader busy={busy} onCreate={createTemplate} />
       <PageBody>
         <ErrorBanner error={error} onNavigate={onNavigate} />
         <TemplateLibrary
           busy={busy}
-          canManageGlobal={canManageGlobal}
           onBegin={beginAudit}
           onEdit={(id) => onNavigate(`/audits/templates/${id}`)}
-          onManage={(id) => onNavigate(`/audits/global-templates/${id}`)}
           onViewChange={changeTemplateView}
           templates={templates}
           view={templateView}
@@ -142,35 +133,22 @@ export function AuditHome({
 
 function AuditHomeHeader({
   busy,
-  canManageGlobal,
   onCreate,
 }: {
   busy: boolean;
-  canManageGlobal: boolean;
-  onCreate: (scope: AuditTemplateScope) => Promise<void>;
+  onCreate: () => Promise<void>;
 }) {
   return (
     <PageHeader
       actions={
-        <>
-          {canManageGlobal && (
-            <Button
-              disabled={busy}
-              icon="add"
-              onClick={() => void onCreate("global")}
-            >
-              New global checklist
-            </Button>
-          )}
-          <Button
-            disabled={busy}
-            icon="add"
-            onClick={() => void onCreate("organization")}
-            variant="primary"
-          >
-            New organization checklist
-          </Button>
-        </>
+        <Button
+          disabled={busy}
+          icon="add"
+          onClick={() => void onCreate()}
+          variant="primary"
+        >
+          New organization checklist
+        </Button>
       }
       description="Run inspections from shared or organization checklists and keep every finding in one place."
       eyebrow="Inspections & compliance"
@@ -183,7 +161,6 @@ interface TemplateActions {
   busy: boolean;
   onBegin: (id: string) => Promise<void>;
   onEdit: (id: string) => void;
-  onManage: (id: string) => void;
 }
 
 const templateViews: {
@@ -196,13 +173,11 @@ const templateViews: {
 ];
 
 function TemplateLibrary({
-  canManageGlobal,
   onViewChange,
   templates,
   view,
   ...actions
 }: TemplateActions & {
-  canManageGlobal: boolean;
   onViewChange: (view: AuditTemplateView) => void;
   templates: AuditTemplate[] | undefined;
   view: AuditTemplateView;
@@ -225,7 +200,6 @@ function TemplateLibrary({
         <div className="auditCollections">
           <TemplateCollection
             {...actions}
-            canManageGlobal={canManageGlobal}
             description="Available in every organization."
             emptyMessage="No global checklists are available yet."
             emptyTitle="No global forms"
@@ -235,7 +209,6 @@ function TemplateLibrary({
           />
           <TemplateCollection
             {...actions}
-            canManageGlobal={false}
             description="Private to the active organization."
             emptyMessage="No forms have been created for this organization yet. Customize a global form or start a new checklist."
             emptyTitle="No organization forms yet"
@@ -279,7 +252,6 @@ function TemplateViewSwitcher({
 }
 
 function TemplateCollection({
-  canManageGlobal,
   description,
   emptyMessage,
   emptyTitle,
@@ -288,7 +260,6 @@ function TemplateCollection({
   view,
   ...actions
 }: TemplateActions & {
-  canManageGlobal: boolean;
   description: string;
   emptyMessage: string;
   emptyTitle: string;
@@ -313,24 +284,14 @@ function TemplateCollection({
         <Card className="auditTemplateList" flush>
           <ul className="rowList">
             {templates.map((template) => (
-              <TemplateRow
-                {...actions}
-                canManageGlobal={canManageGlobal}
-                key={template.id}
-                template={template}
-              />
+              <TemplateRow {...actions} key={template.id} template={template} />
             ))}
           </ul>
         </Card>
       ) : (
         <div className="gridAuto auditTemplateGrid">
           {templates.map((template) => (
-            <TemplateCard
-              {...actions}
-              canManageGlobal={canManageGlobal}
-              key={template.id}
-              template={template}
-            />
+            <TemplateCard {...actions} key={template.id} template={template} />
           ))}
         </div>
       )}
@@ -343,7 +304,7 @@ function TemplateCard({
   onBegin,
   template,
   ...actions
-}: TemplateActions & { canManageGlobal: boolean; template: AuditTemplate }) {
+}: TemplateActions & { template: AuditTemplate }) {
   return (
     <article className="card auditTemplateCard">
       <div className="auditTemplateBody">
@@ -381,7 +342,7 @@ function TemplateRow({
   onBegin,
   template,
   ...actions
-}: TemplateActions & { canManageGlobal: boolean; template: AuditTemplate }) {
+}: TemplateActions & { template: AuditTemplate }) {
   return (
     <li className="row auditTemplateRow">
       <span className="rowMain">
@@ -404,7 +365,7 @@ function TemplateRow({
   );
 }
 
-function TemplateStats({ template }: { template: AuditTemplate }) {
+export function TemplateStats({ template }: { template: AuditTemplate }) {
   return (
     <>
       <span className="cluster auditTemplateStat">
@@ -421,26 +382,13 @@ function TemplateStats({ template }: { template: AuditTemplate }) {
 }
 
 function TemplateEditButtons({
-  canManageGlobal,
   onEdit,
-  onManage,
   template,
-}: Pick<TemplateActions, "onEdit" | "onManage"> & {
-  canManageGlobal: boolean;
-  template: AuditTemplate;
-}) {
-  const isGlobal = template.scope === "global";
+}: Pick<TemplateActions, "onEdit"> & { template: AuditTemplate }) {
   return (
-    <>
-      <Button icon="edit" onClick={() => onEdit(template.id)} size="sm">
-        {isGlobal ? "Customize" : "Edit"}
-      </Button>
-      {isGlobal && canManageGlobal && (
-        <Button onClick={() => onManage(template.id)} size="sm">
-          Manage global
-        </Button>
-      )}
-    </>
+    <Button icon="edit" onClick={() => onEdit(template.id)} size="sm">
+      {template.scope === "global" ? "Customize" : "Edit"}
+    </Button>
   );
 }
 
@@ -576,7 +524,7 @@ function status(run: AuditSummary) {
   return run.status === "completed" ? "Completed" : "In progress";
 }
 
-function templateStatusTone(value: string): BadgeTone {
+export function templateStatusTone(value: string): BadgeTone {
   if (value === "published") return "success";
   return "neutral";
 }

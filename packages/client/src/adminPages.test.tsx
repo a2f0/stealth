@@ -1,10 +1,23 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { AdminGlobalAudits } from "./AdminGlobalAudits";
 import { AdminJobs } from "./AdminJobs";
 import { AdminOrganizations } from "./AdminOrganizations";
 import { AdminUsers } from "./AdminUsers";
 
 describe("root admin pages", () => {
+  it("provides a Global Audits page for shared forms", () => {
+    const markup = renderToStaticMarkup(
+      <AdminGlobalAudits
+        onNavigate={() => {}}
+        pathname="/root/global-audits"
+      />,
+    );
+    expect(markup).toContain("Global Audits");
+    expect(markup).toContain("New global checklist");
+    expect(markup).toContain("Loading global forms…");
+  });
+
   it("provides a maintenance jobs page", () => {
     const markup = renderToStaticMarkup(<AdminJobs />);
     expect(markup).toContain("Maintenance jobs");

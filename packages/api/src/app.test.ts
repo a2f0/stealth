@@ -9,6 +9,9 @@ describe("api", () => {
   it("requires authentication for maintenance and account deletion routes", async () => {
     for (const [path, method] of [
       ["/api/admin/jobs", "GET"],
+      ["/api/admin/audit-templates", "GET"],
+      ["/api/admin/audit-templates", "POST"],
+      ["/api/admin/audit-templates/template-id", "PUT"],
       ["/api/activity", "GET"],
       ["/api/audits/runs/private/activity", "GET"],
       ["/api/admin/jobs/purgeRequestedUsers/run", "POST"],
@@ -157,16 +160,23 @@ describe("api", () => {
 
   it("requires platform admin access even for an organization owner", async () => {
     const fixture = await protectedOrganizationFixture();
-    const response = await app.request(
-      `/api/admin/organizations/${fixture.organizationId}`,
-      { headers: { cookie: fixture.cookie } },
-      fixture.bindings,
-    );
-    expect(response.status).toBe(403);
-    const body: unknown = await response.json();
-    expect(body).toEqual({
-      error: "Insufficient permissions.",
-    });
+    for (const [path, method] of [
+      [`/api/admin/organizations/${fixture.organizationId}`, "GET"],
+      ["/api/admin/audit-templates", "GET"],
+      ["/api/admin/audit-templates", "POST"],
+      ["/api/admin/audit-templates/nfpa70e_global", "PUT"],
+    ] as const) {
+      const response = await app.request(
+        path,
+        { headers: { cookie: fixture.cookie }, method },
+        fixture.bindings,
+      );
+      expect(response.status).toBe(403);
+      const body: unknown = await response.json();
+      expect(body).toEqual({
+        error: "Insufficient permissions.",
+      });
+    }
   });
 
   it("requires authentication to mark an organization for deletion", async () => {

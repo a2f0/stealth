@@ -3,22 +3,11 @@ import { AuditRunPage } from "./AuditRunPage";
 import { AuditTemplateBuilder } from "./AuditTemplateBuilder";
 
 interface AuditsProps {
-  isPlatformAdmin: boolean;
   onNavigate: (pathname: string) => void;
   pathname: string;
 }
 
-export function Audits({ isPlatformAdmin, onNavigate, pathname }: AuditsProps) {
-  const globalTemplateId = routeId(pathname, "/audits/global-templates/");
-  if (globalTemplateId) {
-    return (
-      <AuditTemplateBuilder
-        id={globalTemplateId}
-        manageGlobal={isPlatformAdmin}
-        onNavigate={onNavigate}
-      />
-    );
-  }
+export function Audits({ onNavigate, pathname }: AuditsProps) {
   const templateId = routeId(pathname, "/audits/templates/");
   if (templateId) {
     return <AuditTemplateBuilder id={templateId} onNavigate={onNavigate} />;
@@ -27,9 +16,7 @@ export function Audits({ isPlatformAdmin, onNavigate, pathname }: AuditsProps) {
   if (auditId) {
     return <AuditRunPage id={auditId} onNavigate={onNavigate} />;
   }
-  return (
-    <AuditHome canManageGlobal={isPlatformAdmin} onNavigate={onNavigate} />
-  );
+  return <AuditHome onNavigate={onNavigate} />;
 }
 
 function routeId(pathname: string, prefix: string) {

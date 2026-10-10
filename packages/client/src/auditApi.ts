@@ -130,46 +130,55 @@ export class AuditApiError extends Error {
   }
 }
 
-export async function listAuditTemplates() {
-  const body = await request<{ templates: AuditTemplate[] }>("/templates");
+export async function listAuditTemplates(manageGlobal = false) {
+  const body = await send<{ templates: AuditTemplate[] }>(
+    templatesPath(manageGlobal),
+  );
   return body.templates;
 }
 
-export async function createAuditTemplate(
-  name: string,
-  scope: AuditTemplateScope,
+export async function createAuditTemplate(name: string, manageGlobal = false) {
+  const body = await send<{ template: AuditTemplate }>(
+    templatesPath(manageGlobal),
+    { body: JSON.stringify({ name }), method: "POST" },
+  );
+  return body.template;
+}
+
+export async function getAuditTemplate(id: string, manageGlobal = false) {
+  const body = await send<{ template: AuditTemplate }>(
+    `${templatesPath(manageGlobal)}/${encodeURIComponent(id)}`,
+  );
+  return body.template;
+}
+
+export async function getAuditTemplateVersion(
+  id: string,
+  version: number,
+  manageGlobal = false,
 ) {
-  const body = await request<{ template: AuditTemplate }>("/templates", {
-    body: JSON.stringify({ name, scope }),
-    method: "POST",
-  });
-  return body.template;
-}
-
-export async function getAuditTemplate(id: string) {
-  const body = await request<{ template: AuditTemplate }>(
-    `/templates/${encodeURIComponent(id)}`,
+  const body = await send<{ template: AuditTemplate }>(
+    `${templatesPath(manageGlobal)}/${encodeURIComponent(id)}/versions/${version}`,
   );
   return body.template;
 }
 
-export async function getAuditTemplateVersion(id: string, version: number) {
-  const body = await request<{ template: AuditTemplate }>(
-    `/templates/${encodeURIComponent(id)}/versions/${version}`,
-  );
-  return body.template;
-}
-
-export async function listAuditTemplateVersions(id: string) {
-  const body = await request<{ versions: AuditTemplateVersion[] }>(
-    `/templates/${encodeURIComponent(id)}/versions`,
+export async function listAuditTemplateVersions(
+  id: string,
+  manageGlobal = false,
+) {
+  const body = await send<{ versions: AuditTemplateVersion[] }>(
+    `${templatesPath(manageGlobal)}/${encodeURIComponent(id)}/versions`,
   );
   return body.versions;
 }
 
-export async function updateAuditTemplate(template: AuditTemplate) {
-  const body = await request<{ template: AuditTemplate }>(
-    `/templates/${encodeURIComponent(template.id)}`,
+export async function updateAuditTemplate(
+  template: AuditTemplate,
+  manageGlobal = false,
+) {
+  const body = await send<{ template: AuditTemplate }>(
+    `${templatesPath(manageGlobal)}/${encodeURIComponent(template.id)}`,
     {
       body: templateSaveBody(template),
       method: "PUT",
@@ -278,6 +287,14 @@ export function auditIssueImageUrl(
   return `${apiUrl}/api/audits/issues/${encodeURIComponent(issueId)}/images/${encodeURIComponent(imageId)}${query}`;
 }
 
+/**
+ * Organizations read global forms (to run or customize them) alongside their
+ * own; only root admin's Global Audits can change a global form.
+ */
+function templatesPath(manageGlobal: boolean) {
+  return manageGlobal ? "/api/admin/audit-templates" : "/api/audits/templates";
+}
+
 function templateSaveBody(template: AuditTemplate) {
   return JSON.stringify({
     definition: template.definition,
@@ -287,7 +304,11 @@ function templateSaveBody(template: AuditTemplate) {
   });
 }
 
-async function request<T>(path: string, init?: RequestInit) {
+function request<T>(path: string, init?: RequestInit) {
+  return send<T>(`/api/audits${path}`, init);
+}
+
+async function send<T>(path: string, init?: RequestInit) {
   const requestInit: RequestInit = {
     ...init,
     credentials: "include",
@@ -295,7 +316,7 @@ async function request<T>(path: string, init?: RequestInit) {
   if (init?.body && !(init.body instanceof FormData) && !init.headers) {
     requestInit.headers = { "Content-Type": "application/json" };
   }
-  const response = await fetchApi(`${apiUrl}/api/audits${path}`, requestInit);
+  const response = await fetchApi(`${apiUrl}${path}`, requestInit);
   if (response.ok) {
     return response.status === 204
       ? (undefined as T)

@@ -33,6 +33,7 @@ type WorkspacePage =
   | "inbox"
   | "library"
   | "organization"
+  | "rootGlobalAudits"
   | "rootJobs"
   | "rootOrganizations"
   | "rootUsers";
@@ -295,6 +296,12 @@ function navigationFor(canAccessFinance: boolean, isAdmin: boolean) {
           icon: "organization",
           label: "Organizations",
           page: "rootOrganizations",
+        },
+        {
+          href: "/root/global-audits",
+          icon: "audits",
+          label: "Global Audits",
+          page: "rootGlobalAudits",
         },
         {
           href: "/root/jobs",

@@ -27,12 +27,18 @@ import {
 } from "./auditApi";
 import { ErrorBanner, type ErrorNotice, errorNotice } from "./BillingLink";
 import { countLabel } from "./labels";
+import { globalAuditsPath } from "./organizationState";
 import { moveEntry, useReorderDrag } from "./useReorderDrag";
 
 interface BuilderProps {
   id: string;
   manageGlobal?: boolean;
   onNavigate: (pathname: string) => void;
+}
+
+interface BackLink {
+  label: string;
+  onBack: () => void;
 }
 
 export function AuditTemplateBuilder({
@@ -45,9 +51,13 @@ export function AuditTemplateBuilder({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorNotice>();
   const [notice, setNotice] = useState<string>();
+  const back = backLink(manageGlobal, onNavigate);
 
   useEffect(() => {
-    Promise.all([getAuditTemplate(id), listAuditTemplateVersions(id)])
+    Promise.all([
+      getAuditTemplate(id, manageGlobal),
+      listAuditTemplateVersions(id, manageGlobal),
+    ])
       .then(([nextTemplate, nextVersions]) => {
         setTemplate(nextTemplate);
         setVersions(nextVersions);
@@ -55,7 +65,7 @@ export function AuditTemplateBuilder({
       .catch((cause: unknown) =>
         setError(errorNotice(cause, "Could not save checklist.")),
       );
-  }, [id]);
+  }, [id, manageGlobal]);
 
   async function selectVersion(version: number) {
     if (!template || version === template.version) return;
@@ -65,8 +75,8 @@ export function AuditTemplateBuilder({
     try {
       const selected =
         version === template.currentVersion
-          ? await getAuditTemplate(id)
-          : await getAuditTemplateVersion(id, version);
+          ? await getAuditTemplate(id, manageGlobal)
+          : await getAuditTemplateVersion(id, version, manageGlobal);
       setTemplate(selected);
     } catch (cause) {
       setError(errorNotice(cause, "Could not save checklist."));
@@ -84,7 +94,7 @@ export function AuditTemplateBuilder({
       const copiedGlobal = template.scope === "global" && !manageGlobal;
       const saved = copiedGlobal
         ? await copyAuditTemplate(template)
-        : await updateAuditTemplate(template);
+        : await updateAuditTemplate(template, manageGlobal);
       setTemplate(saved);
       setNotice(
         copiedGlobal
@@ -94,7 +104,7 @@ export function AuditTemplateBuilder({
       if (saved.id !== id) {
         onNavigate(`/audits/templates/${encodeURIComponent(saved.id)}`);
       }
-      setVersions(await listAuditTemplateVersions(saved.id));
+      setVersions(await listAuditTemplateVersions(saved.id, manageGlobal));
     } catch (cause) {
       setError(errorNotice(cause, "Could not save checklist."));
     } finally {
@@ -102,21 +112,14 @@ export function AuditTemplateBuilder({
     }
   }
 
-  if (!template) {
-    return (
-      <BuilderLoading
-        error={error?.message}
-        onBack={() => onNavigate("/audits")}
-      />
-    );
-  }
+  if (!template) return <BuilderLoading back={back} error={error?.message} />;
 
   return (
     <Page>
       <BuilderHeader
+        back={back}
         busy={busy}
         manageGlobal={manageGlobal}
-        onBack={() => onNavigate("/audits")}
         onSave={save}
         onVersionChange={selectVersion}
         template={template}
@@ -135,6 +138,16 @@ export function AuditTemplateBuilder({
       />
     </Page>
   );
+}
+
+/** A global form being managed returns to Global Audits. */
+function backLink(
+  manageGlobal: boolean,
+  onNavigate: (pathname: string) => void,
+): BackLink {
+  return manageGlobal
+    ? { label: "Global Audits", onBack: () => onNavigate(globalAuditsPath()) }
+    : { label: "Audits", onBack: () => onNavigate("/audits") };
 }
 
 function BuilderBody({
@@ -219,7 +232,10 @@ function BuilderBody({
       </fieldset>
       <ActivityFeed
         refreshKey={template.currentVersion}
-        source={{ id: template.id, type: "audit_template" }}
+        source={{
+          id: template.id,
+          type: manageGlobal ? "global_audit_template" : "audit_template",
+        }}
       />
     </PageBody>
   );
@@ -276,17 +292,17 @@ function BuilderNotices({
 }
 
 function BuilderHeader({
+  back,
   busy,
   manageGlobal,
-  onBack,
   onSave,
   onVersionChange,
   template,
   versions,
 }: {
+  back: BackLink;
   busy: boolean;
   manageGlobal: boolean;
-  onBack: () => void;
   onSave: () => Promise<void>;
   onVersionChange: (version: number) => Promise<void>;
   template: AuditTemplate;
@@ -329,7 +345,7 @@ function BuilderHeader({
           </Button>
         </div>
       }
-      back={<BackButton onBack={onBack} />}
+      back={<BackButton {...back} />}
       eyebrow={
         <>
           {template.scope === "global" ? "Global form" : "Organization form"}
@@ -341,7 +357,7 @@ function BuilderHeader({
   );
 }
 
-function BackButton({ onBack }: { onBack: () => void }) {
+function BackButton({ label, onBack }: BackLink) {
   return (
     <Button
       className="auditBack"
@@ -350,7 +366,7 @@ function BackButton({ onBack }: { onBack: () => void }) {
       size="sm"
       variant="ghost"
     >
-      Audits
+      {label}
     </Button>
   );
 }
@@ -713,20 +729,20 @@ function PositionMenu({
 }
 
 function BuilderLoading({
+  back,
   error,
-  onBack,
 }: {
+  back: BackLink;
   error: string | undefined;
-  onBack: () => void;
 }) {
   const returnButton = (
     <Button
       icon="arrowLeft"
-      onClick={onBack}
+      onClick={back.onBack}
       size={error ? "sm" : "md"}
       variant={error ? "secondary" : "ghost"}
     >
-      Return to audits
+      Return to {back.label.toLowerCase()}
     </Button>
   );
   return (

@@ -7,6 +7,8 @@ import {
   canManageOrganization,
   createOrganizationSlug,
   editableOrganizationRoles,
+  globalAuditsPath,
+  globalAuditTemplateIdForPath,
   isRootAdminPath,
   organizationMemberIdForPath,
   organizationPathRequiresAccess,
@@ -85,6 +87,8 @@ describe("organization state", () => {
       "/root/users",
       "/root/organizations",
       "/root/organizations/other-organization",
+      "/root/global-audits",
+      "/root/global-audits/nfpa70e_global",
       "/root/jobs",
       "/invite",
     ]) {
@@ -97,7 +101,29 @@ describe("organization state", () => {
     expect(
       isRootAdminPath("/root/organizations/other-organization"),
     ).toBeTrue();
+    expect(isRootAdminPath("/root/global-audits")).toBeTrue();
+    expect(isRootAdminPath("/root/global-audits/template")).toBeTrue();
+    expect(isRootAdminPath("/root/global-auditsx")).toBeFalse();
+    expect(isRootAdminPath("/audits/global-templates/template")).toBeFalse();
     expect(isRootAdminPath("/admin")).toBeFalse();
+  });
+
+  it("resolves Global Audits form links and rejects malformed IDs", () => {
+    expect(globalAuditsPath()).toBe("/root/global-audits");
+    expect(globalAuditsPath("form/1")).toBe("/root/global-audits/form%2F1");
+    expect(globalAuditTemplateIdForPath("/root/global-audits/form%2F1")).toBe(
+      "form/1",
+    );
+    expect(globalAuditTemplateIdForPath("/root/global-audits/form-1/")).toBe(
+      "form-1",
+    );
+    expect(globalAuditTemplateIdForPath("/root/global-audits")).toBeUndefined();
+    expect(
+      globalAuditTemplateIdForPath("/root/global-audits/%"),
+    ).toBeUndefined();
+    expect(
+      globalAuditTemplateIdForPath("/root/global-audits/form-1/unexpected"),
+    ).toBeUndefined();
   });
 
   it("resolves organization detail links and rejects malformed IDs", () => {

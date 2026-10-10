@@ -20,7 +20,6 @@ export interface ActivityRow {
 
 interface ActivityRoot {
   id: string;
-  includeGlobal?: boolean;
   type: string;
 }
 
@@ -42,10 +41,14 @@ activity.get("/", async (context) => {
     : context.json({ error: "Invalid activity cursor." }, 400);
 });
 
-/** Roots must be authorized by the caller before requesting global activity. */
+/**
+ * An organization's activity, or global activity when the organization is
+ * null. Roots must be authorized by the caller before requesting global
+ * activity.
+ */
 export async function findActivity(
   database: D1Database,
-  organizationId: string,
+  organizationId: string | null,
   cursor?: string,
   root?: ActivityRoot,
 ) {
@@ -53,11 +56,10 @@ export async function findActivity(
   const before = cursor === undefined ? null : Number(cursor);
   if (before !== null && !Number.isSafeInteger(before)) return null;
   const filters = [
-    root?.includeGlobal ? "organization_id IS NULL" : "organization_id = ?",
+    organizationId === null ? "organization_id IS NULL" : "organization_id = ?",
   ];
-  const bindings: (string | number)[] = root?.includeGlobal
-    ? []
-    : [organizationId];
+  const bindings: (string | number)[] =
+    organizationId === null ? [] : [organizationId];
   if (root) {
     filters.push("root_type = ? AND root_id = ?");
     bindings.push(root.type, root.id);

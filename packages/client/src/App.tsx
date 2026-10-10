@@ -9,6 +9,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { AccountSettings } from "./AccountSettings";
 import { Activity } from "./Activity";
+import { AdminGlobalAudits } from "./AdminGlobalAudits";
 import { AdminJobs } from "./AdminJobs";
 import { AdminOrganizations } from "./AdminOrganizations";
 import { AdminUsers } from "./AdminUsers";
@@ -40,7 +41,7 @@ import { OrganizationSettings } from "./OrganizationSettings";
 import { getWorkspaceOrganizations } from "./organizationSettingsApi";
 import {
   createOrganizationSlug,
-  isAdminOrganizationPath,
+  isGlobalAuditsPath,
   isOrganizationPath,
   isRootAdminPath,
   organizationPathRequiresAccess,
@@ -302,7 +303,6 @@ function AuthenticatedWorkspace({
             workspace,
             addAccount,
             access,
-            hasRole(session.user.role, "admin"),
             session.user.defaultOrganizationId,
             Boolean(session.user.twoFactorEnabled),
             async () => {
@@ -450,20 +450,13 @@ function contentForPath(
   workspace: ReturnType<typeof useWorkspaceOrganizations>,
   addAccount: () => void,
   access: ReturnType<typeof useOrganizationAccess>,
-  isPlatformAdmin: boolean,
   defaultOrganizationId: string | null | undefined,
   twoFactorEnabled: boolean,
   onSecurityChanged: () => Promise<unknown>,
 ) {
   if (pathname === "/activity") return <Activity onNavigate={navigate} />;
   if (pathname === "/audits" || pathname.startsWith("/audits/")) {
-    return (
-      <Audits
-        isPlatformAdmin={isPlatformAdmin}
-        onNavigate={navigate}
-        pathname={pathname}
-      />
-    );
+    return <Audits onNavigate={navigate} pathname={pathname} />;
   }
   if (isFinancePath(pathname)) {
     return <Finance onNavigate={navigate} pathname={pathname} />;
@@ -482,11 +475,7 @@ function contentForPath(
       <Inbox canAccessFinance={access.can("finance")} onNavigate={navigate} />
     );
   }
-  if (pathname === "/root/jobs") return <AdminJobs />;
-  if (pathname === "/root/users") return <AdminUsers />;
-  if (isAdminOrganizationPath(pathname)) {
-    return <AdminOrganizations onNavigate={navigate} pathname={pathname} />;
-  }
+  if (isRootAdminPath(pathname)) return rootAdminContent(pathname, navigate);
   if (pathname === "/account" || pathname === "/account/security") {
     return (
       <AccountSettings
@@ -527,6 +516,25 @@ function contentForPath(
   return library;
 }
 
+function rootAdminContent(
+  pathname: string,
+  navigate: (pathname: string) => void,
+) {
+  if (pathname === "/root/jobs") return <AdminJobs />;
+  if (pathname === "/root/users") return <AdminUsers />;
+  if (isGlobalAuditsPath(pathname)) {
+    return <AdminGlobalAudits onNavigate={navigate} pathname={pathname} />;
+  }
+  return <AdminOrganizations onNavigate={navigate} pathname={pathname} />;
+}
+
+function rootAdminPage(pathname: string) {
+  if (pathname === "/root/jobs") return "rootJobs" as const;
+  if (pathname === "/root/users") return "rootUsers" as const;
+  if (isGlobalAuditsPath(pathname)) return "rootGlobalAudits" as const;
+  return "rootOrganizations" as const;
+}
+
 function currentLocation() {
   return `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
@@ -541,11 +549,7 @@ function activePageFor(pathname: string) {
   if (isContractsPath(pathname)) return "contracts" as const;
   if (isEquipmentPath(pathname)) return "equipment" as const;
   if (pathname === "/inbox") return "inbox" as const;
-  if (pathname === "/root/jobs") return "rootJobs" as const;
-  if (pathname === "/root/users") return "rootUsers" as const;
-  if (isAdminOrganizationPath(pathname)) {
-    return "rootOrganizations" as const;
-  }
+  if (isRootAdminPath(pathname)) return rootAdminPage(pathname);
   if (pathname === "/account" || pathname === "/account/security") {
     return "account" as const;
   }
