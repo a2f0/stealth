@@ -2,6 +2,8 @@
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "balebase-api",
   "main": "src/index.ts",
+  // Preserve the pre-4.150 upload policy; staging inherits this setting.
+  "upload_source_maps": false,
   "compatibility_date": "2026-08-17",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {

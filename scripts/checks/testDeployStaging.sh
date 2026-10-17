@@ -99,6 +99,7 @@ import { join } from "node:path";
 const root = process.argv[1];
 const read = (app) => JSON.parse(readFileSync(join(root, "packages", app, "wrangler.staging.jsonc"), "utf8"));
 const api = read("api");
+if (api.upload_source_maps !== false) throw new Error("Staging must preserve disabled source-map uploads");
 if (api.name !== "balebase-api-staging") throw new Error("API Worker name is not staging");
 if (api.vars.BETTER_AUTH_URL !== "https://api-staging.balebase.com") throw new Error("API URL is not staging");
 if (api.vars.CORS_ORIGIN !== "https://app-staging.balebase.com") throw new Error("CORS origin is not staging");

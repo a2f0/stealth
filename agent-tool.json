@@ -101,6 +101,7 @@
           {
             "path": "android/app/src/main/res/drawable-{variant}/splash.png",
             "variants": {
+              "mdpi": [320, 480],
               "land-mdpi": [480, 320],
               "land-hdpi": [800, 480],
               "land-xhdpi": [1280, 720],

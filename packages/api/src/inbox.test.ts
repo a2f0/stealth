@@ -38,6 +38,35 @@ const rawEmail = [
 ].join("\r\n");
 
 describe("inbox", () => {
+  it("refuses to render stored mail with oversized headers", async () => {
+    const fixture = await createFixture(
+      `X-Large: ${"x".repeat(128 * 1024)}\r\n\r\nbody`,
+    );
+    const response = await fixture.request(`/${emailId}`);
+    expect(response.status).toBe(500);
+  });
+
+  it("refuses to render stored mail with excessive MIME nesting", async () => {
+    let raw = "Content-Type: text/plain\r\n\r\nbody";
+    for (let depth = 0; depth < 32; depth++) {
+      raw = `Content-Type: multipart/mixed; boundary="level-${depth}"\r\n\r\n--level-${depth}\r\n${raw}\r\n--level-${depth}--\r\n`;
+    }
+    const fixture = await createFixture(raw);
+    const response = await fixture.request(`/${emailId}`);
+    expect(response.status).toBe(500);
+  });
+
+  it("does not render an embedded message inline", async () => {
+    const fixture = await createFixture(
+      "Content-Type: message/rfc822\r\n\r\nContent-Type: text/html\r\n\r\n<p>nested body</p>",
+    );
+    const response = await fixture.request(`/${emailId}`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      email: { html: null, text: null },
+    });
+  });
+
   it("archives messages with attachments and restores them to Inbox", async () => {
     const fixture = await createFixture();
     expect(
@@ -272,7 +301,7 @@ describe("inbox", () => {
   });
 });
 
-async function createFixture() {
+async function createFixture(fixtureRawEmail = rawEmail) {
   const database = new Database(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
   await applyMigration(database, "0002_create_inbound_emails.sql");
@@ -298,7 +327,7 @@ async function createFixture() {
       "upload@inbox.balebase.com",
       "Test attachment",
       rawObjectKey,
-      new TextEncoder().encode(rawEmail).byteLength,
+      new TextEncoder().encode(fixtureRawEmail).byteLength,
       "2026-08-18T12:00:00.000Z",
     );
   database
@@ -338,7 +367,7 @@ async function createFixture() {
       `upload+${otherOrganizationId}@inbox.balebase.com`,
       "Other organization",
       otherRawObjectKey,
-      new TextEncoder().encode(rawEmail).byteLength,
+      new TextEncoder().encode(fixtureRawEmail).byteLength,
       "2026-08-19T12:00:00.000Z",
     );
   database
@@ -376,9 +405,9 @@ async function createFixture() {
   }
 
   const objects = new Map([
-    [rawObjectKey, new TextEncoder().encode(rawEmail)],
+    [rawObjectKey, new TextEncoder().encode(fixtureRawEmail)],
     [attachmentObjectKey, new TextEncoder().encode("hello attachment")],
-    [otherRawObjectKey, new TextEncoder().encode(rawEmail)],
+    [otherRawObjectKey, new TextEncoder().encode(fixtureRawEmail)],
     [otherAttachmentObjectKey, new TextEncoder().encode("other attachment")],
   ]);
   const bindings = {

@@ -63,17 +63,15 @@ async function ingestInboundEmail(
 
   try {
     const raw = await new Response(message.raw).arrayBuffer();
-    const [, parsed] = await Promise.all([
-      env.STORAGE.put(rawObjectKey, raw, {
-        httpMetadata: { contentType: "message/rfc822" },
-        customMetadata: { emailId, organizationId },
-      }),
-      PostalMime.parse(raw, {
-        maxHeadersSize: 128 * 1024,
-        maxNestingDepth: 30,
-        maxRfc822NestingDepth: 0,
-      }),
-    ]);
+    const parsed = await PostalMime.parse(raw, {
+      maxHeadersSize: 128 * 1024,
+      maxNestingDepth: 30,
+      maxRfc822NestingDepth: 0,
+    });
+    await env.STORAGE.put(rawObjectKey, raw, {
+      httpMetadata: { contentType: "message/rfc822" },
+      customMetadata: { emailId, organizationId },
+    });
     const attachments = parsed.attachments.map((attachment, index) =>
       toStoredAttachment(attachment, index, objectPrefix),
     );

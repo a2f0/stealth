@@ -81,7 +81,7 @@ describe("native images", () => {
       15,
     );
     expect(written.filter((path) => path.includes("/drawable-"))).toHaveLength(
-      10,
+      11,
     );
     expect(
       readFileSync(join(out, res, "values/ic_launcher_background.xml"), "utf8"),
@@ -97,6 +97,7 @@ describe("native images", () => {
     [`${res}/mipmap-mdpi/ic_launcher.png`, 48, 48, 2],
     [`${res}/mipmap-xxxhdpi/ic_launcher_round.png`, 192, 192, 2],
     [`${res}/mipmap-hdpi/ic_launcher_foreground.png`, 162, 162, 6],
+    [`${res}/drawable-mdpi/splash.png`, 320, 480, 2],
     [`${res}/drawable-land-mdpi/splash.png`, 480, 320, 2],
     [`${res}/drawable-port-xxxhdpi/splash.png`, 1280, 1920, 2],
   ])("render %s at %ix%i", (path, width, height, colorType) => {

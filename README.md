@@ -15,7 +15,7 @@ Infrastructure lives outside the workspaces in `terraform` (D1, R2, and
 
 ## Start locally
 
-Install [Bun](https://bun.sh/) 1.4.2. Bun manages dependencies and runs all
+Install [Bun](https://bun.sh/) 1.4.3. Bun manages dependencies and runs all
 JavaScript tooling, including commitlint, lint-staged, and Wrangler. Commands
 use `--bun` to keep that runtime even when Node.js is installed. Install
 Terraform, TFLint, and ShellCheck for the complete lint suite. Authenticate
@@ -54,7 +54,7 @@ copying `packages/client/.env.example` to `packages/client/.env`.
 
 The native app is named **Balebase** and uses `com.balebase.app` on both
 platforms. Install Xcode 26 or later for iOS, or Android Studio with Android SDK
-36 and JDK 21 for Android. The app supports iOS 18+ and Android 12+; the iOS
+37 and JDK 21 for Android. The app supports iOS 18+ and Android 12+; the iOS
 floor also covers the embedded PDF viewer's browser APIs.
 
 ```sh

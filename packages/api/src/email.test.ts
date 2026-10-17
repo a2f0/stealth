@@ -33,6 +33,41 @@ interface CapturedStatement {
 }
 
 describe("inbound email", () => {
+  it("rejects oversized headers before starting an upload", async () => {
+    await expectRejectedMessage(
+      `X-Large: ${"x".repeat(128 * 1024)}\r\n\r\nbody`,
+      /Maximum header size/,
+    );
+  });
+
+  it("rejects excessive MIME nesting before starting an upload", async () => {
+    let raw = "Content-Type: text/plain\r\n\r\nbody";
+    for (let depth = 0; depth < 32; depth++) {
+      raw = `Content-Type: multipart/mixed; boundary="level-${depth}"\r\n\r\n--level-${depth}\r\n${raw}\r\n--level-${depth}--\r\n`;
+    }
+    await expectRejectedMessage(raw, /Maximum MIME nesting depth/);
+  });
+
+  it("stores an embedded message as an opaque attachment", async () => {
+    const embedded = "Content-Type: text/html\r\n\r\n<p>nested body</p>\r\n";
+    const raw = `Content-Type: message/rfc822\r\n\r\n${embedded}`;
+    const database = createDatabase();
+    const storage = createStorage();
+
+    await handleEmail(
+      createMessage(raw).message,
+      createBindings(database.value, storage.value),
+    );
+
+    expect(storage.objects.size).toBe(2);
+    expect(database.statements).toHaveLength(2);
+    expect(database.statements[1]?.values[4]).toBe("message/rfc822");
+    const attachment = [...storage.objects].find(([key]) =>
+      key.includes("/attachments/"),
+    );
+    expect(new TextDecoder().decode(attachment?.[1])).toBe(embedded);
+  });
+
   it("stores the raw message, attachments, and metadata", async () => {
     const database = createDatabase();
     const storage = createStorage();
@@ -97,6 +132,20 @@ describe("inbound email", () => {
   });
 });
 
+async function expectRejectedMessage(raw: string, reason: RegExp) {
+  const database = createDatabase();
+  const storage = createStorage();
+  await expect(
+    handleEmail(
+      createMessage(raw).message,
+      createBindings(database.value, storage.value),
+    ),
+  ).rejects.toThrow(reason);
+  expect(storage.uploads).toHaveLength(0);
+  expect(storage.objects.size).toBe(0);
+  expect(database.statements).toHaveLength(0);
+}
+
 function createBindings(database: D1Database, storage: R2Bucket): Bindings {
   return {
     AUTH_EMAIL_FROM: "security@auth.balebase.com",
@@ -136,16 +185,18 @@ function createDatabase() {
 
 function createStorage() {
   const objects = new Map<string, Uint8Array>();
+  const uploads: string[] = [];
   const value = {
     delete: async (key: string) => {
       objects.delete(key);
     },
     put: async (key: string, content: unknown) => {
+      uploads.push(key);
       objects.set(key, await toBytes(content));
       return {};
     },
   } as unknown as R2Bucket;
-  return { objects, value };
+  return { objects, uploads, value };
 }
 
 function createMessage(raw: string, to = recipient) {
